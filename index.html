@@ -1,0 +1,1320 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>네이버 검색광고 마스터 툴</title>
+  <style>
+    :root {
+      --bg-main: #f4f4f5;
+      --bg-panel: #ffffff;
+      --border-color: #e4e4e7;
+      --text-main: #18181b;
+      --text-sub: #71717a;
+      --point-color: #2563eb;
+      --point-hover: #1d4ed8;
+      --bg-active: #eff6ff;
+      --danger: #dc2626;
+      --danger-bg: #fef2f2;
+      --success: #059669;
+      --success-bg: #ecfdf5;
+      --purple: #7c3aed;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      margin: 0;
+      background: var(--bg-main);
+      color: var(--text-main);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      font-size: 14px;
+    }
+    .header {
+      background: var(--bg-panel);
+      border-bottom: 1px solid var(--border-color);
+      padding: 16px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+    }
+    .header h1 { margin: 0; font-size: 19px; }
+    .header p { margin: 4px 0 0; color: var(--text-sub); font-size: 12px; }
+    .status-chip {
+      padding: 8px 10px;
+      border: 1px solid var(--border-color);
+      border-radius: 999px;
+      font-size: 12px;
+      background: #fafafa;
+      color: var(--text-sub);
+      white-space: nowrap;
+    }
+
+    .container {
+      display: flex;
+      gap: 16px;
+      padding: 16px;
+      flex: 1;
+      overflow: hidden;
+    }
+    .panel {
+      background: var(--bg-panel);
+      border: 1px solid var(--border-color);
+      border-radius: 14px;
+      padding: 18px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .panel-1 { flex: 0.8; min-width: 260px; }
+    .panel-2 { flex: 1.2; min-width: 360px; }
+    .panel-3 { flex: 1.7; min-width: 460px; }
+
+    h3 {
+      margin: 0 0 14px;
+      font-size: 15px;
+      border-bottom: 1px solid var(--border-color);
+      padding-bottom: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+    h4 {
+      margin: 0 0 12px;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .help-text {
+      font-size: 12px;
+      color: var(--text-sub);
+      line-height: 1.5;
+      margin-top: 4px;
+      word-break: keep-all;
+    }
+    .mini-note {
+      font-size: 11px;
+      color: var(--text-sub);
+      margin-top: 6px;
+      line-height: 1.45;
+    }
+
+    input[type="text"], input[type="password"], input[type="number"], select, textarea {
+      width: 100%;
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 13px;
+      background: #fafafa;
+      outline: none;
+      transition: .15s ease;
+      margin-bottom: 6px;
+    }
+    textarea {
+      min-height: 150px;
+      resize: vertical;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      line-height: 1.45;
+    }
+    input:focus, select:focus, textarea:focus {
+      border-color: var(--point-color);
+      background: #fff;
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, .08);
+    }
+    label.inline-check {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      font-size: 12px;
+      color: var(--text-sub);
+      margin: 6px 0 12px;
+    }
+
+    .btn {
+      border: none;
+      border-radius: 10px;
+      padding: 10px 14px;
+      cursor: pointer;
+      font-weight: 700;
+      font-size: 13px;
+      transition: .15s ease;
+    }
+    .btn:disabled { opacity: .55; cursor: not-allowed; }
+    .btn-point { background: var(--point-color); color: #fff; }
+    .btn-point:hover { background: var(--point-hover); }
+    .btn-sub {
+      background: #fff;
+      color: var(--text-main);
+      border: 1px solid var(--border-color);
+    }
+    .btn-sub:hover { background: #fafafa; }
+    .btn-danger {
+      background: var(--danger);
+      color: #fff;
+    }
+    .btn-danger:hover { background: #b91c1c; }
+    .btn-purple { background: var(--purple); color: #fff; }
+    .btn-purple:hover { background: #6d28d9; }
+    .btn-green { background: #10b981; color: #fff; }
+    .btn-green:hover { background: #059669; }
+    .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+    .btn-row > .btn { flex: 1; min-width: 120px; }
+
+    .input-group {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin-top: 6px;
+    }
+    .input-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex: 1;
+    }
+    .input-wrapper span {
+      white-space: nowrap;
+      color: var(--text-sub);
+      font-size: 13px;
+    }
+    .input-group input { margin: 0; }
+
+    .list-wrapper {
+      flex: 1;
+      min-height: 160px;
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      background: #fafafa;
+      padding: 6px;
+      overflow-y: auto;
+      margin-bottom: 10px;
+    }
+    .list-item {
+      padding: 12px;
+      border-radius: 10px;
+      background: #fff;
+      border: 1px solid transparent;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 6px;
+      transition: .15s ease;
+      cursor: pointer;
+    }
+    .list-item:hover { border-color: #dbeafe; background: #fcfdff; }
+    .list-item.active { border-color: var(--point-color); background: var(--bg-active); }
+    .clickable-text { flex: 1; min-width: 0; }
+    .item-title {
+      font-size: 13px;
+      font-weight: 700;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .item-id { font-size: 11px; color: var(--text-sub); margin-top: 3px; }
+
+    .pin-btn {
+      font-size: 16px;
+      color: #d4d4d8;
+      cursor: pointer;
+      user-select: none;
+    }
+    .pin-btn.pinned { color: #f59e0b; }
+    .chk-container { display: flex; align-items: center; justify-content: center; }
+    .chk-container input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; accent-color: var(--point-color); }
+    .select-all-box {
+      padding: 10px 12px;
+      background: #f8fafc;
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    .feature-box {
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 16px;
+      background: #fff;
+      margin-top: 14px;
+    }
+    .feature-box.danger-box {
+      border-color: #fecaca;
+      background: #fffafa;
+    }
+    .feature-box.success-box {
+      border-color: #bbf7d0;
+      background: #fbfffd;
+    }
+    .divider { border: 0; border-top: 1px solid var(--border-color); margin: 18px 0; }
+    .badge {
+      background: #fee2e2;
+      color: #b91c1c;
+      font-size: 10px;
+      font-weight: 800;
+      border-radius: 999px;
+      padding: 2px 7px;
+    }
+
+    .schedule-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; margin-top: 8px; }
+    .hour-grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 4px; margin-top: 6px; }
+    .box-btn {
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      background: #fff;
+      font-size: 11px;
+      text-align: center;
+      padding: 7px 0;
+      cursor: pointer;
+      color: var(--text-sub);
+      user-select: none;
+    }
+    .box-btn.active {
+      border-color: var(--point-color);
+      background: var(--bg-active);
+      color: var(--point-color);
+      font-weight: 800;
+    }
+    .quick-preset { display: flex; gap: 5px; margin-top: 8px; flex-wrap: wrap; }
+
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+    .toolbar .btn { padding: 8px 11px; font-size: 12px; }
+
+    .tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+      flex-wrap: wrap;
+    }
+    .tab-btn {
+      border: 1px solid var(--border-color);
+      background: #fff;
+      color: var(--text-sub);
+      border-radius: 999px;
+      padding: 8px 12px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .tab-btn.active {
+      border-color: var(--point-color);
+      color: var(--point-color);
+      background: var(--bg-active);
+    }
+    .tab-pane { display: none; }
+    .tab-pane.active { display: block; }
+
+    .log-box {
+      margin-top: 10px;
+      white-space: pre-wrap;
+      background: #fafafa;
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 12px;
+      color: var(--text-sub);
+      min-height: 48px;
+      max-height: 220px;
+      overflow: auto;
+    }
+    .summary-card {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .summary-item {
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      padding: 10px;
+      background: #fafafa;
+    }
+    .summary-item .k { font-size: 11px; color: var(--text-sub); }
+    .summary-item .v { font-size: 19px; font-weight: 800; margin-top: 4px; }
+
+    .file-line {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin: 8px 0;
+      flex-wrap: wrap;
+    }
+    .file-label {
+      font-size: 12px;
+      color: var(--text-sub);
+      background: #f8fafc;
+      border: 1px solid var(--border-color);
+      padding: 7px 10px;
+      border-radius: 999px;
+    }
+    .warning-panel {
+      margin-top: 10px;
+      padding: 10px 12px;
+      border: 1px solid #fecaca;
+      border-radius: 10px;
+      background: var(--danger-bg);
+      color: #7f1d1d;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, .45);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      z-index: 999;
+    }
+    .modal-backdrop.show { display: flex; }
+    .modal {
+      width: min(560px, 100%);
+      background: #fff;
+      border-radius: 16px;
+      border: 1px solid #fecaca;
+      padding: 18px;
+      box-shadow: 0 20px 40px rgba(0,0,0,.18);
+    }
+    .modal h4 { color: var(--danger); font-size: 18px; margin-bottom: 10px; }
+    .modal p { margin: 8px 0; font-size: 13px; line-height: 1.6; }
+    .modal .danger-list {
+      background: var(--danger-bg);
+      border: 1px solid #fecaca;
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 12px;
+      color: #7f1d1d;
+      white-space: pre-wrap;
+      max-height: 180px;
+      overflow: auto;
+      margin: 10px 0;
+    }
+    .modal .modal-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+      margin-top: 14px;
+      flex-wrap: wrap;
+    }
+
+    @media (max-width: 1200px) {
+      .container { flex-direction: column; overflow: auto; }
+      .panel { min-width: auto; }
+      .summary-card { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <h1>네이버 검색광고 마스터 툴</h1>
+      <p>대량 복사 · 일괄 변경 · 대량 등록 · 대량 삭제</p>
+    </div>
+    <div class="status-chip" id="current_status">업체를 선택하면 Customer ID가 연결됩니다.</div>
+  </div>
+
+  <div class="container">
+    <div class="panel panel-1">
+      <h3><span>🔑 1. 인증 및 계정</span></h3>
+      <input id="api_key" type="text" placeholder="API Key 입력">
+      <input id="secret_key" type="password" placeholder="Secret Key 입력">
+      <label class="inline-check"><input type="checkbox" id="save_keys_chk"> 이 PC에 키 저장</label>
+      <div class="help-text" style="margin-bottom:10px;">accounts.csv에 있는 광고주 목록이 자동으로 표시됩니다.</div>
+      <div style="font-size:13px; font-weight:700; color: var(--text-sub); margin-bottom:6px;">광고주 목록</div>
+      <div id="account_list" class="list-wrapper"></div>
+    </div>
+
+    <div class="panel panel-2">
+      <h3>
+        <span>📁 2. 캠페인 선택/변경</span>
+        <button class="btn btn-sub" onclick="refreshCampaigns()">🔄 새로고침</button>
+      </h3>
+      <div class="help-text" style="margin-bottom:10px;">이름을 클릭하면 우측에 하위 광고그룹이 표시됩니다.</div>
+      <div id="campaign_list" class="list-wrapper">
+        <div style="padding:20px; text-align:center; color: var(--text-sub); font-size:12px;">좌측에서 업체를 선택해주세요.</div>
+      </div>
+
+      <div id="campaign_editor_area" style="display:none;">
+        <div class="feature-box">
+          <h4>📑 체크된 캠페인 [껍데기] 복사</h4>
+          <input type="text" id="camp_suffix" value="_복사본" placeholder="새 이름 뒤에 붙을 문구">
+          <button class="btn btn-purple" style="width:100%;" onclick="copySelectedCampaigns()">캠페인 복사 실행</button>
+        </div>
+
+        <div class="feature-box">
+          <h4>✏️ 체크된 캠페인 일괄 변경</h4>
+          <label class="item-title">캠페인 [하루 예산] 변경</label>
+          <div class="input-group">
+            <div class="input-wrapper">
+              <input type="number" id="campaign_budget_val" value="0" step="10">
+              <span>원</span>
+            </div>
+            <button class="btn btn-sub" onclick="saveBudgetBulk('campaign')">예산 저장</button>
+          </div>
+          <div class="help-text">0원은 제한 없음으로 처리됩니다.</div>
+
+          <hr class="divider">
+
+          <label class="item-title">하위 전체 [키워드 입찰가] 변경 <span class="badge">강력</span></label>
+          <div class="input-group">
+            <div class="input-wrapper">
+              <input type="number" id="camp_keyword_bid_val" value="70" step="10">
+              <span>원</span>
+            </div>
+            <button class="btn btn-sub" style="color:var(--danger); border-color:#fca5a5;" onclick="saveKeywordBidsBulk('campaign')">입찰가 변경</button>
+          </div>
+          <div class="help-text" style="color:var(--danger);">0원 입력 시 그룹 기본 입찰가 사용으로 전환됩니다.</div>
+
+          <hr class="divider">
+
+          <label class="item-title">하위 전체 [그룹 요일/시간] 다중 변경</label>
+          <div class="schedule-grid" id="camp_days_grid"></div>
+          <div class="quick-preset">
+            <button type="button" class="btn btn-sub" onclick="setPreset('camp','all')">전체시간 켜기</button>
+            <button type="button" class="btn btn-sub" onclick="setPreset('camp','work')">09~18시 켜기</button>
+            <button type="button" class="btn btn-sub" onclick="setPreset('camp','clear')">모두 끄기</button>
+          </div>
+          <div class="hour-grid" id="camp_hours_grid"></div>
+          <div class="input-group" style="margin-top:10px;">
+            <div class="input-wrapper" style="max-width:160px;">
+              <input id="camp_bid_weight" type="number" min="0" max="500" value="100">
+              <span>% 가중치</span>
+            </div>
+          </div>
+          <button class="btn btn-green" style="width:100%; margin-top:10px;" onclick="saveScheduleCampaignBulk()">스케줄 다중 변경 저장</button>
+          <div id="campaign_log" class="log-box"></div>
+        </div>
+
+        <div class="feature-box danger-box">
+          <h4>🗑️ 체크된 캠페인 삭제</h4>
+          <div class="warning-panel">삭제는 되돌릴 수 없습니다. 특히 캠페인 삭제는 하위 구조에 직접 영향을 줄 수 있으니 반드시 확인 후 실행하세요.</div>
+          <button class="btn btn-danger" style="width:100%; margin-top:10px;" onclick="deleteSelectedCampaigns()">선택 캠페인 삭제</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel panel-3">
+      <h3>
+        <span>🛠️ 3. 광고그룹 관리 + 대량 작업</span>
+        <button class="btn btn-sub" onclick="refreshAdgroups()">🔄 새로고침</button>
+      </h3>
+
+      <div class="tabs">
+        <button class="tab-btn active" data-tab="tab_manage" onclick="switchTab('tab_manage', this)">광고그룹 관리</button>
+        <button class="tab-btn" data-tab="tab_register" onclick="switchTab('tab_register', this)">대량 등록</button>
+        <button class="tab-btn" data-tab="tab_delete" onclick="switchTab('tab_delete', this)">대량 삭제</button>
+      </div>
+
+      <div id="tab_manage" class="tab-pane active">
+        <div id="adgroup_list" class="list-wrapper" style="max-height:250px;">
+          <div style="padding:20px; text-align:center; color: var(--text-sub); font-size:12px;">중앙 패널에서 캠페인을 클릭해주세요.</div>
+        </div>
+
+        <div id="adgroup_copy_area" class="feature-box" style="display:none; border-color:#d8b4fe;">
+          <h4 style="color:#6d28d9;">🚀 체크된 그룹 다른 캠페인으로 통째 복사</h4>
+          <div class="help-text" style="color:var(--danger); font-weight:700; margin-bottom:8px;">쇼핑검색 그룹은 반드시 쇼핑검색 캠페인으로만 복사하세요.</div>
+          <select id="target_campaign_select"></select>
+          <select id="target_biz_channel_select"></select>
+          <div class="help-text">쇼핑/브랜드 복사는 원본 채널 유지 권장</div>
+          <input type="text" id="adg_suffix" value="_복사본">
+          <button class="btn btn-purple" id="btn_exec_copy" style="width:100%; margin-top:10px;" onclick="execAdgroupsCopyToTarget()">선택 그룹 통째로 복사 실행</button>
+          <div id="copy_log" class="log-box"></div>
+        </div>
+
+        <div id="schedule_editor" class="feature-box" style="display:none;">
+          <h4>✏️ 체크된 광고그룹 일괄 변경</h4>
+          <label class="item-title">광고그룹 [하루 예산] 변경</label>
+          <div class="input-group">
+            <div class="input-wrapper">
+              <input type="number" id="adgroup_budget_val" value="0" step="10">
+              <span>원</span>
+            </div>
+            <button class="btn btn-sub" onclick="saveBudgetBulk('adgroup')">예산 저장</button>
+          </div>
+          <div class="help-text">0원은 제한 없음으로 처리됩니다.</div>
+
+          <hr class="divider">
+
+          <label class="item-title">하위 [키워드 입찰가] 변경 <span class="badge">강력</span></label>
+          <div class="input-group">
+            <div class="input-wrapper">
+              <input type="number" id="adg_keyword_bid_val" value="70" step="10">
+              <span>원</span>
+            </div>
+            <button class="btn btn-sub" style="color:var(--danger); border-color:#fca5a5;" onclick="saveKeywordBidsBulk('adgroup')">입찰가 변경</button>
+          </div>
+
+          <hr class="divider">
+
+          <label class="item-title">광고그룹 [요일/시간] 다중 변경</label>
+          <div class="schedule-grid" id="days_grid"></div>
+          <div class="quick-preset">
+            <button type="button" class="btn btn-sub" onclick="setPreset('adg','all')">전체시간 켜기</button>
+            <button type="button" class="btn btn-sub" onclick="setPreset('adg','work')">09~18시 켜기</button>
+            <button type="button" class="btn btn-sub" onclick="setPreset('adg','clear')">모두 끄기</button>
+          </div>
+          <div class="hour-grid" id="hours_grid"></div>
+          <div class="input-group" style="margin-top:10px;">
+            <div class="input-wrapper" style="max-width:160px;">
+              <input id="bid_weight" type="number" min="0" max="500" value="100">
+              <span>% 가중치</span>
+            </div>
+          </div>
+          <button class="btn btn-green" style="width:100%; margin-top:10px;" onclick="saveScheduleBulk()">스케줄 다중 변경 저장</button>
+          <div id="log" class="log-box"></div>
+        </div>
+
+        <div id="adgroup_delete_area" class="feature-box danger-box" style="display:none;">
+          <h4>🗑️ 체크된 광고그룹 삭제</h4>
+          <div class="warning-panel">광고그룹 삭제도 되돌릴 수 없습니다. 삭제 전에 하위 키워드/소재 영향 범위를 꼭 확인하세요.</div>
+          <button class="btn btn-danger" style="width:100%; margin-top:10px;" onclick="deleteSelectedAdgroups()">선택 광고그룹 삭제</button>
+        </div>
+      </div>
+
+      <div id="tab_register" class="tab-pane">
+        <div class="feature-box success-box" style="margin-top:0;">
+          <h4>📥 CSV/TSV 대량 등록</h4>
+          <div class="help-text">업체 선택 후, 텍스트 붙여넣기 또는 파일 업로드로 한 번에 등록할 수 있습니다.</div>
+          <select id="bulk_entity_type">
+            <option value="campaign">캠페인</option>
+            <option value="adgroup">광고그룹</option>
+            <option value="keyword">키워드</option>
+            <option value="ad">소재</option>
+            <option value="ad_extension">확장소재</option>
+            <option value="restricted_keyword">제외키워드</option>
+          </select>
+          <div class="toolbar">
+            <button class="btn btn-sub" onclick="loadSample('register')">샘플 헤더 불러오기</button>
+            <button class="btn btn-sub" onclick="downloadSample('register')">샘플 CSV 다운로드</button>
+            <button class="btn btn-sub" onclick="clearBulkArea('register')">입력 초기화</button>
+          </div>
+          <div class="file-line">
+            <input type="file" id="bulk_file" accept=".csv,.tsv,.txt" onchange="readLocalFile(this, 'register')">
+            <span class="file-label" id="bulk_file_label">파일 미선택</span>
+          </div>
+          <textarea id="bulk_raw_text" placeholder="여기에 CSV/TSV를 붙여넣거나 파일을 업로드하세요."></textarea>
+          <div class="mini-note">예: 키워드는 nccAdgroupId, keyword, bidAmt / 소재는 nccAdgroupId, type, ad(JSON) 형식 권장</div>
+          <button class="btn btn-point" style="width:100%; margin-top:10px;" onclick="execBulkRegister()">대량 등록 실행</button>
+          <div id="bulk_register_summary" class="summary-card" style="display:none;">
+            <div class="summary-item"><div class="k">총 행수</div><div class="v" id="reg_total">0</div></div>
+            <div class="summary-item"><div class="k">성공</div><div class="v" id="reg_success">0</div></div>
+            <div class="summary-item"><div class="k">실패</div><div class="v" id="reg_fail">0</div></div>
+          </div>
+          <div id="bulk_register_log" class="log-box">등록 로그가 여기에 표시됩니다.</div>
+        </div>
+      </div>
+
+      <div id="tab_delete" class="tab-pane">
+        <div class="feature-box danger-box" style="margin-top:0;">
+          <h4>🧨 CSV/TSV 대량 삭제</h4>
+          <div class="help-text">ID 기준 삭제를 권장합니다. 키워드는 <code>nccKeywordId</code>가 없으면 <code>nccAdgroupId + keyword</code> 조합으로도 탐색을 시도합니다.</div>
+          <select id="delete_entity_type">
+            <option value="campaign">캠페인</option>
+            <option value="adgroup">광고그룹</option>
+            <option value="keyword">키워드</option>
+            <option value="ad">소재</option>
+            <option value="ad_extension">확장소재</option>
+            <option value="restricted_keyword">제외키워드</option>
+          </select>
+          <div class="toolbar">
+            <button class="btn btn-sub" onclick="loadSample('delete')">삭제 샘플 불러오기</button>
+            <button class="btn btn-sub" onclick="downloadSample('delete')">삭제 샘플 CSV 다운로드</button>
+            <button class="btn btn-sub" onclick="clearBulkArea('delete')">입력 초기화</button>
+          </div>
+          <div class="file-line">
+            <input type="file" id="delete_file" accept=".csv,.tsv,.txt" onchange="readLocalFile(this, 'delete')">
+            <span class="file-label" id="delete_file_label">파일 미선택</span>
+          </div>
+          <textarea id="delete_raw_text" placeholder="삭제할 대상 목록을 붙여넣거나 파일을 업로드하세요."></textarea>
+          <div class="warning-panel">
+            1) 삭제는 되돌릴 수 없습니다.<br>
+            2) 먼저 샘플 CSV로 헤더 형식을 맞추세요.<br>
+            3) 확장소재/제외키워드는 계정 상태에 따라 일부 실패할 수 있으며, 실패 로그를 확인해야 합니다.
+          </div>
+          <button class="btn btn-danger" style="width:100%; margin-top:10px;" onclick="execBulkDelete()">대량 삭제 실행</button>
+          <div id="bulk_delete_summary" class="summary-card" style="display:none;">
+            <div class="summary-item"><div class="k">총 행수</div><div class="v" id="del_total">0</div></div>
+            <div class="summary-item"><div class="k">성공</div><div class="v" id="del_success">0</div></div>
+            <div class="summary-item"><div class="k">실패</div><div class="v" id="del_fail">0</div></div>
+          </div>
+          <div id="bulk_delete_log" class="log-box">삭제 로그가 여기에 표시됩니다.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="danger_modal_backdrop">
+    <div class="modal">
+      <h4 id="danger_modal_title">정말 삭제하시겠습니까?</h4>
+      <p>이 작업은 되돌릴 수 없습니다. 아래 내용을 다시 확인한 뒤 진행하세요.</p>
+      <div class="danger-list" id="danger_modal_detail"></div>
+      <label class="inline-check" style="margin-top:8px;"><input type="checkbox" id="danger_confirm_check"> 삭제 영향 범위를 확인했습니다.</label>
+      <input type="text" id="danger_confirm_text" placeholder="확인을 위해 DELETE 를 입력하세요.">
+      <div class="modal-actions">
+        <button class="btn btn-sub" onclick="closeDangerModal()">취소</button>
+        <button class="btn btn-danger" id="danger_modal_exec_btn" onclick="submitDangerModal()">최종 삭제</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+  let currentCustomerId = null;
+  let currentCampaignId = null;
+  let accountsData = {{ accounts | tojson }};
+  let registerFileText = '';
+  let deleteFileText = '';
+  let dangerConfirmAction = null;
+
+  const DAYS = [
+    {n:1, label:'월'}, {n:2, label:'화'}, {n:3, label:'수'}, {n:4, label:'목'},
+    {n:5, label:'금'}, {n:6, label:'토'}, {n:7, label:'일'}
+  ];
+  const campSelectedDays = new Set([1,2,3,4,5]);
+  const selectedDays = new Set([1,2,3,4,5]);
+  const campSelectedHours = new Set(Array.from({length:24}, (_,i)=>i));
+  const selectedHours = new Set(Array.from({length:24}, (_,i)=>i));
+
+  window.onload = function() {
+    if (localStorage.getItem('naver_api_key')) {
+      document.getElementById('api_key').value = localStorage.getItem('naver_api_key');
+      document.getElementById('secret_key').value = localStorage.getItem('naver_secret_key');
+      document.getElementById('save_keys_chk').checked = true;
+    }
+    initScheduleGrid();
+    renderAccounts();
+    updateStatusChip();
+  };
+
+  function initScheduleGrid() {
+    const gridAdg = document.getElementById('days_grid');
+    const gridCamp = document.getElementById('camp_days_grid');
+    DAYS.forEach(d => {
+      const el1 = document.createElement('div');
+      el1.className = 'box-btn' + (selectedDays.has(d.n) ? ' active' : '');
+      el1.textContent = d.label;
+      el1.onclick = () => { selectedDays.has(d.n) ? selectedDays.delete(d.n) : selectedDays.add(d.n); el1.classList.toggle('active'); };
+      gridAdg.appendChild(el1);
+
+      const el2 = document.createElement('div');
+      el2.className = 'box-btn' + (campSelectedDays.has(d.n) ? ' active' : '');
+      el2.textContent = d.label;
+      el2.onclick = () => { campSelectedDays.has(d.n) ? campSelectedDays.delete(d.n) : campSelectedDays.add(d.n); el2.classList.toggle('active'); };
+      gridCamp.appendChild(el2);
+    });
+
+    const hGridAdg = document.getElementById('hours_grid');
+    const hGridCamp = document.getElementById('camp_hours_grid');
+    for (let i = 0; i < 24; i++) {
+      const el1 = document.createElement('div');
+      el1.className = 'box-btn active';
+      el1.textContent = i;
+      el1.onclick = () => { selectedHours.has(i) ? selectedHours.delete(i) : selectedHours.add(i); el1.classList.toggle('active'); };
+      hGridAdg.appendChild(el1);
+
+      const el2 = document.createElement('div');
+      el2.className = 'box-btn active';
+      el2.textContent = i;
+      el2.onclick = () => { campSelectedHours.has(i) ? campSelectedHours.delete(i) : campSelectedHours.add(i); el2.classList.toggle('active'); };
+      hGridCamp.appendChild(el2);
+    }
+  }
+
+  function switchTab(tabId, btn) {
+    document.querySelectorAll('.tab-pane').forEach(el => el.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+    document.getElementById(tabId).classList.add('active');
+    btn.classList.add('active');
+  }
+
+  function setPreset(type, mode) {
+    const targetSet = type === 'camp' ? campSelectedHours : selectedHours;
+    const gridId = type === 'camp' ? 'camp_hours_grid' : 'hours_grid';
+    targetSet.clear();
+    if (mode === 'all') {
+      for (let i = 0; i < 24; i++) targetSet.add(i);
+    } else if (mode === 'work') {
+      for (let i = 9; i <= 17; i++) targetSet.add(i);
+    }
+    const container = document.getElementById(gridId);
+    Array.from(container.children).forEach((el, index) => {
+      if (targetSet.has(index)) el.classList.add('active');
+      else el.classList.remove('active');
+    });
+  }
+
+  function updateStatusChip() {
+    const chip = document.getElementById('current_status');
+    if (!currentCustomerId) {
+      chip.textContent = '업체를 선택하면 Customer ID가 연결됩니다.';
+      return;
+    }
+    const acc = accountsData.find(x => x.customer_id === currentCustomerId);
+    chip.textContent = `${acc ? acc.account_name : '선택 계정'} · Customer ID ${currentCustomerId}`;
+  }
+
+  function getOpenAuth() {
+    const auth = {
+      api_key: document.getElementById('api_key').value.trim(),
+      secret_key: document.getElementById('secret_key').value.trim()
+    };
+    if (document.getElementById('save_keys_chk').checked) {
+      localStorage.setItem('naver_api_key', auth.api_key);
+      localStorage.setItem('naver_secret_key', auth.secret_key);
+    }
+    return auth;
+  }
+
+  function mustOpenAuth() {
+    const a = getOpenAuth();
+    if (!a.api_key || !a.secret_key) {
+      alert('상단에 API Key와 Secret Key를 입력해주세요.');
+      return null;
+    }
+    return a;
+  }
+
+  function mustCustomerId() {
+    if (!currentCustomerId) {
+      alert('먼저 좌측에서 업체를 선택해주세요.');
+      return false;
+    }
+    return true;
+  }
+
+  function toggleAll(checkbox, className) {
+    document.querySelectorAll('.' + className).forEach(chk => chk.checked = checkbox.checked);
+  }
+
+  function checkedValues(className) {
+    return Array.from(document.querySelectorAll('.' + className + ':checked')).map(cb => cb.value);
+  }
+
+  function renderAccounts() {
+    let pinned = JSON.parse(localStorage.getItem('pinnedAccounts') || '[]');
+    accountsData.sort((a, b) => {
+      const aPin = pinned.includes(a.customer_id) ? 1 : 0;
+      const bPin = pinned.includes(b.customer_id) ? 1 : 0;
+      if (aPin !== bPin) return bPin - aPin;
+      return (a.account_name || '').localeCompare(b.account_name || '');
+    });
+
+    let html = '';
+    accountsData.forEach(acc => {
+      const isPinned = pinned.includes(acc.customer_id);
+      const star = isPinned
+        ? `<span class="pin-btn pinned" title="고정 해제" onclick="togglePin(event, '${acc.customer_id}')">⭐</span>`
+        : `<span class="pin-btn" title="상단 고정" onclick="togglePin(event, '${acc.customer_id}')">☆</span>`;
+      const activeClass = acc.customer_id === currentCustomerId ? 'active' : '';
+      html += `
+        <div class="list-item ${activeClass}" id="acc_${acc.customer_id}" onclick="loadCampaigns('${acc.customer_id}')">
+          <div class="clickable-text">
+            <div class="item-title">${escapeHtml(acc.account_name)}</div>
+            <div class="item-id">ID: ${escapeHtml(acc.customer_id)}</div>
+          </div>
+          ${star}
+        </div>`;
+    });
+    document.getElementById('account_list').innerHTML = html || `<div style="padding:20px; color:var(--text-sub);">accounts.csv에 계정이 없습니다.</div>`;
+  }
+
+  function togglePin(event, cid) {
+    event.stopPropagation();
+    let pinned = JSON.parse(localStorage.getItem('pinnedAccounts') || '[]');
+    if (pinned.includes(cid)) pinned = pinned.filter(id => id !== cid);
+    else pinned.push(cid);
+    localStorage.setItem('pinnedAccounts', JSON.stringify(pinned));
+    renderAccounts();
+  }
+
+  function refreshCampaigns() {
+    if (!currentCustomerId) return alert('업체가 선택되지 않았습니다.');
+    loadCampaigns(currentCustomerId);
+  }
+
+  function refreshAdgroups() {
+    if (!currentCampaignId) return alert('캠페인이 선택되지 않았습니다.');
+    loadAdgroups(currentCampaignId);
+  }
+
+  async function loadCampaigns(customerId) {
+    const auth = mustOpenAuth(); if (!auth) return;
+    currentCustomerId = customerId;
+    currentCampaignId = null;
+    updateStatusChip();
+    document.querySelectorAll('#account_list .list-item').forEach(el => el.classList.remove('active'));
+    const activeAcc = document.getElementById(`acc_${customerId}`);
+    if (activeAcc) activeAcc.classList.add('active');
+
+    document.getElementById('campaign_list').innerHTML = `<div style="padding:20px; text-align:center;">⏳ 로딩 중...</div>`;
+    document.getElementById('adgroup_list').innerHTML = `<div style="padding:20px; text-align:center; color: var(--text-sub); font-size:12px;">캠페인을 클릭해주세요.</div>`;
+    document.getElementById('adgroup_copy_area').style.display = 'none';
+    document.getElementById('schedule_editor').style.display = 'none';
+    document.getElementById('adgroup_delete_area').style.display = 'none';
+
+    const r = await fetch('/get_campaigns', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({...auth, customer_id: currentCustomerId})
+    });
+    const data = await r.json();
+    if (data.error) {
+      document.getElementById('campaign_list').innerHTML = `<div style="color:red; padding:10px; font-size:12px;">에러: ${escapeHtml(data.error)}</div>`;
+      return;
+    }
+
+    let targetHtml = '<option value="">(필수) 도착 캠페인 선택</option>';
+    data.forEach(c => {
+      targetHtml += `<option value="${escapeHtml(c.nccCampaignId)}">[${escapeHtml(c.campaignTp || '')}] ${escapeHtml(c.name || '')}</option>`;
+    });
+    document.getElementById('target_campaign_select').innerHTML = targetHtml;
+    populateBizChannels('target_biz_channel_select');
+
+    let html = `
+      <div class="select-all-box">
+        <label class="chk-container" style="width:100%; gap:8px; justify-content:flex-start;">
+          <input type="checkbox" onchange="toggleAll(this, 'campaign-chk')">
+          <span>모든 캠페인 전체 선택</span>
+        </label>
+      </div>`;
+
+    data.forEach(c => {
+      const actClass = c.nccCampaignId === currentCampaignId ? 'active' : '';
+      html += `
+        <div class="list-item ${actClass}" id="camp_${escapeHtml(c.nccCampaignId)}">
+          <label class="chk-container" onclick="event.stopPropagation()">
+            <input type="checkbox" class="campaign-chk" value="${escapeHtml(c.nccCampaignId)}">
+          </label>
+          <div class="clickable-text" onclick="loadAdgroups('${jsString(c.nccCampaignId)}')">
+            <div class="item-title">${escapeHtml(c.name || '')}</div>
+            <div class="item-id">${escapeHtml(c.campaignTp || '')} | ${escapeHtml(c.nccCampaignId)}</div>
+          </div>
+        </div>`;
+    });
+
+    document.getElementById('campaign_list').innerHTML = html;
+    document.getElementById('campaign_editor_area').style.display = 'block';
+  }
+
+  async function loadAdgroups(campaignId) {
+    const auth = mustOpenAuth(); if (!auth) return;
+    currentCampaignId = campaignId;
+    document.querySelectorAll('#campaign_list .list-item').forEach(el => el.classList.remove('active'));
+    const actCamp = document.getElementById(`camp_${campaignId}`);
+    if (actCamp) actCamp.classList.add('active');
+    document.getElementById('adgroup_list').innerHTML = `<div style="padding:20px; text-align:center;">⏳ 로딩 중...</div>`;
+
+    const r = await fetch('/get_adgroups', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({...auth, customer_id: currentCustomerId, campaign_id: currentCampaignId})
+    });
+    const data = await r.json();
+    if (data.error) {
+      document.getElementById('adgroup_list').innerHTML = `<div style="color:red; padding:10px; font-size:12px;">에러: ${escapeHtml(data.error)}</div>`;
+      return;
+    }
+
+    let html = `
+      <div class="select-all-box">
+        <label class="chk-container" style="width:100%; gap:8px; justify-content:flex-start;">
+          <input type="checkbox" onchange="toggleAll(this, 'adgroup-chk')">
+          <span>모든 광고그룹 전체 선택</span>
+        </label>
+      </div>`;
+
+    data.forEach(g => {
+      html += `
+        <div class="list-item">
+          <label class="chk-container" onclick="event.stopPropagation()">
+            <input type="checkbox" class="adgroup-chk" value="${escapeHtml(g.nccAdgroupId)}">
+          </label>
+          <div class="clickable-text" onclick="let cb = this.previousElementSibling.querySelector('input'); cb.checked = !cb.checked;">
+            <div class="item-title">${escapeHtml(g.name || '')}</div>
+            <div class="item-id">ID: ${escapeHtml(g.nccAdgroupId)}</div>
+          </div>
+        </div>`;
+    });
+
+    document.getElementById('adgroup_list').innerHTML = html;
+    document.getElementById('adgroup_copy_area').style.display = 'block';
+    document.getElementById('schedule_editor').style.display = 'block';
+    document.getElementById('adgroup_delete_area').style.display = 'block';
+  }
+
+  async function populateBizChannels(selectElementId) {
+    const auth = mustOpenAuth(); if (!auth || !currentCustomerId) return;
+    const r = await fetch('/get_biz_channels', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({...auth, customer_id: currentCustomerId})
+    });
+    const data = await r.json();
+    if (data.error) return;
+
+    let html = '<option value="">(필수) 연결할 비즈채널 선택</option>';
+    data.forEach(b => {
+      const cleanDomain = String(b.name || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/$/, '');
+      const displayLabel = (b.channelTp === 'SITE') ? cleanDomain : `${cleanDomain} (${b.channelTp || ''})`;
+      const cid = b.bizChannelId || b.nccChannelId || b.channelId || '';
+      html += `<option value="${escapeHtml(cid)}">${escapeHtml(displayLabel)}</option>`;
+    });
+    html += '<option value="keep">✨ 원본 채널 유지 (쇼핑/브랜드는 권장)</option>';
+    document.getElementById(selectElementId).innerHTML = html;
+  }
+
+  async function copySelectedCampaigns() {
+    const auth = mustOpenAuth(); if (!auth || !mustCustomerId()) return;
+    const campIds = checkedValues('campaign-chk');
+    if (!campIds.length) return alert('캠페인을 선택해주세요.');
+    const suffix = document.getElementById('camp_suffix').value.trim() || '_복사본';
+    if (!confirm(`체크된 ${campIds.length}개 캠페인을 복사하시겠습니까?\n(설정만 복사되며 하위 그룹은 제외됩니다)`)) return;
+
+    setLog('campaign_log', '⏳ 캠페인 복사 진행 중...');
+    const r = await fetch('/copy_campaigns', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({...auth, customer_id: currentCustomerId, source_ids: campIds, suffix})
+    });
+    const data = await r.json();
+    setLog('campaign_log', data.message || data.error || '완료');
+    if (data.ok) refreshCampaigns();
+  }
+
+  async function execAdgroupsCopyToTarget() {
+    const auth = mustOpenAuth(); if (!auth || !mustCustomerId()) return;
+    const adgroupIds = checkedValues('adgroup-chk');
+    if (!adgroupIds.length) return alert('복사할 원본 그룹을 선택해주세요.');
+    const targetCampId = document.getElementById('target_campaign_select').value;
+    if (!targetCampId) return alert('도착할 타겟 캠페인을 선택해주세요.');
+    const bizId = document.getElementById('target_biz_channel_select').value;
+    if (!bizId) return alert('비즈채널을 선택해주세요.');
+    const suffix = document.getElementById('adg_suffix').value.trim() || '_복사본';
+
+    if (!confirm(`정말 체크된 ${adgroupIds.length}개 그룹을 통째로 복사하시겠습니까?\n(키워드, 소재, 제외키워드 포함)`)) return;
+    const btn = document.getElementById('btn_exec_copy');
+    btn.disabled = true;
+    btn.textContent = '⏳ 복사 중...';
+    setLog('copy_log', '복사 작업을 시작합니다...');
+
+    const r = await fetch('/copy_adgroups_to_target', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({...auth, customer_id: currentCustomerId, source_ids: adgroupIds, target_campaign_id: targetCampId, suffix, biz_channel_id: bizId})
+    });
+    const data = await r.json();
+    btn.disabled = false;
+    btn.textContent = '선택 그룹 통째로 복사 실행';
+    setLog('copy_log', data.message || data.error || '완료');
+  }
+
+  async function saveBudgetBulk(entityType) {
+    const auth = mustOpenAuth(); if (!auth || !mustCustomerId()) return;
+    const entityIds = checkedValues(entityType === 'campaign' ? 'campaign-chk' : 'adgroup-chk');
+    if (!entityIds.length) return alert('대상을 체크해주세요.');
+    const budget = parseInt(document.getElementById(entityType === 'campaign' ? 'campaign_budget_val' : 'adgroup_budget_val').value || '0', 10);
+    const logId = entityType === 'campaign' ? 'campaign_log' : 'log';
+    setLog(logId, '⏳ 예산 변경 중...');
+
+    const r = await fetch('/update_budget', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({...auth, customer_id: currentCustomerId, entity_type: entityType, entity_ids: entityIds, budget})
+    });
+    const data = await r.json();
+    setLog(logId, data.message || data.error || '완료');
+  }
+
+  async function saveKeywordBidsBulk(entityType) {
+    const auth = mustOpenAuth(); if (!auth || !mustCustomerId()) return;
+    const entityIds = checkedValues(entityType === 'campaign' ? 'campaign-chk' : 'adgroup-chk');
+    if (!entityIds.length) return alert('대상을 체크해주세요.');
+    const bidAmt = parseInt(document.getElementById(entityType === 'campaign' ? 'camp_keyword_bid_val' : 'adg_keyword_bid_val').value || '0', 10);
+    if (bidAmt > 0 && bidAmt < 70) return alert('최소 70원 이상 입력해주세요.');
+    const confirmMsg = bidAmt === 0 ? '그룹 기본 입찰가 사용' : `${bidAmt.toLocaleString()}원으로 변경`;
+    if (!confirm(`선택한 항목 내 모든 키워드 입찰가를\n${confirmMsg}\n진행하시겠습니까?`)) return;
+
+    const logId = entityType === 'campaign' ? 'campaign_log' : 'log';
+    setLog(logId, '⏳ 키워드 수에 따라 시간이 걸릴 수 있습니다...');
+    const r = await fetch('/update_keyword_bids', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({...auth, customer_id: currentCustomerId, entity_type: entityType, entity_ids: entityIds, bid_amt: bidAmt})
+    });
+    const data = await r.json();
+    setLog(logId, data.message || data.error || '완료');
+  }
+
+  async function saveScheduleBulk() {
+    const auth = mustOpenAuth(); if (!auth || !mustCustomerId()) return;
+    const adgroupIds = checkedValues('adgroup-chk');
+    if (!adgroupIds.length) return alert('대상을 체크해주세요.');
+    const hoursArr = Array.from(selectedHours.values()).sort((a,b)=>a-b);
+    if (!hoursArr.length) return alert('시간을 최소 1개 이상 선택해주세요.');
+
+    setLog('log', '⏳ 스케줄 변경 중...');
+    const r = await fetch('/update_schedule', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({...auth, customer_id: currentCustomerId, adgroup_ids: adgroupIds, hours: hoursArr, bidWeight: parseInt(document.getElementById('bid_weight').value || '100', 10), days: Array.from(selectedDays.values()).sort((a,b)=>a-b)})
+    });
+    const data = await r.json();
+    setLog('log', data.message || data.error || '완료');
+  }
+
+  async function saveScheduleCampaignBulk() {
+    const auth = mustOpenAuth(); if (!auth || !mustCustomerId()) return;
+    const campaignIds = checkedValues('campaign-chk');
+    if (!campaignIds.length) return alert('대상을 체크해주세요.');
+    const hoursArr = Array.from(campSelectedHours.values()).sort((a,b)=>a-b);
+    if (!hoursArr.length) return alert('시간을 최소 1개 이상 선택해주세요.');
+
+    setLog('campaign_log', '⏳ 스케줄 변경 중...');
+    const r = await fetch('/update_schedule_campaign_bulk', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({...auth, customer_id: currentCustomerId, campaign_ids: campaignIds, hours: hoursArr, bidWeight: parseInt(document.getElementById('camp_bid_weight').value || '100', 10), days: Array.from(campSelectedDays.values()).sort((a,b)=>a-b)})
+    });
+    const data = await r.json();
+    setLog('campaign_log', data.message || data.error || '완료');
+  }
+
+  function readLocalFile(input, mode) {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      const txt = e.target.result || '';
+      if (mode === 'register') {
+        registerFileText = txt;
+        document.getElementById('bulk_raw_text').value = txt;
+        document.getElementById('bulk_file_label').textContent = file.name;
+      } else {
+        deleteFileText = txt;
+        document.getElementById('delete_raw_text').value = txt;
+        document.getElementById('delete_file_label').textContent = file.name;
+      }
+    };
+    reader.readAsText(file, 'utf-8');
+  }
+
+  async function loadSample(mode) {
+    const entityType = document.getElementById(mode === 'register' ? 'bulk_entity_type' : 'delete_entity_type').value;
+    const endpoint = mode === 'register' ? '/sample_headers' : '/delete_sample_headers';
+    const r = await fetch(`${endpoint}?entity_type=${encodeURIComponent(entityType)}`);
+    const data = await r.json();
+    const headers = data.headers || [];
+    const row = data.sample_row || {};
+    const line = headers.map(h => escapeCsv(row[h] ?? '')).join(',');
+    const text = headers.join(',') + '\n' + line;
+    document.getElementById(mode === 'register' ? 'bulk_raw_text' : 'delete_raw_text').value = text;
+  }
+
+  async function downloadSample(mode) {
+    const entityType = document.getElementById(mode === 'register' ? 'bulk_entity_type' : 'delete_entity_type').value;
+    const endpoint = mode === 'register' ? '/sample_headers' : '/delete_sample_headers';
+    const r = await fetch(`${endpoint}?entity_type=${encodeURIComponent(entityType)}`);
+    const data = await r.json();
+    const headers = data.headers || [];
+    const row = data.sample_row || {};
+    const csv = headers.join(',') + '\n' + headers.map(h => escapeCsv(row[h] ?? '')).join(',');
+    const blob = new Blob([csv], {type: 'text/csv;charset=utf-8;'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${entityType}_${mode === 'register' ? 'register' : 'delete'}_sample.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  function clearBulkArea(mode) {
+    if (mode === 'register') {
+      registerFileText = '';
+      document.getElementById('bulk_raw_text').value = '';
+      document.getElementById('bulk_file').value = '';
+      document.getElementById('bulk_file_label').textContent = '파일 미선택';
+      document.getElementById('bulk_register_summary').style.display = 'none';
+      setLog('bulk_register_log', '등록 로그가 여기에 표시됩니다.');
+    } else {
+      deleteFileText = '';
+      document.getElementById('delete_raw_text').value = '';
+      document.getElementById('delete_file').value = '';
+      document.getElementById('delete_file_label').textContent = '파일 미선택';
+      document.getElementById('bulk_delete_summary').style.display = 'none';
+      setLog('bulk_delete_log', '삭제 로그가 여기에 표시됩니다.');
+    }
+  }
+
+  async function execBulkRegister() {
+    const auth = mustOpenAuth(); if (!auth || !mustCustomerId()) return;
+    const entityType = document.getElementById('bulk_entity_type').value;
+    const rawText = (document.getElementById('bulk_raw_text').value || registerFileText || '').trim();
+    if (!rawText) return alert('등록할 CSV/TSV 데이터를 넣어주세요.');
+    setLog('bulk_register_log', '⏳ 대량 등록 실행 중...');
+
+    const r = await fetch('/bulk_register', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({...auth, customer_id: currentCustomerId, entity_type: entityType, raw_text: rawText})
+    });
+    const data = await r.json();
+    if (data.error) {
+      setLog('bulk_register_log', data.error);
+      return;
+    }
+    showSummary('register', data.total || 0, data.success || 0, data.fail || 0);
+    setLog('bulk_register_log', formatResultLog(data.results || []));
+    if (entityType === 'campaign') refreshCampaigns();
+    if (entityType === 'adgroup' && currentCampaignId) refreshAdgroups();
+  }
+
+  function buildDeletePayloadForSelection(entityType, ids) {
+    if (entityType === 'campaign') return ids.map(id => ({nccCampaignId: id}));
+    if (entityType === 'adgroup') return ids.map(id => ({nccAdgroupId: id}));
+    return ids.map(id => ({id}));
+  }
+
+  function deleteSelectedCampaigns() {
+    if (!mustCustomerId()) return;
+    const ids = checkedValues('campaign-chk');
+    if (!ids.length) return alert('삭제할 캠페인을 체크해주세요.');
+    openDangerModal({
+      title: '선택 캠페인 삭제',
+      detail: `삭제 대상 수: ${ids.length}개\n\nID 목록:\n${ids.slice(0, 30).join('\n')}${ids.length > 30 ? '\n...' : ''}`,
+      onConfirm: async () => {
+        await runBulkDelete('campaign', buildDeletePayloadForSelection('campaign', ids), null, 'campaign_log');
+        refreshCampaigns();
+      }
+    });
+  }
+
+  function deleteSelectedAdgroups() {
+    if (!mustCustomerId()) return;
+    const ids = checkedValues('adgroup-chk');
+    if (!ids.length) return alert('삭제할 광고그룹을 체크해주세요.');
+    openDangerModal({
+      title: '선택 광고그룹 삭제',
+      detail: `삭제 대상 수: ${ids.length}개\n\nID 목록:\n${ids.slice(0, 30).join('\n')}${ids.length > 30 ? '\n...' : ''}`,
+      onConfirm: async () => {
+        await runBulkDelete('adgroup', buildDeletePayloadForSelection('adgroup', ids), null, 'log');
+        if (currentCampaignId) refreshAdgroups();
+      }
+    });
+  }
+
+  function execBulkDelete() {
+    const auth = mustOpenAuth(); if (!auth || !mustCustomerId()) return;
+    const entityType = document.getElementById('delete_entity_type').value;
+    const rawText = (document.getElementById('delete_raw_text').value || deleteFileText || '').trim();
+    if (!rawText) return alert('삭제할 CSV/TSV 데이터를 넣어주세요.');
+    const lines = rawText.split(/\r?\n/).filter(Boolean);
+    openDangerModal({
+      title: `대량 삭제 실행 · ${entityType}`,
+      detail: `입력 행 수(헤더 포함): ${lines.length}줄\n\n첫 8줄 미리보기:\n${lines.slice(0, 8).join('\n')}`,
+      onConfirm: async () => {
+        await runBulkDelete(entityType, null, rawText, 'bulk_delete_log');
+      }
+    });
+  }
+
+  async function runBulkDelete(entityType, rows, rawText, logId) {
+    const auth = mustOpenAuth(); if (!auth || !mustCustomerId()) return;
+    setLog(logId, '⏳ 삭제 요청 실행 중...');
+    const body = {...auth, customer_id: currentCustomerId, entity_type: entityType};
+    if (rows) body.rows = rows;
+    if (rawText) body.raw_text = rawText;
+
+    const r = await fetch('/bulk_delete', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)
+    });
+    const data = await r.json();
+    if (data.error) {
+      setLog(logId, data.error);
+      return;
+    }
+    if (logId === 'bulk_delete_log') {
+      showSummary('delete', data.total || 0, data.success || 0, data.fail || 0);
+    }
+    setLog(logId, formatResultLog(data.results || []));
+  }
+
+  function openDangerModal({title, detail, onConfirm}) {
+    document.getElementById('danger_modal_title').textContent = title || '정말 삭제하시겠습니까?';
+    document.getElementById('danger_modal_detail').textContent = detail || '';
+    document.getElementById('danger_confirm_check').checked = false;
+    document.getElementById('danger_confirm_text').value = '';
+    dangerConfirmAction = onConfirm;
+    document.getElementById('danger_modal_backdrop').classList.add('show');
+  }
+
+  function closeDangerModal() {
+    dangerConfirmAction = null;
+    document.getElementById('danger_modal_backdrop').classList.remove('show');
+  }
+
+  async function submitDangerModal() {
+    const checked = document.getElementById('danger_confirm_check').checked;
+    const typed = (document.getElementById('danger_confirm_text').value || '').trim();
+    if (!checked) return alert('삭제 영향 범위 확인 체크가 필요합니다.');
+    if (typed !== 'DELETE') return alert('DELETE 를 정확히 입력해야 합니다.');
+    const fn = dangerConfirmAction;
+    closeDangerModal();
+    if (typeof fn === 'function') await fn();
+  }
+
+  function showSummary(type, total, success, fail) {
+    const summaryId = type === 'register' ? 'bulk_register_summary' : 'bulk_delete_summary';
+    document.getElementById(summaryId).style.display = 'grid';
+    document.getElementById(type === 'register' ? 'reg_total' : 'del_total').textContent = total;
+    document.getElementById(type === 'register' ? 'reg_success' : 'del_success').textContent = success;
+    document.getElementById(type === 'register' ? 'reg_fail' : 'del_fail').textContent = fail;
+  }
+
+  function setLog(id, message) {
+    document.getElementById(id).textContent = message || '';
+  }
+
+  function formatResultLog(results) {
+    if (!results || !results.length) return '결과가 없습니다.';
+    return results.map(item => {
+      const mark = item.ok ? '✅' : '❌';
+      return `${mark} ${item.row_no}행 | ${item.name || '-'} | ${item.detail || ''}`;
+    }).join('\n');
+  }
+
+  function escapeCsv(value) {
+    const v = String(value ?? '');
+    if (/[",\n]/.test(v)) return '"' + v.replace(/"/g, '""') + '"';
+    return v;
+  }
+
+  function escapeHtml(str) {
+    return String(str ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function jsString(v) {
+    return String(v ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  }
+</script>
+</body>
+</html>

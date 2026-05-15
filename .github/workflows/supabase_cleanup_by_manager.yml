@@ -1,0 +1,69 @@
+name: Supabase 담당자 데이터 정리
+run-name: Supabase 정리 | ${{ github.event.inputs.managers }} | ${{ github.event.inputs.mode }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      managers:
+        description: '삭제 대상 담당자명, 콤마 구분'
+        required: true
+        default: '민아,미혜,정인'
+      mode:
+        description: '실행 모드'
+        required: true
+        default: 'dry_run'
+        type: choice
+        options:
+          - dry_run
+          - execute_delete
+
+concurrency:
+  group: supabase-cleanup-by-manager
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    env:
+      TZ: Asia/Seoul
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas openpyxl SQLAlchemy psycopg2-binary
+
+      - name: DRY-RUN preview
+        if: ${{ github.event.inputs.mode == 'dry_run' }}
+        run: |
+          python cleanup_supabase_by_manager.py \
+            --account-master account_master.xlsx \
+            --managers "${{ github.event.inputs.managers }}" \
+            --export-targets cleanup_targets.csv
+
+      - name: EXECUTE delete
+        if: ${{ github.event.inputs.mode == 'execute_delete' }}
+        run: |
+          python cleanup_supabase_by_manager.py \
+            --account-master account_master.xlsx \
+            --managers "${{ github.event.inputs.managers }}" \
+            --export-targets cleanup_targets.csv \
+            --execute
+
+      - name: Upload cleanup target list
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cleanup-targets-${{ github.run_number }}
+          path: cleanup_targets.csv
+          if-no-files-found: ignore

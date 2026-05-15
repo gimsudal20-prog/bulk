@@ -1,0 +1,116 @@
+name: 03 신규업체 전용 백필 | 레거시 단일 계정
+run-name: 03 신규업체 전용 백필 | ${{ github.event.inputs.account_name }} | ${{ github.event.inputs.start_date }}~${{ github.event.inputs.end_date }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      account_name:
+        description: "백필할 업체명 (collector account_name)"
+        required: true
+        type: string
+      start_date:
+        description: "시작일 (YYYY-MM-DD)"
+        required: true
+        default: "2026-02-01"
+        type: string
+      end_date:
+        description: "종료일 (YYYY-MM-DD)"
+        required: true
+        default: "2026-03-10"
+        type: string
+      workers:
+        description: "동시 작업 수 (단일 업체면 1 권장)"
+        required: true
+        default: "1"
+        type: string
+      sync_dim_first_day:
+        description: "첫날만 구조 수집"
+        required: true
+        default: "예"
+        type: choice
+        options:
+          - "예"
+          - "아니오"
+      shopping_only:
+        description: "쇼핑검색(SSA) 캠페인만 백필"
+        required: false
+        default: "아니오"
+        type: choice
+        options:
+          - "아니오"
+          - "예"
+      with_shop_ext:
+        description: "확장소재 수집 포함"
+        required: false
+        default: "아니오"
+        type: choice
+        options:
+          - "아니오"
+          - "예"
+
+concurrency:
+  group: manual-new-account-backfill-${{ github.event.inputs.account_name }}
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    env:
+      TZ: Asia/Seoul
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      NAVER_ADS_API_KEY: ${{ secrets.NAVER_ADS_API_KEY }}
+      NAVER_ADS_SECRET: ${{ secrets.NAVER_ADS_SECRET }}
+      ACCOUNT_MASTER_FILE: account_master.xlsx
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install requests python-dotenv sqlalchemy psycopg2-binary pandas openpyxl
+
+
+      - name: Write workflow guide
+        if: always()
+        run: |
+          {
+            echo "## 03 신규업체 전용 백필"
+            echo
+            echo "- 용도: 단일 신규 업체의 레거시 기간을 빠르게 채울 때 사용"
+            echo "- 권장 상황: 일반 백필보다 '신규 계정 + 단일 업체 + 과거 누락 보정'이 더 중요할 때"
+            echo "- 업체: `${{ github.event.inputs.account_name }}`"
+            echo "- 기간: `${{ github.event.inputs.start_date }}` ~ `${{ github.event.inputs.end_date }}`"
+            echo "- 참고: 일반 점검/재수집은 보통 '02 수동 백필'을 우선 사용"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run legacy single-account backfill
+        run: |
+          CMD=(python backfill_single_legacy_sa.py \
+            --start "${{ github.event.inputs.start_date }}" \
+            --end "${{ github.event.inputs.end_date }}" \
+            --account_name "${{ github.event.inputs.account_name }}" \
+            --workers "${{ github.event.inputs.workers }}")
+
+          if [ "${{ github.event.inputs.sync_dim_first_day }}" = "예" ]; then
+            CMD+=(--sync_dim_first_day)
+          fi
+          if [ "${{ github.event.inputs.shopping_only }}" = "예" ]; then
+            CMD+=(--shopping_only)
+          fi
+          if [ "${{ github.event.inputs.with_shop_ext }}" = "예" ]; then
+            CMD+=(--with_shop_ext)
+          fi
+
+          printf '실행 명령어:'
+          printf ' %q' "${CMD[@]}"
+          printf '\n'
+          "${CMD[@]}"

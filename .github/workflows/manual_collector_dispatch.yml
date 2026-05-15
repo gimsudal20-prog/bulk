@@ -1,0 +1,162 @@
+name: Manual Collector Run
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: '수집 날짜 (YYYY-MM-DD). 비우면 collector.py 기본값 사용'
+        required: false
+        type: string
+      account_name:
+        description: '단일 업체명 또는 일부 문자열'
+        required: false
+        default: ''
+        type: string
+      account_names:
+        description: '쉼표(,)로 구분한 여러 업체명'
+        required: false
+        default: ''
+        type: string
+      customer_id:
+        description: '특정 customer_id 직접 지정'
+        required: false
+        default: ''
+        type: string
+      workers:
+        description: '동시 작업 수'
+        required: true
+        default: '1'
+        type: string
+      collect_mode:
+        description: '수집 모드'
+        required: true
+        default: 'sa_with_device'
+        type: choice
+        options:
+          - sa_with_device
+          - sa_only
+          - device_only
+      sa_scope:
+        description: '검색광고 수집 범위'
+        required: true
+        default: 'full'
+        type: choice
+        options:
+          - full
+          - ad_only
+      shopping_only:
+        description: '쇼핑검색 전용 수집'
+        required: true
+        default: false
+        type: boolean
+      skip_dim:
+        description: '구조(dim) 적재 건너뛰기'
+        required: true
+        default: false
+        type: boolean
+      fast:
+        description: '빠른 수집 모드'
+        required: true
+        default: false
+        type: boolean
+      include_gfa_accounts:
+        description: 'GFA 계정 포함'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: manual-collector-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  run-collector:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      TZ: Asia/Seoul
+      PYTHONUNBUFFERED: '1'
+      NAVER_API_KEY: ${{ secrets.NAVER_API_KEY || secrets.NAVER_ADS_API_KEY }}
+      NAVER_API_SECRET: ${{ secrets.NAVER_API_SECRET || secrets.NAVER_ADS_SECRET }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      ACCOUNT_MASTER_FILE: ${{ vars.ACCOUNT_MASTER_FILE }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Validate required secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=()
+          [[ -z "${NAVER_API_KEY:-}" ]] && missing+=("NAVER_API_KEY or NAVER_ADS_API_KEY")
+          [[ -z "${NAVER_API_SECRET:-}" ]] && missing+=("NAVER_API_SECRET or NAVER_ADS_SECRET")
+          [[ -z "${DATABASE_URL:-}" ]] && missing+=("DATABASE_URL")
+
+          if (( ${#missing[@]} > 0 )); then
+            echo "❌ 누락된 GitHub Secrets: ${missing[*]}"
+            exit 1
+          fi
+
+      - name: Show run summary
+        shell: bash
+        run: |
+          echo "⏰ 현재 한국 시간: $(TZ=Asia/Seoul date '+%F %T')"
+          echo "date=${{ inputs.date }}"
+          echo "account_name=${{ inputs.account_name }}"
+          echo "account_names=${{ inputs.account_names }}"
+          echo "customer_id=${{ inputs.customer_id }}"
+          echo "workers=${{ inputs.workers }}"
+          echo "collect_mode=${{ inputs.collect_mode }}"
+          echo "sa_scope=${{ inputs.sa_scope }}"
+          echo "shopping_only=${{ inputs.shopping_only }}"
+          echo "skip_dim=${{ inputs.skip_dim }}"
+          echo "fast=${{ inputs.fast }}"
+          echo "include_gfa_accounts=${{ inputs.include_gfa_accounts }}"
+
+      - name: Run collector.py
+        shell: bash
+        run: |
+          set -euo pipefail
+          CMD=(python collector.py)
+
+          [[ -n "${{ inputs.date }}" ]] && CMD+=(--date "${{ inputs.date }}")
+          [[ -n "${{ inputs.account_name }}" ]] && CMD+=(--account_name "${{ inputs.account_name }}")
+          [[ -n "${{ inputs.account_names }}" ]] && CMD+=(--account_names "${{ inputs.account_names }}")
+          [[ -n "${{ inputs.customer_id }}" ]] && CMD+=(--customer_id "${{ inputs.customer_id }}")
+          [[ -n "${{ inputs.workers }}" ]] && CMD+=(--workers "${{ inputs.workers }}")
+          [[ -n "${{ inputs.collect_mode }}" ]] && CMD+=(--collect_mode "${{ inputs.collect_mode }}")
+          [[ -n "${{ inputs.sa_scope }}" ]] && CMD+=(--sa_scope "${{ inputs.sa_scope }}")
+
+          [[ "${{ inputs.shopping_only }}" == "true" ]] && CMD+=(--shopping_only)
+          [[ "${{ inputs.skip_dim }}" == "true" ]] && CMD+=(--skip_dim)
+          [[ "${{ inputs.fast }}" == "true" ]] && CMD+=(--fast)
+          [[ "${{ inputs.include_gfa_accounts }}" == "true" ]] && CMD+=(--include_gfa_accounts)
+
+          echo "실행 명령어: ${CMD[*]}"
+          "${CMD[@]}" 2>&1 | tee manual_collector.log
+
+      - name: Upload run log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: manual-collector-log-${{ github.run_id }}
+          path: manual_collector.log
+          if-no-files-found: warn

@@ -1,0 +1,60 @@
+name: 04 비즈머니 일일 수집
+run-name: 04 비즈머니 일일 수집 | ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'schedule' }}
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "0 */4 * * *"
+
+concurrency:
+  group: bizmoney-daily
+  cancel-in-progress: false
+
+jobs:
+  run-bizmoney:
+    runs-on: ubuntu-latest
+    env:
+      TZ: Asia/Seoul
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      NAVER_ADS_API_KEY: ${{ secrets.NAVER_ADS_API_KEY }}
+      NAVER_ADS_SECRET: ${{ secrets.NAVER_ADS_SECRET }}
+      ACCOUNT_MASTER_FILE: account_master.xlsx
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install requests python-dotenv sqlalchemy psycopg2-binary pandas openpyxl
+
+
+      - name: Write workflow guide
+        if: always()
+        run: |
+          {
+            echo "## 04 비즈머니 일일 수집"
+            echo
+            echo "- 용도: 광고 계정별 비즈머니 잔액 주기적 저장"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Confirm account master file
+        run: |
+          echo "ACCOUNT_MASTER_FILE=${ACCOUNT_MASTER_FILE}"
+          ls -lah
+          if [ ! -f "${ACCOUNT_MASTER_FILE}" ]; then
+            echo "❌ account master file not found: ${ACCOUNT_MASTER_FILE}"
+            exit 1
+          fi
+
+      - name: Run BizMoney Collector
+        run: |
+          python collect_bizmoney.py

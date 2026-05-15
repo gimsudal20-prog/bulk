@@ -1,0 +1,84 @@
+name: 05 GFA 성과 동기화
+run-name: 05 GFA 성과 동기화 | ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'schedule' }}
+
+on:
+  schedule:
+    - cron: '0 18 * * *'
+  workflow_dispatch:
+
+jobs:
+  run-gfa-collector:
+    runs-on: ubuntu-latest
+    env:
+      TZ: Asia/Seoul
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      ACCOUNT_MASTER_FILE: account_master.xlsx
+      GFA_ACCESS_TOKEN: ${{ secrets.GFA_ACCESS_TOKEN }}
+      GFA_REFRESH_TOKEN: ${{ secrets.GFA_REFRESH_TOKEN }}
+      GFA_CLIENT_ID: ${{ secrets.GFA_CLIENT_ID || vars.GFA_CLIENT_ID }}
+      GFA_CLIENT_SECRET: ${{ secrets.GFA_CLIENT_SECRET || vars.GFA_CLIENT_SECRET }}
+      GFA_MANAGER_ACCOUNT_NO: ${{ secrets.GFA_MANAGER_ACCOUNT_NO || vars.GFA_MANAGER_ACCOUNT_NO }}
+      GFA_ID: ${{ secrets.GFA_ID || secrets.GFA_LOGIN_ID || secrets.NAVER_ID || vars.GFA_ID || vars.GFA_LOGIN_ID || vars.NAVER_ID }}
+      GFA_PW: ${{ secrets.GFA_PW || secrets.GFA_LOGIN_PW || secrets.NAVER_PW || vars.GFA_PW || vars.GFA_LOGIN_PW || vars.NAVER_PW }}
+      GFA_HEADLESS: 'true'
+      GFA_DEBUG_DIR: gfa_debug
+      GFA_DOWNLOAD_DIR: gfa_downloads
+
+    steps:
+      - name: 저장소 코드 불러오기
+        uses: actions/checkout@v4
+
+      - name: Python 3.11 세팅
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 패키지 설치
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pandas requests sqlalchemy psycopg2-binary openpyxl python-dotenv playwright
+
+
+      - name: Write workflow guide
+        if: always()
+        run: |
+          {
+            echo "## 05 GFA 성과 동기화"
+            echo
+            echo "- 용도: GFA 계정 성과 수집 전용 워크플로우"
+            echo "- 참고: 검색광고 메인 수집과 별도 축이라 문제 분리용으로 보기 좋음"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Chromium 설치
+        run: |
+          python -m playwright install --with-deps chromium
+
+      - name: GFA 시크릿 연결 상태 확인
+        run: |
+          echo "has DATABASE_URL=$([ -n "$DATABASE_URL" ] && echo yes || echo no)"
+          echo "has GFA_ACCESS_TOKEN=$([ -n "$GFA_ACCESS_TOKEN" ] && echo yes || echo no)"
+          echo "has GFA_REFRESH_TOKEN=$([ -n "$GFA_REFRESH_TOKEN" ] && echo yes || echo no)"
+          echo "has GFA_CLIENT_ID=$([ -n "$GFA_CLIENT_ID" ] && echo yes || echo no)"
+          echo "has GFA_CLIENT_SECRET=$([ -n "$GFA_CLIENT_SECRET" ] && echo yes || echo no)"
+          echo "has GFA_ID=$([ -n "$GFA_ID" ] && echo yes || echo no)"
+          echo "has GFA_PW=$([ -n "$GFA_PW" ] && echo yes || echo no)"
+
+      - name: GFA 전용 수집기 실행
+        run: |
+          if [ -f collector_gfa.py ]; then
+            python collector_gfa.py
+          else
+            echo "collector_gfa.py 가 현재 업로드된 소스에 없어 GFA 성과 수집은 건너뜁니다."
+          fi
+
+
+      - name: Upload GFA debug artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gfa-debug-${{ github.run_number }}
+          path: |
+            gfa_debug/**
+            gfa_downloads/**
+          if-no-files-found: ignore

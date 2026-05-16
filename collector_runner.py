@@ -150,6 +150,81 @@ def _scope_enabled_collectors(sa_scope: str, collect_sa: bool, normalize_sa_scop
     return True, True, True
 
 
+def _merge_device_stats(primary: Dict[Tuple[str, str], dict], fallback: Dict[Tuple[str, str], dict]) -> Dict[Tuple[str, str], dict]:
+    merged = dict(primary or {})
+    for key, value in (fallback or {}).items():
+        merged[key] = value
+    return merged
+
+
+def _save_device_totals_with_unsegmented_fallback(
+    engine: Engine,
+    *,
+    customer_id: str,
+    account_name: str,
+    target_date: date,
+    target_camp_ids: List[str],
+    target_ad_ids: List[str],
+    ad_device_stat: Dict[Tuple[str, str], dict],
+    camp_device_stat: Dict[Tuple[str, str], dict],
+    save_device_stats_fn: Callable[..., int],
+    build_unsegmented_device_stat_from_totals_fn: Callable[..., Dict[Tuple[str, str], dict]],
+    source_report: str,
+    log_fn: Callable[[str], None] = _log,
+) -> tuple[int, int, int]:
+    ad_fallback = build_unsegmented_device_stat_from_totals_fn(
+        engine,
+        customer_id,
+        target_date,
+        "fact_ad_daily",
+        "ad_id",
+        target_ad_ids,
+        ad_device_stat,
+    )
+    camp_fallback = build_unsegmented_device_stat_from_totals_fn(
+        engine,
+        customer_id,
+        target_date,
+        "fact_campaign_daily",
+        "campaign_id",
+        target_camp_ids,
+        camp_device_stat,
+    )
+
+    merged_ad_stat = _merge_device_stats(ad_device_stat, ad_fallback)
+    merged_camp_stat = _merge_device_stats(camp_device_stat, camp_fallback)
+    data_source = "report_device_with_unsegmented_total" if (ad_fallback or camp_fallback) else (
+        "report_device_total_only" if (ad_device_stat or camp_device_stat) else "stats_unsegmented_total"
+    )
+    device_ad_cnt = save_device_stats_fn(
+        engine,
+        customer_id,
+        target_date,
+        "fact_ad_device_daily",
+        "ad_id",
+        merged_ad_stat,
+        data_source=data_source,
+        source_report=source_report,
+    )
+    device_campaign_cnt = save_device_stats_fn(
+        engine,
+        customer_id,
+        target_date,
+        "fact_campaign_device_daily",
+        "campaign_id",
+        merged_camp_stat,
+        data_source=data_source,
+        source_report=source_report,
+    )
+    fallback_cnt = len(ad_fallback) + len(camp_fallback)
+    if fallback_cnt:
+        log_fn(
+            f"   ℹ️ [ {account_name} ] PC/M 미분리 총합 보정 저장: "
+            f"캠페인 {len(camp_fallback)}건, 소재 {len(ad_fallback)}건"
+        )
+    return device_ad_cnt, device_campaign_cnt, fallback_cnt
+
+
 
 def _save_report_stats_and_breakdowns(
     engine: Engine,
@@ -177,6 +252,7 @@ def _save_report_stats_and_breakdowns(
     parse_ad_device_report_fn: Callable[..., tuple],
     filter_stat_result_fn: Callable[..., dict],
     save_device_stats_fn: Callable[..., int],
+    build_unsegmented_device_stat_from_totals_fn: Callable[..., Dict[Tuple[str, str], dict]],
     summarize_stat_res_fn: Callable[[dict], dict],
     collect_media_fact_fn: Callable[..., tuple],
     skip_keyword_stats: bool,
@@ -229,16 +305,22 @@ def _save_report_stats_and_breakdowns(
                 result["device_status"] = "disabled"
 
             if collect_device and device_meta.get("status") == "ok":
-                result["device_status"] = "ok"
                 result["device_missing_campaign_rows"] = int(device_meta.get("missing_campaign_rows", 0) or 0)
-                device_ad_cnt = save_device_stats_fn(
-                    engine, customer_id, target_date, "fact_ad_device_daily", "ad_id", ad_device_stat,
-                    data_source="report_device_total_only", source_report="AD"
+                device_ad_cnt, device_campaign_cnt, fallback_cnt = _save_device_totals_with_unsegmented_fallback(
+                    engine,
+                    customer_id=customer_id,
+                    account_name=account_name,
+                    target_date=target_date,
+                    target_camp_ids=target_camp_ids,
+                    target_ad_ids=target_ad_ids,
+                    ad_device_stat=ad_device_stat,
+                    camp_device_stat=camp_device_stat,
+                    save_device_stats_fn=save_device_stats_fn,
+                    build_unsegmented_device_stat_from_totals_fn=build_unsegmented_device_stat_from_totals_fn,
+                    source_report="AD",
+                    log_fn=log_fn,
                 )
-                device_campaign_cnt = save_device_stats_fn(
-                    engine, customer_id, target_date, "fact_campaign_device_daily", "campaign_id", camp_device_stat,
-                    data_source="report_device_total_only", source_report="AD"
-                )
+                result["device_status"] = "ok_with_unsegmented_total" if fallback_cnt else "ok"
                 if ad_stat:
                     total_from_ad = {
                         "imp": sum(int(v.get("imp", 0) or 0) for v in ad_stat.values()),
@@ -281,6 +363,22 @@ def _save_report_stats_and_breakdowns(
                     f"   ℹ️ [ {account_name} ] AD 리포트에서 PC/M 컬럼을 확인하지 못해 기기 분리 저장은 건너뜁니다. "
                     f"status={device_meta.get('status')} | parser={device_parser_version}{extra_msg}"
                 )
+                device_ad_cnt, device_campaign_cnt, fallback_cnt = _save_device_totals_with_unsegmented_fallback(
+                    engine,
+                    customer_id=customer_id,
+                    account_name=account_name,
+                    target_date=target_date,
+                    target_camp_ids=target_camp_ids,
+                    target_ad_ids=target_ad_ids,
+                    ad_device_stat={},
+                    camp_device_stat={},
+                    save_device_stats_fn=save_device_stats_fn,
+                    build_unsegmented_device_stat_from_totals_fn=build_unsegmented_device_stat_from_totals_fn,
+                    source_report="STATS_TOTAL",
+                    log_fn=log_fn,
+                )
+                if fallback_cnt:
+                    result["device_status"] = "unsegmented_total_fallback"
         else:
             if collect_ad_stats:
                 log_fn(f"   ⚠️ [ {account_name} ] AD 리포트 없음 → 소재만 실시간 stats 총합으로 대체합니다.")
@@ -289,35 +387,27 @@ def _save_report_stats_and_breakdowns(
                 log_fn(f"   ℹ️ [ {account_name} ] AD 리포트가 없어 PC/M 전용 적재를 건너뜁니다.")
                 a_cnt = 0
             if collect_device:
-                result["device_status"] = "ad_report_missing"
+                device_ad_cnt, device_campaign_cnt, fallback_cnt = _save_device_totals_with_unsegmented_fallback(
+                    engine,
+                    customer_id=customer_id,
+                    account_name=account_name,
+                    target_date=target_date,
+                    target_camp_ids=target_camp_ids,
+                    target_ad_ids=target_ad_ids,
+                    ad_device_stat={},
+                    camp_device_stat={},
+                    save_device_stats_fn=save_device_stats_fn,
+                    build_unsegmented_device_stat_from_totals_fn=build_unsegmented_device_stat_from_totals_fn,
+                    source_report="STATS_TOTAL",
+                    log_fn=log_fn,
+                )
+                result["device_status"] = "unsegmented_total_fallback" if fallback_cnt else "ad_report_missing"
     else:
         a_cnt = 0
         result["device_status"] = "not_requested"
 
-    media_cnt, media_meta = collect_media_fact_fn(
-        engine, customer_id, target_date, ad_report_df, ad_to_campaign_map, campaign_type_map, camp_device_stat,
-        allowed_campaign_ids=set(target_camp_ids) if target_camp_ids else None,
-        scoped_campaign_types=['쇼핑검색'] if shopping_only else None,
-    )
-    detail_rows = int(media_meta.get('detail_rows', 0) or 0)
-    summary_rows = int(media_meta.get('summary_rows', 0) or 0)
-    result["media_rows_saved"] = int(media_cnt or 0)
-    result["media_source"] = str(media_meta.get('status') or 'unknown')
-    result["media_detail_rows"] = detail_rows
-    result["media_summary_rows"] = summary_rows
-    distinct_media_count = int(media_meta.get('distinct_media_count', 0) or 0)
-    media_preview = media_meta.get('distinct_media_preview') or []
-    preview_msg = f" | media_preview={media_preview}" if media_preview else ""
-    if media_cnt:
-        log_fn(
-            f"   ✅ [ {account_name} ] 매체/지역/기기 저장 완료: total_rows={media_cnt} | detail_rows={detail_rows} | "
-            f"summary_rows={summary_rows} | media_codes={distinct_media_count} | source={media_meta.get('status')}{preview_msg}"
-        )
-    else:
-        log_fn(
-            f"   ℹ️ [ {account_name} ] 매체/지역 자동 분해 원천이 없어 요약 행만 유지합니다. "
-            f"source={media_meta.get('status')} | detail_rows={detail_rows} | summary_rows={summary_rows}"
-        )
+    media_cnt = 0
+    media_meta = {"status": "disabled", "reason": "media_collection_removed"}
 
     return c_cnt, k_cnt, a_cnt, device_ad_cnt, device_campaign_cnt, media_cnt, media_meta
 
@@ -346,6 +436,7 @@ def _sync_structure_and_collect_targets(
     target_camp_ids: List[str] = []
     target_kw_ids: List[str] = []
     target_ad_ids: List[str] = []
+    ad_to_campaign_map: Dict[str, str] = {}
     shopping_campaign_ids: set[str] = set()
     shopping_adgroup_ids: set[str] = set()
     shopping_keyword_ids: set[str] = set()
@@ -547,11 +638,13 @@ def _refresh_live_target_ids_minimal(
                     adid = str(ad.get("nccAdId") or "").strip()
                     if adid:
                         target_ad_ids.append(adid)
+                        ad_to_campaign_map[adid] = cid
 
     return {
         "target_camp_ids": sorted(set(target_camp_ids)),
         "target_kw_ids": sorted(set(target_kw_ids)),
         "target_ad_ids": sorted(set(target_ad_ids)),
+        "ad_to_campaign_map": ad_to_campaign_map,
         "shopping_campaign_ids": shopping_campaign_ids,
         "shopping_adgroup_ids": shopping_adgroup_ids,
         "shopping_keyword_ids": shopping_keyword_ids,
@@ -715,6 +808,8 @@ def process_account(
     scope_enabled_collectors_fn: Callable[[str, bool], tuple[bool, bool, bool]],
     fetch_stats_fallback_fn: Callable[..., int],
     clear_fact_scope_fn: Callable[..., None],
+    save_device_stats_fn: Callable[..., int],
+    build_unsegmented_device_stat_from_totals_fn: Callable[..., Dict[Tuple[str, str], dict]],
     collect_media_fact_fn: Callable[..., Tuple[int, Dict[str, Any]]],
     resolve_split_payload_fn: Callable[..., Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]], List[Dict[str, Any]], bool]],
     save_report_stats_and_breakdowns_fn: Callable[..., Tuple[int, int, int, int, int, int, Dict[str, Any]]],
@@ -807,6 +902,7 @@ def process_account(
         except Exception:
             recent_fast_skip_dim = bool(skip_dim and fast_mode)
 
+        live_ad_to_campaign_map: Dict[str, str] = {}
         if recent_fast_skip_dim and callable(list_campaigns_fn) and callable(list_adgroups_fn) and callable(list_keywords_fn) and callable(list_ads_fn) and callable(is_shopping_campaign_obj_fn):
             try:
                 live_bundle = _refresh_live_target_ids_minimal(
@@ -828,6 +924,7 @@ def process_account(
                 shopping_campaign_ids = live_bundle["shopping_campaign_ids"]
                 shopping_adgroup_ids = live_bundle["shopping_adgroup_ids"]
                 shopping_keyword_ids = live_bundle["shopping_keyword_ids"]
+                live_ad_to_campaign_map = live_bundle.get("ad_to_campaign_map", {})
                 new_counts = (len(target_camp_ids), len(target_kw_ids), len(target_ad_ids))
                 result["campaign_targets"] = new_counts[0]
                 result["keyword_targets"] = new_counts[1]
@@ -861,6 +958,8 @@ def process_account(
         stage = "load_maps"
         result["stage"] = stage
         ad_to_campaign_map = build_ad_to_campaign_map_fn(engine, customer_id)
+        if live_ad_to_campaign_map:
+            ad_to_campaign_map.update(live_ad_to_campaign_map)
         campaign_type_map = build_campaign_type_map_fn(engine, customer_id)
 
         stage = "fetch_reports"
@@ -892,16 +991,28 @@ def process_account(
                 log_fn(f"   ✅ [ {account_name} ] 실시간 총합 수집 완료: 캠페인({c_cnt}) | 키워드({k_cnt}) | 소재({a_cnt}) | 범위={label_sa_scope_fn(sa_scope)}")
             else:
                 log_fn(f"   ℹ️ [ {account_name} ] 당일/실시간 모드에서는 PC/M 전용 수집을 수행하지 않습니다.")
-            device_ad_cnt = 0
-            device_campaign_cnt = 0
-            result["device_status"] = "realtime_skipped" if collect_device else "not_applicable"
-            media_cnt, media_meta = collect_media_fact_fn(
-                engine, customer_id, target_date, None, ad_to_campaign_map, campaign_type_map, None,
-                allowed_campaign_ids=set(target_camp_ids) if target_camp_ids else None,
-                scoped_campaign_types=['쇼핑검색'] if shopping_only else None,
-            )
-            if media_cnt:
-                log_fn(f"   ✅ [ {account_name} ] 매체/지역/기기 요약 저장 완료: {media_cnt}건 | source={media_meta.get('status')}")
+            if collect_device:
+                device_ad_cnt, device_campaign_cnt, fallback_cnt = _save_device_totals_with_unsegmented_fallback(
+                    engine,
+                    customer_id=customer_id,
+                    account_name=account_name,
+                    target_date=target_date,
+                    target_camp_ids=target_camp_ids,
+                    target_ad_ids=target_ad_ids,
+                    ad_device_stat={},
+                    camp_device_stat={},
+                    save_device_stats_fn=save_device_stats_fn,
+                    build_unsegmented_device_stat_from_totals_fn=build_unsegmented_device_stat_from_totals_fn,
+                    source_report="STATS_TOTAL_REALTIME",
+                    log_fn=log_fn,
+                )
+                result["device_status"] = "realtime_unsegmented_total" if fallback_cnt else "realtime_skipped"
+            else:
+                device_ad_cnt = 0
+                device_campaign_cnt = 0
+                result["device_status"] = "not_applicable"
+            media_cnt = 0
+            media_meta = {"status": "disabled", "reason": "media_collection_removed"}
         else:
             split_report_ok = False
             ad_report_df = dfs.get("AD")

@@ -16,7 +16,6 @@ from page_helpers import BUILD_TAG, build_filters
 PAGE_DESCRIPTIONS = {
     "요약": "광고비, 전환, ROAS, 위험 신호를 한 번에 보는 운영 홈입니다.",
     "예산 및 잔액": "월 예산 페이스와 비즈머니 소진 위험을 우선순위로 정리합니다.",
-    "매체(지면) 분석": "지면, 기기, 비용 누수 항목을 나눠 효율을 비교합니다.",
     "성과 분석 · 캠페인": "캠페인과 광고그룹을 선택해 하위 키워드와 소재까지 내려갑니다.",
     "성과 분석 · 키워드": "키워드와 쇼핑 상품소재의 유입, 비용, 전환 효율을 분석합니다.",
     "성과 분석 · 소재": "광고 소재와 랜딩페이지 단위의 성과를 점검합니다.",
@@ -27,7 +26,6 @@ PAGE_DESCRIPTIONS = {
 NAV_CONFIG = [
     ("요약", "대시보드", ":material/dashboard:"),
     ("예산 및 잔액", "비즈머니", ":material/account_balance_wallet:"),
-    ("매체(지면) 분석", "매체", ":material/hub:"),
     ("성과 분석 · 캠페인", "캠페인", ":material/campaign:"),
     ("성과 분석 · 키워드", "키워드", ":material/key:"),
     ("성과 분석 · 소재", "소재", ":material/ads_click:"),
@@ -141,7 +139,6 @@ def main():
     requires_selection_pages = {
         "요약",
         "예산 및 잔액",
-        "매체(지면) 분석",
         "성과 분석 · 캠페인",
         "성과 분석 · 키워드",
         "성과 분석 · 소재",
@@ -158,9 +155,6 @@ def main():
     elif nav == "예산 및 잔액":
         from view_budget import page_budget
         page_budget(meta, engine, f)
-    elif nav == "매체(지면) 분석":
-        from view_media import page_media
-        page_media(engine, f)
     elif nav == "성과 분석 · 캠페인":
         from view_campaign import page_perf_campaign
         page_perf_campaign(meta, engine, f)

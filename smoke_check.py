@@ -30,7 +30,6 @@ KEY_FILES = [
     'streamlit_compat.py',
     'view_campaign.py',
     'view_overview.py',
-    'view_media.py',
     'view_budget.py',
     'view_trend.py',
     'collector.py',

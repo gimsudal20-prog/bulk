@@ -292,6 +292,8 @@ def _normalize_device_label(v: str) -> str:
         return 'MO'
     if s in {'P', 'PC'} or 'PC' in s:
         return 'PC'
+    if s in {'UNSEGMENTED', 'TOTAL', '전체'} or '미분리' in s:
+        return '미분리'
     return '기타'
 
 def _expand_campaign_type_values(type_sel: tuple) -> list[str]:
@@ -372,29 +374,6 @@ def _query_device_breakdown(engine, d1, d2, cids: tuple, type_sel: tuple, diag: 
             _diag_add(diag, '기기비중', 'error', 0, 'fact_campaign_device_daily', f"{type(e).__name__}: {e}")
             pass
 
-    if table_exists(engine, 'fact_media_daily'):
-        cols = get_table_columns(engine, 'fact_media_daily')
-        if 'device_name' in cols:
-            where_cid = f"AND CAST(customer_id AS TEXT) IN ({_sql_in_str_list(list(cids))})" if cids else ''
-            
-            cp_col = "campaign_type"
-            if "campaign_tp" in cols: cp_col = "campaign_tp"
-            elif "campaign_type_label" in cols: cp_col = "campaign_type_label"
-                
-            type_filter = f"AND CAST({cp_col} AS TEXT) IN ({_sql_in_str_list(type_vals)})" if type_vals and cp_col in cols else ''
-            sql = f"SELECT COALESCE(NULLIF(TRIM(device_name), ''), '기타') AS device_name, SUM(CAST(COALESCE(cost,0) AS NUMERIC)) AS cost FROM fact_media_daily WHERE dt BETWEEN :d1 AND :d2 {where_cid} {type_filter} GROUP BY COALESCE(NULLIF(TRIM(device_name), ''), '기타') HAVING SUM(CAST(COALESCE(cost,0) AS NUMERIC)) > 0 ORDER BY SUM(CAST(COALESCE(cost,0) AS NUMERIC)) DESC"
-            try:
-                df = sql_read(engine, sql, params)
-                if not df.empty:
-                    df['device_name'] = df['device_name'].apply(_normalize_device_label)
-                    df['cost'] = pd.to_numeric(df['cost'], errors='coerce').fillna(0)
-                    df = df.groupby('device_name', as_index=False)['cost'].sum().sort_values('cost', ascending=False)
-                    out = df[df['cost'] > 0]
-                    _diag_add(diag, '기기비중', 'ok' if not out.empty else 'zero_data', len(out.index), 'fact_media_daily', 'fact_campaign_device_daily fallback')
-                    return out
-            except Exception as e:
-                _diag_add(diag, '기기비중', 'error', 0, 'fact_media_daily', f"{type(e).__name__}: {e}")
-                pass
     _diag_add(diag, '기기비중', 'zero_data', 0, 'none', '기기별 광고비 데이터 없음')
     return pd.DataFrame()
 
@@ -413,8 +392,8 @@ def _render_device_share_panel(device_df: pd.DataFrame) -> None:
         return
 
     df['share'] = (df['cost'] / total) * 100.0
-    order = ['PC', 'MO', '기타']
-    color_map = {'PC': '#3B82F6', 'MO': '#93C5FD', '기타': '#E5E7EB'}
+    order = ['PC', 'MO', '미분리', '기타']
+    color_map = {'PC': '#3B82F6', 'MO': '#93C5FD', '미분리': '#F59E0B', '기타': '#E5E7EB'}
     df['ord'] = df['device_name'].map({k: i for i, k in enumerate(order)}).fillna(99)
     df = df.sort_values(['ord', 'cost'], ascending=[True, False]).reset_index(drop=True)
 

@@ -11,7 +11,8 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 
-DEVICE_PARSER_VERSION = "pcm_v20260328_final2"
+DEVICE_PARSER_VERSION = "pcm_v20260328_final3"
+UNSEGMENTED_DEVICE_NAME = "UNSEGMENTED"
 
 DEVICE_HEADER_CANDIDATES = [
     "pc mobile type", "pc_mobile_type", "pc/mobile type", "pcmobiletype",
@@ -75,6 +76,8 @@ def normalize_device_name(v: Any) -> str:
     raw_upper = raw.upper().strip()
     norm = _normalize_header(raw)
 
+    if raw_upper in {"UNSEGMENTED", "UNKNOWN", "TOTAL"} or raw in {"미분리", "전체"}:
+        return UNSEGMENTED_DEVICE_NAME
     if raw_upper in {"P", "PC"} or norm in {"p", "pc", "desktop"} or "desktop" in norm:
         return "PC"
     if raw_upper in {"M", "MO", "MOBILE"} or norm in {"m", "mo", "mobile"}:
@@ -629,6 +632,80 @@ def save_device_stats(
 
     replace_device_fact_range(engine, table_name, rows, customer_id, target_date, pk_name)
     return len(rows)
+
+
+def build_unsegmented_device_stat_from_totals(
+    engine: Engine,
+    customer_id: str,
+    target_date: date,
+    total_table_name: str,
+    pk_name: str,
+    ids: List[str],
+    existing_stat: Dict[Tuple[str, str], dict] | None = None,
+) -> Dict[Tuple[str, str], dict]:
+    ids = [str(x).strip() for x in (ids or []) if str(x).strip()]
+    if not ids:
+        return {}
+
+    sql = text(
+        f"""
+        SELECT {pk_name}::text AS scope_id,
+               COALESCE(imp, 0) AS imp,
+               COALESCE(clk, 0) AS clk,
+               COALESCE(cost, 0) AS cost,
+               COALESCE(conv, 0) AS conv,
+               COALESCE(sales, 0) AS sales,
+               COALESCE(avg_rnk, 0) AS avg_rnk
+        FROM {total_table_name}
+        WHERE customer_id = :cid
+          AND dt = :dt
+          AND {pk_name} = ANY(:ids)
+        """
+    )
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(sql, {"cid": str(customer_id), "dt": target_date, "ids": ids}).mappings().all()
+    except Exception:
+        return {}
+
+    by_entity: Dict[str, dict] = {}
+    for (entity_id, device_name), stat in (existing_stat or {}).items():
+        if str(device_name).strip() == UNSEGMENTED_DEVICE_NAME:
+            continue
+        key = str(entity_id or "").strip()
+        if not key:
+            continue
+        bucket = by_entity.setdefault(key, {"imp": 0, "clk": 0, "cost": 0, "conv": 0.0, "sales": 0})
+        bucket["imp"] += int(stat.get("imp", 0) or 0)
+        bucket["clk"] += int(stat.get("clk", 0) or 0)
+        bucket["cost"] += int(stat.get("cost", 0) or 0)
+        bucket["conv"] += float(stat.get("conv", 0.0) or 0.0)
+        bucket["sales"] += int(stat.get("sales", 0) or 0)
+
+    fallback: Dict[Tuple[str, str], dict] = {}
+    for row in rows or []:
+        entity_id = str(row.get("scope_id") or "").strip()
+        if not entity_id:
+            continue
+        existing = by_entity.get(entity_id, {})
+        imp = max(0, int(row.get("imp", 0) or 0) - int(existing.get("imp", 0) or 0))
+        clk = max(0, int(row.get("clk", 0) or 0) - int(existing.get("clk", 0) or 0))
+        cost = max(0, int(row.get("cost", 0) or 0) - int(existing.get("cost", 0) or 0))
+        conv = max(0.0, float(row.get("conv", 0.0) or 0.0) - float(existing.get("conv", 0.0) or 0.0))
+        sales = max(0, int(row.get("sales", 0) or 0) - int(existing.get("sales", 0) or 0))
+        if imp == 0 and clk == 0 and cost == 0 and conv == 0 and sales == 0:
+            continue
+        avg_rnk = float(row.get("avg_rnk", 0.0) or 0.0)
+        fallback[(entity_id, UNSEGMENTED_DEVICE_NAME)] = {
+            "imp": imp,
+            "clk": clk,
+            "cost": cost,
+            "conv": conv,
+            "sales": sales,
+            "rank_sum": avg_rnk * imp if avg_rnk > 0 and imp > 0 else 0.0,
+            "rank_cnt": imp if avg_rnk > 0 and imp > 0 else 0,
+        }
+    return fallback
 
 
 def summarize_stat_res(stat_res: Dict[Tuple[str, str], dict]) -> dict:

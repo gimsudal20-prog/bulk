@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import re
+import base64
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
@@ -45,11 +46,29 @@ def _bool_to_yn(v: object, default: str = "Y") -> str:
     return default
 
 
+def _restore_master_file_from_env(target: str) -> Optional[str]:
+    raw = (os.getenv("ACCOUNT_MASTER_XLSX_B64") or os.getenv("ACCOUNTS_XLSX_B64") or "").strip()
+    if not raw:
+        return None
+    path = Path(target or "account_master.xlsx")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(base64.b64decode(raw))
+        return str(path)
+    except Exception as exc:
+        print(f"⚠️ account master secret 복원 실패: {type(exc).__name__}: {exc}", flush=True)
+        return None
+
+
 def _find_existing_file(explicit: Optional[str] = None) -> Optional[str]:
     candidates = [explicit, os.getenv("ACCOUNT_MASTER_FILE"), "account_master.xlsx", "accounts.xlsx"]
     for c in candidates:
         if c and Path(c).exists():
             return str(Path(c))
+    restore_target = explicit or os.getenv("ACCOUNT_MASTER_FILE") or "account_master.xlsx"
+    restored = _restore_master_file_from_env(restore_target)
+    if restored and Path(restored).exists():
+        return restored
     return None
 
 

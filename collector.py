@@ -30,6 +30,7 @@ from sqlalchemy.engine import Engine
 from device_collector_helpers import (
     DEVICE_PARSER_VERSION,
     build_ad_to_campaign_map,
+    build_unsegmented_device_stat_from_totals,
     parse_ad_device_report,
     save_device_stats,
     summarize_stat_res,
@@ -37,7 +38,6 @@ from device_collector_helpers import (
 
 import collector_api as collector_api_mod
 import collector_db as collector_db_mod
-import collector_media as collector_media_mod
 import collector_parsers as collector_parsers_mod
 import collector_runner as collector_runner_mod
 
@@ -257,10 +257,6 @@ def _new_account_collect_result(customer_id: str, account_name: str, target_date
         "ad_rows_saved": 0,
         "device_campaign_rows_saved": 0,
         "device_ad_rows_saved": 0,
-        "media_rows_saved": 0,
-        "media_source": "not_requested",
-        "media_detail_rows": 0,
-        "media_summary_rows": 0,
         "shopping_query_rows_saved": 0,
         "device_status": "not_requested",
         "device_missing_campaign_rows": 0,
@@ -320,9 +316,6 @@ def emit_collection_run_summary(results: List[Dict[str, Any]], target_date: date
             device_status = r.get("device_status")
             if r.get("collect_device") and device_status not in {"ok", "disabled", "not_requested", "not_applicable", "realtime_skipped"}:
                 notes.append(f"PC/M={device_status}")
-            media_source = r.get("media_source")
-            if media_source in {"empty", "fallback_total", "fallback_device"}:
-                notes.append(f"media={media_source}")
             if r.get("split_attempted") and not r.get("split_report_ok"):
                 notes.append("split=미확정")
             if r.get("zero_data"):
@@ -337,7 +330,7 @@ def emit_collection_run_summary(results: List[Dict[str, Any]], target_date: date
                 f"   - {_summary_icon(r.get('status'))} [ {r.get('account_name')} ] "
                 f"C={r.get('campaign_rows_saved', 0)} K={r.get('keyword_rows_saved', 0)} A={r.get('ad_rows_saved', 0)} "
                 f"PC/M={r.get('device_campaign_rows_saved', 0)}/{r.get('device_ad_rows_saved', 0)} "
-                f"media={r.get('media_rows_saved', 0)} | {'; '.join(notes) if notes else '확인 필요 없음'}"
+                f"| {'; '.join(notes) if notes else '확인 필요 없음'}"
             )
         if len(interesting) > 30:
             log(f"   … 외 {len(interesting) - 30}개 계정은 GitHub Step Summary 표에서 확인하세요.")
@@ -359,8 +352,8 @@ def emit_collection_run_summary(results: List[Dict[str, Any]], target_date: date
         f"- 정상 {ok_cnt} / 0건 {zero_cnt} / 오류 {err_cnt} / 건너뜀 {skip_cnt}",
         f"- 실시간 대체 {fallback_cnt} / split 성공 {split_ok_cnt} / PC/M 성공 {device_ok_cnt}",
         "",
-        "|업체|상태|캠페인|키워드|소재|PC/M 캠페인|PC/M 소재|매체행|AD|Split|실시간대체|비고|",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---|---|---|---|",
+        "|업체|상태|캠페인|키워드|소재|PC/M 캠페인|PC/M 소재|AD|Split|실시간대체|비고|",
+        "|---|---:|---:|---:|---:|---:|---:|---|---|---|---|",
     ]
     for r in rows:
         note_parts = []
@@ -372,7 +365,7 @@ def emit_collection_run_summary(results: List[Dict[str, Any]], target_date: date
             note_parts.append(f"PC/M 매핑누락 {r.get('device_missing_campaign_rows')}")
         note_text = "; ".join(note_parts)
         lines.append(
-            "|{account}|{status}|{c}|{k}|{a}|{dc}|{da}|{m}|{ad}|{split}|{fb}|{note}|".format(
+            "|{account}|{status}|{c}|{k}|{a}|{dc}|{da}|{ad}|{split}|{fb}|{note}|".format(
                 account=_markdown_escape(r.get("account_name")),
                 status=_markdown_escape(f"{_summary_icon(r.get('status'))} {r.get('status') or ''}"),
                 c=int(r.get("campaign_rows_saved") or 0),
@@ -380,7 +373,6 @@ def emit_collection_run_summary(results: List[Dict[str, Any]], target_date: date
                 a=int(r.get("ad_rows_saved") or 0),
                 dc=int(r.get("device_campaign_rows_saved") or 0),
                 da=int(r.get("device_ad_rows_saved") or 0),
-                m=int(r.get("media_rows_saved") or 0),
                 ad=_markdown_escape(r.get("ad_report_status")),
                 split=_markdown_escape("ok" if r.get("split_report_ok") else ("skip" if not r.get("split_attempted") else "fail")),
                 fb=_markdown_escape(r.get("realtime_reason") if r.get("used_realtime_fallback") else "-"),
@@ -398,9 +390,6 @@ def die(msg: str):
     log(f"❌ FATAL: {msg}")
     sys.exit(1)
 
-
-if not API_KEY or not API_SECRET:
-    die("API_KEY 또는 API_SECRET이 설정되지 않았습니다.")
 
 thread_local = threading.local()
 
@@ -561,10 +550,6 @@ def replace_fact_scope(engine: Engine, table: str, rows: List[Dict[str, Any]], c
     return collector_db_mod.replace_fact_scope(engine, table, rows, customer_id, d1, pk, ids)
 
 
-def replace_media_fact_range(engine: Engine, rows: List[Dict[str, Any]], customer_id: str, d1: date, scoped_campaign_types: List[str] | None = None):
-    return collector_db_mod.replace_media_fact_range(engine, rows, customer_id, d1, scoped_campaign_types=scoped_campaign_types)
-
-
 def normalize_header(v: str) -> str:
     return collector_parsers_mod.normalize_header(v)
 
@@ -660,21 +645,11 @@ def parse_base_report(df: pd.DataFrame, report_tp: str, conv_map: dict | None = 
 
 
 def build_campaign_type_map(engine: Engine, customer_id: str) -> Dict[str, str]:
-    return collector_media_mod.build_campaign_type_map(engine, customer_id)
+    return {}
 
 
 def collect_media_fact(engine: Engine, customer_id: str, target_date: date, ad_report_df: pd.DataFrame | None, ad_to_campaign_map: Dict[str, str], campaign_type_map: Dict[str, str], camp_device_stat: Dict[Tuple[str, str], Dict[str, Any]] | None = None, allowed_campaign_ids: set[str] | None = None, scoped_campaign_types: List[str] | None = None) -> Tuple[int, Dict[str, Any]]:
-    return collector_media_mod.collect_media_fact(
-        engine,
-        customer_id,
-        target_date,
-        ad_report_df,
-        ad_to_campaign_map,
-        campaign_type_map,
-        camp_device_stat,
-        allowed_campaign_ids=allowed_campaign_ids,
-        scoped_campaign_types=scoped_campaign_types,
-    )
+    return 0, {"status": "disabled", "reason": "media_collection_removed"}
 
 
 def filter_stat_result(stat_res: dict, allowed_ids: set[str] | None) -> dict:
@@ -925,6 +900,7 @@ def _save_report_stats_and_breakdowns(
         parse_ad_device_report_fn=parse_ad_device_report,
         filter_stat_result_fn=filter_stat_result,
         save_device_stats_fn=save_device_stats,
+        build_unsegmented_device_stat_from_totals_fn=build_unsegmented_device_stat_from_totals,
         summarize_stat_res_fn=summarize_stat_res,
         collect_media_fact_fn=collect_media_fact,
         skip_keyword_stats=SKIP_KEYWORD_STATS,
@@ -1077,6 +1053,8 @@ def process_account(engine: Engine, customer_id: str, account_name: str, target_
         scope_enabled_collectors_fn=_scope_enabled_collectors,
         fetch_stats_fallback_fn=fetch_stats_fallback,
         clear_fact_scope_fn=clear_fact_scope,
+        save_device_stats_fn=save_device_stats,
+        build_unsegmented_device_stat_from_totals_fn=build_unsegmented_device_stat_from_totals,
         collect_media_fact_fn=collect_media_fact,
         resolve_split_payload_fn=_resolve_split_payload,
         save_report_stats_and_breakdowns_fn=_save_report_stats_and_breakdowns,
@@ -1258,14 +1236,12 @@ def build_future_error_result(error: Exception, target_date: date, args: argpars
         "ad_rows_saved": 0,
         "device_campaign_rows_saved": 0,
         "device_ad_rows_saved": 0,
-        "media_rows_saved": 0,
         "ad_report_status": "unknown",
         "split_attempted": False,
         "split_report_ok": False,
         "used_realtime_fallback": False,
         "realtime_reason": "",
         "device_status": "unknown",
-        "media_source": "unknown",
         "zero_data": False,
     }
 
@@ -1299,6 +1275,9 @@ def run_account_collection_tasks(engine: Engine, accounts_info: List[Dict[str, s
 def main():
     parser = build_main_arg_parser()
     args = parser.parse_args()
+
+    if not API_KEY or not API_SECRET:
+        die("API_KEY 또는 API_SECRET이 설정되지 않았습니다.")
 
     try:
         args.collect_mode = normalize_collect_mode(args.collect_mode)

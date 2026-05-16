@@ -246,9 +246,6 @@ def _log_backfill_db_failure(stage: str, table: str, attempt: int, exc: Exceptio
     extra = f" | tb={tail}" if tail else ""
     log(f"⚠️ DB {stage} 실패 [{table}] attempt={attempt} | {_exc_label(exc)}: {exc}{extra}")
 
-if not API_KEY or not API_SECRET:
-    die("API_KEY 또는 API_SECRET이 설정되지 않았습니다.")
-
 thread_local = threading.local()
 
 def get_session():
@@ -309,7 +306,8 @@ def safe_call(method: str, path: str, customer_id: str, params: dict | None = No
         return False, None
 
 def get_engine() -> Engine:
-    if not DB_URL: return create_engine("sqlite:///:memory:", future=True)
+    if not DB_URL:
+        raise RuntimeError("DATABASE_URL이 설정되지 않았습니다. 백필은 실제 DB 연결이 필요합니다.")
     db_url = DB_URL
     if "sslmode=" not in db_url: db_url += "&sslmode=require" if "?" in db_url else "?sslmode=require"
     return create_engine(
@@ -2258,8 +2256,6 @@ def main():
     with BACKFILL_RUN_LOCK:
         BACKFILL_RUN_RESULTS.clear()
 
-    engine = get_engine()
-    ensure_tables(engine)
     parser = argparse.ArgumentParser()
     parser.add_argument("--date", type=str, default="")
     parser.add_argument("--customer_id", type=str, default="")
@@ -2269,6 +2265,12 @@ def main():
     parser.add_argument("--skip_dim", action="store_true")
     parser.add_argument("--workers", type=int, default=20)
     args = parser.parse_args()
+
+    if not API_KEY or not API_SECRET:
+        die("API_KEY 또는 API_SECRET이 설정되지 않았습니다.")
+
+    engine = get_engine()
+    ensure_tables(engine)
     
     target_date = datetime.strptime(args.date, "%Y-%m-%d").date() if args.date else (datetime.utcnow() + timedelta(hours=9)).date() - timedelta(days=1)
     

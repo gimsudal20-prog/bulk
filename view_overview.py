@@ -1088,14 +1088,14 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
 
     detail_panel = st.segmented_control(
         "세부 성과 보기",
-        ["업체별 요약", "매체·유형별 요약", "기간별 상세", "캠페인 상세 분석", "키워드 상세 분석"],
+        ["업체별 요약", "유형별 요약", "기간별 상세", "캠페인 상세 분석", "키워드 상세 분석"],
         default="업체별 요약",
         key="overview_detail_panel",
         label_visibility="collapsed",
     )
 
     # 탭별 화면 렌더링에 필요한 데이터만 지연 로드 (UI 응답성 최적화)
-    if detail_panel in {"업체별 요약", "매체·유형별 요약", "캠페인 상세 분석"}:
+    if detail_panel in {"업체별 요약", "유형별 요약", "캠페인 상세 분석"}:
         if base_camp is None or base_camp.empty:
             try: base_camp = _cached_campaign_bundle(engine, b1, b2, cids, type_sel)
             except Exception: base_camp = pd.DataFrame()
@@ -1124,7 +1124,7 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
         else:
             st.info("조건에 맞는 데이터가 없습니다.")
 
-    elif detail_panel == "매체·유형별 요약":
+    elif detail_panel == "유형별 요약":
         if not df_type_display.empty:
             view_cols = ["캠페인 유형"] + [c for c in get_funnel_cols(show_deltas) if c in df_type_display.columns]
             disp_type_df = df_type_display[view_cols].copy()

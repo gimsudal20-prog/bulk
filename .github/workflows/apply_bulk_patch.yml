@@ -5,7 +5,7 @@ on:
     branches:
       - main
     paths:
-      - bulk_patch.diff.gz.b64
+      - bulk_patch.diff.gz.b64.part*
       - .github/workflows/apply_bulk_patch.yml
 
 permissions:
@@ -36,13 +36,16 @@ jobs:
           import gzip
           import pathlib
 
-          payload = pathlib.Path("bulk_patch.diff.gz.b64").read_text(encoding="ascii")
+          payload = "".join(
+              p.read_text(encoding="ascii").strip()
+              for p in sorted(pathlib.Path(".").glob("bulk_patch.diff.gz.b64.part*"))
+          )
           pathlib.Path("bulk_patch.diff").write_bytes(gzip.decompress(base64.b64decode(payload)))
           PY
 
           git apply --ignore-whitespace --whitespace=nowarn bulk_patch.diff
 
-          rm -f bulk_patch.diff bulk_patch.diff.gz.b64 .github/workflows/apply_bulk_patch.yml
+          rm -f bulk_patch.diff bulk_patch.diff.gz.b64.part* .github/workflows/apply_bulk_patch.yml
           git add -A
 
           if git diff --cached --quiet; then

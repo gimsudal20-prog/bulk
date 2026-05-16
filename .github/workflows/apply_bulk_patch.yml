@@ -45,7 +45,7 @@ jobs:
 
           git apply --ignore-whitespace --whitespace=nowarn bulk_patch.diff
 
-          rm -f bulk_patch.diff bulk_patch.diff.gz.b64.part* .github/workflows/apply_bulk_patch.yml
+          rm -f bulk_patch.diff bulk_patch.diff.gz.b64.part*
           git add -A
 
           if git diff --cached --quiet; then
@@ -53,5 +53,5 @@ jobs:
             exit 0
           fi
 
-          git commit -m "Retire media placement data and improve device fallback"
+          git commit -m "Apply bulk code cleanup patch"
           git push

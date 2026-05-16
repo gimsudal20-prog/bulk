@@ -36,10 +36,6 @@ NAV_CONFIG = [
 ]
 
 
-def _set_nav_page(page_key: str) -> None:
-    st.session_state["nav_page"] = page_key
-
-
 def _render_page_header(nav: str, latest: dict | None, f: dict | None = None) -> None:
     subtitle = PAGE_DESCRIPTIONS.get(nav, "")
     chips = []
@@ -128,10 +124,8 @@ def main():
                 icon=icon,
                 use_container_width=True,
                 type="primary" if is_active else "secondary",
-                on_click=_set_nav_page,
-                args=(page_key,),
             ):
-                pass
+                st.session_state["nav_page"] = page_key
 
         nav = st.session_state.get("nav_page", nav_items[0])
 

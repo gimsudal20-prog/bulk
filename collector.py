@@ -1322,9 +1322,7 @@ def main():
         engine = get_engine()
         ensure_tables(engine)
     except Exception as e:
-        explain = getattr(collector_db_mod, "explain_db_connection_error", None)
-        detail = explain(e, DB_URL) if callable(explain) else _exc_label(e)
-        die(f"DB 초기화 실패: {detail}")
+        die(f"DB 초기화 실패: {_exc_label(e)}")
 
     accounts_info = resolve_accounts_info(engine, args)
     accounts_info = apply_account_name_filters(accounts_info, args)

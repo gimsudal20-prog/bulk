@@ -4,7 +4,6 @@ from __future__ import annotations
 import time
 import os
 from typing import Any, Dict, List
-from urllib.parse import urlparse
 
 import pandas as pd
 import psycopg2
@@ -15,71 +14,6 @@ from sqlalchemy.pool import NullPool, QueuePool
 
 from device_collector_helpers import ensure_device_tables
 
-
-
-POOLER_DATABASE_URL_ENV_KEYS = (
-    "DATABASE_POOLER_URL",
-    "SUPABASE_POOLER_DATABASE_URL",
-    "SUPABASE_DB_POOLER_URL",
-)
-
-
-def _env_truthy(name: str) -> bool:
-    return str(os.getenv(name, "") or "").strip().lower() in {"1", "true", "yes", "y"}
-
-
-def _db_host(db_url: str) -> str:
-    try:
-        return (urlparse(str(db_url or "").strip()).hostname or "").lower()
-    except Exception:
-        return ""
-
-
-def _mask_db_url(db_url: str) -> str:
-    raw = str(db_url or "").strip()
-    if not raw:
-        return "-"
-    try:
-        parsed = urlparse(raw)
-        if not parsed.scheme or not parsed.netloc:
-            return "***"
-        host = parsed.hostname or ""
-        port = f":{parsed.port}" if parsed.port else ""
-        user = parsed.username or "user"
-        return f"{parsed.scheme}://{user}:***@{host}{port}{parsed.path or ''}"
-    except Exception:
-        return "***"
-
-
-def _looks_supabase_direct_url(db_url: str) -> bool:
-    import re
-    return bool(re.fullmatch(r"db\.[a-z0-9-]+\.supabase\.co", _db_host(db_url) or ""))
-
-
-def _resolve_db_url(db_url: str) -> str:
-    """Prefer an explicit Supabase pooler URL when present, especially on IPv4-only runners."""
-    resolved = str(db_url or "").strip()
-    for key in POOLER_DATABASE_URL_ENV_KEYS:
-        candidate = str(os.getenv(key, "") or "").strip()
-        if candidate:
-            _log(f"🔁 DB URL 대체 적용: {key} 값을 사용합니다. ({_mask_db_url(candidate)})")
-            return candidate
-    return resolved
-
-
-def explain_db_connection_error(exc: Exception, db_url: str = "") -> str:
-    msg = _exc_label(exc)
-    text_l = msg.lower()
-    direct = _looks_supabase_direct_url(db_url or os.getenv("DATABASE_URL", ""))
-    if direct and ("network is unreachable" in text_l or "could not translate host" in text_l or "timeout expired" in text_l):
-        msg += (
-            "\n원인 추정: 현재 DATABASE_URL이 Supabase Direct connection(db.<project-ref>.supabase.co:5432) 형식입니다. "
-            "이 주소는 IPv6 기반이라 GitHub Actions 등 IPv6 미지원 환경에서 Network is unreachable로 실패할 수 있습니다. "
-            "Supabase Dashboard > Connect > Connection string에서 Supavisor Session/Transaction pooler URL을 DATABASE_URL로 사용하거나, "
-            "DATABASE_POOLER_URL/SUPABASE_POOLER_DATABASE_URL에 pooler URL을 추가해 주세요. "
-            f"감지 URL: {_mask_db_url(db_url or os.getenv('DATABASE_URL', ''))}"
-        )
-    return msg
 
 def _log(msg: str) -> None:
     print(msg, flush=True)
@@ -215,15 +149,8 @@ def _filter_nonzero_media_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any
 
 
 def get_engine(db_url: str) -> Engine:
-    db_url = _resolve_db_url(db_url)
     if not db_url:
         raise RuntimeError("DATABASE_URL이 설정되지 않았습니다. collector.py는 실제 DB 연결이 필요합니다.")
-    if _env_truthy("GITHUB_ACTIONS") and _looks_supabase_direct_url(db_url):
-        raise RuntimeError(
-            "Supabase Direct connection URL은 GitHub Actions의 IPv6 미지원 환경에서 실패할 수 있습니다. "
-            "DATABASE_URL을 Supavisor pooler URL로 교체하거나 DATABASE_POOLER_URL/SUPABASE_POOLER_DATABASE_URL을 설정해 주세요. "
-            f"감지 URL: {_mask_db_url(db_url)}"
-        )
     if "sslmode=" not in db_url:
         db_url += "&sslmode=require" if "?" in db_url else "?sslmode=require"
     import os

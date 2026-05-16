@@ -8,7 +8,6 @@ import shlex
 import subprocess
 import sys
 from datetime import date, datetime, timedelta
-from urllib.parse import urlparse
 from pathlib import Path
 from typing import Any, List
 
@@ -156,88 +155,6 @@ def _append_step_summary(markdown: str) -> None:
     except Exception as e:
         print(f"⚠️ Step Summary 기록 실패: {e}", flush=True)
 
-
-
-POOLER_DATABASE_URL_ENV_KEYS = (
-    "DATABASE_POOLER_URL",
-    "SUPABASE_POOLER_DATABASE_URL",
-    "SUPABASE_DB_POOLER_URL",
-)
-
-
-def _env_truthy(name: str) -> bool:
-    return str(os.getenv(name, "") or "").strip().lower() in {"1", "true", "yes", "y"}
-
-
-def _mask_url(value: str) -> str:
-    raw = clean(value)
-    if not raw:
-        return "-"
-    try:
-        parsed = urlparse(raw)
-        if not parsed.scheme or not parsed.netloc:
-            return "***"
-        host = parsed.hostname or ""
-        port = f":{parsed.port}" if parsed.port else ""
-        user = parsed.username or "user"
-        path = parsed.path or ""
-        return f"{parsed.scheme}://{user}:***@{host}{port}{path}"
-    except Exception:
-        return "***"
-
-
-def _db_host(value: str) -> str:
-    try:
-        return (urlparse(clean(value)).hostname or "").lower()
-    except Exception:
-        return ""
-
-
-def _looks_supabase_direct_url(value: str) -> bool:
-    host = _db_host(value)
-    return bool(re.fullmatch(r"db\.[a-z0-9-]+\.supabase\.co", host or ""))
-
-
-def _looks_supabase_pooler_url(value: str) -> bool:
-    host = _db_host(value)
-    return host.endswith(".pooler.supabase.com") or host == "aws-0-ap-northeast-2.pooler.supabase.com"
-
-
-def _apply_database_url_compat_guard() -> None:
-    """GitHub Actions처럼 IPv6이 막힌 환경에서 Supabase direct URL로 늦게 실패하는 것을 방지한다."""
-    db_url = clean(os.getenv("DATABASE_URL"))
-    if not db_url:
-        print("❌ [FATAL] DATABASE_URL 환경변수가 없습니다.", flush=True)
-        sys.exit(1)
-
-    if _looks_supabase_pooler_url(db_url):
-        return
-
-    pooler_key = ""
-    pooler_url = ""
-    for key in POOLER_DATABASE_URL_ENV_KEYS:
-        candidate = clean(os.getenv(key))
-        if candidate:
-            pooler_key = key
-            pooler_url = candidate
-            break
-
-    if pooler_url:
-        os.environ["DATABASE_URL"] = pooler_url
-        print(
-            f"🔁 DATABASE_URL 대체 적용: {pooler_key} 값을 사용합니다. ({_mask_url(pooler_url)})",
-            flush=True,
-        )
-        return
-
-    if _env_truthy("GITHUB_ACTIONS") and _looks_supabase_direct_url(db_url):
-        print("❌ [FATAL] Supabase DB 연결 URL 확인 필요", flush=True)
-        print("   현재 DATABASE_URL이 Supabase Direct connection(db.<project-ref>.supabase.co:5432) 형식입니다.", flush=True)
-        print("   GitHub Actions는 IPv6 연결이 막혀 이 URL에서 'Network is unreachable'로 실패할 수 있습니다.", flush=True)
-        print("   Supabase Dashboard > Connect > Connection string에서 Supavisor Session/Transaction pooler URL을 복사해", flush=True)
-        print("   GitHub Secrets의 DATABASE_URL을 pooler URL로 교체하거나, DATABASE_POOLER_URL/SUPABASE_POOLER_DATABASE_URL로 추가해 주세요.", flush=True)
-        print("   현재 감지 URL: " + _mask_url(db_url), flush=True)
-        sys.exit(1)
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="날짜 범위별 검색광고/GFA 백필 실행기")
@@ -514,8 +431,6 @@ def main() -> None:
     if not api_key:
         print("❌ [FATAL] NAVER_ADS_API_KEY / NAVER_API_KEY 환경변수가 없습니다.", flush=True)
         sys.exit(1)
-
-    _apply_database_url_compat_guard()
 
     try:
         start_date = datetime.strptime(args.start, "%Y-%m-%d").date()

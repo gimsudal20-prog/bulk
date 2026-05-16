@@ -1,17 +1,18 @@
-name: Supabase 담당자 데이터 정리
-run-name: Supabase 정리 | ${{ github.event.inputs.managers }} | ${{ github.event.inputs.mode }}
+name: Supabase Manager Cleanup
+run-name: Supabase Cleanup | ${{ inputs.managers }} | ${{ inputs.mode }}
 
 on:
   workflow_dispatch:
     inputs:
       managers:
-        description: '삭제 대상 담당자명, 콤마 구분'
+        description: "Manager names to delete, comma-separated"
         required: true
-        default: '민아,미혜,정인'
+        default: "민아,미현,정윤"
+        type: string
       mode:
-        description: '실행 모드'
+        description: "Execution mode"
         required: true
-        default: 'dry_run'
+        default: dry_run
         type: choice
         options:
           - dry_run
@@ -27,6 +28,8 @@ jobs:
     env:
       TZ: Asia/Seoul
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      ACCOUNT_MASTER_FILE: account_master.xlsx
+      ACCOUNT_MASTER_XLSX_B64: ${{ secrets.ACCOUNT_MASTER_XLSX_B64 }}
 
     steps:
       - name: Checkout
@@ -35,28 +38,45 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-          cache: 'pip'
+          python-version: "3.11"
+          cache: pip
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install pandas openpyxl SQLAlchemy psycopg2-binary
 
+      - name: Restore account master
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -f "${ACCOUNT_MASTER_FILE}" && -n "${ACCOUNT_MASTER_XLSX_B64:-}" ]]; then
+            python - <<'PY'
+          import base64
+          import os
+          import pathlib
+
+          path = pathlib.Path(os.environ.get("ACCOUNT_MASTER_FILE") or "account_master.xlsx")
+          path.write_bytes(base64.b64decode(os.environ["ACCOUNT_MASTER_XLSX_B64"]))
+          print(f"restored {path}")
+          PY
+          fi
+          test -f "${ACCOUNT_MASTER_FILE}"
+
       - name: DRY-RUN preview
-        if: ${{ github.event.inputs.mode == 'dry_run' }}
+        if: ${{ inputs.mode == 'dry_run' }}
         run: |
           python cleanup_supabase_by_manager.py \
-            --account-master account_master.xlsx \
-            --managers "${{ github.event.inputs.managers }}" \
+            --account-master "${ACCOUNT_MASTER_FILE}" \
+            --managers "${{ inputs.managers }}" \
             --export-targets cleanup_targets.csv
 
       - name: EXECUTE delete
-        if: ${{ github.event.inputs.mode == 'execute_delete' }}
+        if: ${{ inputs.mode == 'execute_delete' }}
         run: |
           python cleanup_supabase_by_manager.py \
-            --account-master account_master.xlsx \
-            --managers "${{ github.event.inputs.managers }}" \
+            --account-master "${ACCOUNT_MASTER_FILE}" \
+            --managers "${{ inputs.managers }}" \
             --export-targets cleanup_targets.csv \
             --execute
 

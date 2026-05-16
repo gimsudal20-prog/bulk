@@ -1,5 +1,5 @@
-name: 01 메인 일일 수집 | 네이버 광고 성과
-run-name: 01 메인 일일 수집 | ${{ github.event_name == 'workflow_dispatch' && format('manual | {0} | fast={1}', github.event.inputs.collect_mode, github.event.inputs.fast) || 'schedule' }}
+name: 01 Main Daily Collection
+run-name: 01 Main Daily Collection | ${{ github.event_name == 'workflow_dispatch' && format('manual | {0} | fast={1}', inputs.collect_mode, inputs.fast) || 'schedule' }}
 
 on:
   schedule:
@@ -7,22 +7,19 @@ on:
   workflow_dispatch:
     inputs:
       collect_mode:
-        description: '수집 모드'
+        description: "Collection mode"
         required: false
-        default: '검색광고 전체+기기'
+        default: sa_with_device
         type: choice
         options:
-          - '검색광고 전체+기기'
-          - '검색광고 전체만'
-          - '기기만'
+          - sa_with_device
+          - sa_only
+          - device_only
       fast:
-        description: '수동 실행 시 빠른 수집 사용 여부'
+        description: "Use fast mode for manual run"
         required: false
-        default: '예'
-        type: choice
-        options:
-          - '예'
-          - '아니오'
+        default: true
+        type: boolean
 
 concurrency:
   group: collector-daily
@@ -37,6 +34,7 @@ jobs:
       NAVER_ADS_API_KEY: ${{ secrets.NAVER_ADS_API_KEY }}
       NAVER_ADS_SECRET: ${{ secrets.NAVER_ADS_SECRET }}
       ACCOUNT_MASTER_FILE: account_master.xlsx
+      ACCOUNT_MASTER_XLSX_B64: ${{ secrets.ACCOUNT_MASTER_XLSX_B64 }}
 
     steps:
       - name: Checkout
@@ -46,60 +44,51 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"
+          cache: pip
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install requests python-dotenv sqlalchemy psycopg2-binary pandas openpyxl
-
 
       - name: Write workflow guide
         if: always()
         run: |
           {
-            echo "## 01 메인 일일 수집"
+            echo "## 01 Main Daily Collection"
             echo
-            echo "- 용도: 매일 전일/당일 성과를 자동 갱신하는 본선 워크플로우"
-            echo "- 수동 실행 시 모드: `${{ github.event.inputs.collect_mode || '검색광고 전체+기기' }}`"
-            echo "- 수동 실행 시 fast: `${{ github.event.inputs.fast || '예' }}`"
+            echo "- Manual mode: `${{ inputs.collect_mode || 'sa_with_device' }}`"
+            echo "- Manual fast: `${{ inputs.fast || true }}`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Run collector (Yesterday / Today optimized)
+      - name: Run collector
+        shell: bash
         env:
-          DISPATCH_COLLECT_MODE: ${{ github.event.inputs.collect_mode }}
-          DISPATCH_FAST: ${{ github.event.inputs.fast }}
+          DISPATCH_COLLECT_MODE: ${{ inputs.collect_mode }}
+          DISPATCH_FAST: ${{ inputs.fast }}
         run: |
-          echo "⏰ 현재 한국 시간: $(date +%F' '%H:%M:%S)"
+          set -euo pipefail
+          echo "Current KST: $(date +%F' '%H:%M:%S)"
 
           KST_HOUR=$(date +%H)
           YESTERDAY=$(date -d "yesterday" +%F)
           TODAY=$(date +%F)
-          COLLECT_MODE="${DISPATCH_COLLECT_MODE:-검색광고 전체+기기}"
+          COLLECT_MODE="${DISPATCH_COLLECT_MODE:-sa_with_device}"
 
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            if [ "${DISPATCH_FAST}" = "아니오" ]; then
-              FAST_FLAG=""
-            else
-              FAST_FLAG="--fast"
-            fi
-
-            echo "🚀 수동 수집 날짜(전일) = ${YESTERDAY} | 모드=${COLLECT_MODE} | 빠른 수집=${DISPATCH_FAST:-예}"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            FAST_FLAG=""
+            [[ "${DISPATCH_FAST:-true}" == "true" ]] && FAST_FLAG="--fast"
             python collector.py --date "${YESTERDAY}" --workers 2 --collect_mode "${COLLECT_MODE}" ${FAST_FLAG}
           else
-            if [ "$KST_HOUR" = "04" ]; then
-              echo "🚀 수집 날짜(전일, 전체 갱신) = ${YESTERDAY} | 모드=${COLLECT_MODE}"
+            if [[ "${KST_HOUR}" == "04" ]]; then
               python collector.py --date "${YESTERDAY}" --workers 2 --collect_mode "${COLLECT_MODE}"
             else
-              echo "🚀 수집 날짜(전일, 백필형 안전 갱신) = ${YESTERDAY} | 모드=${COLLECT_MODE}"
               python fast_backfill.py --start "${YESTERDAY}" --end "${YESTERDAY}" --workers 2 --collect_mode "${COLLECT_MODE}" --sync_dim_first_day
             fi
 
-            if [ "${COLLECT_MODE}" = "기기만" ] || [ "${COLLECT_MODE}" = "device_only" ]; then
-              echo "⏭️ 당일 빠른 수집은 '기기만' 모드에서 생략합니다."
+            if [[ "${COLLECT_MODE}" == "device_only" ]]; then
+              echo "Skipping same-day fast refresh in device_only mode."
             else
-              echo "🚀 수집 날짜(당일, 빠른 갱신) = ${TODAY} | 모드=${COLLECT_MODE}"
               python collector.py --date "${TODAY}" --workers 2 --collect_mode "${COLLECT_MODE}" --fast
             fi
           fi

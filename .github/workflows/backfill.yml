@@ -1,107 +1,97 @@
-name: 02 수동 백필 | 과거 데이터 대량
-run-name: 02 수동 백필 | ${{ github.event.inputs.account_name || github.event.inputs.account_names || 'all' }} | ${{ github.event.inputs.start_date }}~${{ github.event.inputs.end_date }}
+name: 02 Manual Backfill
+run-name: 02 Manual Backfill | ${{ inputs.account_name || inputs.account_names || 'all' }} | ${{ inputs.start_date }}~${{ inputs.end_date }}
 
 on:
   workflow_dispatch:
     inputs:
       start_date:
-        description: '수집 시작일 (YYYY-MM-DD)'
+        description: "Start date (YYYY-MM-DD)"
         required: true
-        default: '2026-03-11'
+        default: "2026-03-11"
+        type: string
       end_date:
-        description: '수집 종료일 (YYYY-MM-DD)'
+        description: "End date (YYYY-MM-DD)"
         required: true
-        default: '2026-03-18'
+        default: "2026-03-18"
+        type: string
       account_name:
-        description: '단일 업체명 (예: 휴앤고)'
+        description: "Single account name"
         required: false
-        default: ''
+        default: ""
+        type: string
       account_names:
-        description: '여러 업체명 콤마구분 (예: 휴앤고,대성소파,로베라)'
+        description: "Comma-separated account names"
         required: false
-        default: ''
+        default: ""
+        type: string
       workers:
-        description: '동시 작업 수 (권장 3)'
+        description: "Concurrent workers"
         required: false
-        default: '3'
+        default: "3"
+        type: string
       fast:
-        description: '빠른 수집 모드'
+        description: "Use fast collection mode"
         required: false
-        default: '아니오'
-        type: choice
-        options:
-          - '아니오'
-          - '예'
+        default: false
+        type: boolean
       collect_mode:
-        description: '수집 모드'
+        description: "Collection mode"
         required: false
-        default: '검색광고 전체+기기'
+        default: sa_with_device
         type: choice
         options:
-          - '검색광고 전체+기기'
-          - '검색광고 전체만'
-          - '기기만'
+          - sa_with_device
+          - sa_only
+          - device_only
       sa_scope:
-        description: '검색광고 수집 범위'
+        description: "Search ad scope"
         required: false
-        default: '전체'
+        default: full
         type: choice
         options:
-          - '전체'
-          - '소재만'
+          - full
+          - ad_only
       run_target:
-        description: '실행 대상'
+        description: "Run target"
         required: false
-        default: '검색광고 전체만'
+        default: sa_only
         type: choice
         options:
-          - '검색광고 전체만'
-          - '확장소재만'
-          - '검색광고 전체+확장소재'
+          - sa_only
+          - shop_ext_only
+          - sa_and_shop_ext
       shop_ext_bucket:
-        description: '확장소재 구분'
+        description: "Shop extension bucket"
         required: false
-        default: '쇼핑검색(SSA)'
+        default: shopping
         type: choice
         options:
-          - '쇼핑검색(SSA)'
-          - '파워링크 외 검색광고'
-          - '전체'
+          - shopping
+          - non_shopping
+          - all
       sync_dim_first_day:
-        description: '첫날만 구조 수집'
+        description: "Collect dimensions on the first day only"
         required: false
-        default: '아니오'
-        type: choice
-        options:
-          - '아니오'
-          - '예'
+        default: false
+        type: boolean
       with_gfa:
-        description: 'GFA 포함 실행'
+        description: "Also run GFA collection"
         required: false
-        default: '아니오'
-        type: choice
-        options:
-          - '아니오'
-          - '예'
+        default: false
+        type: boolean
       shopping_only:
-        description: '쇼핑검색(SSA) 캠페인만 재수집'
+        description: "Collect shopping search campaigns only"
         required: false
-        default: '아니오'
-        type: choice
-        options:
-          - '아니오'
-          - '예'
+        default: false
+        type: boolean
       with_shop_ext:
-        description: '확장소재 수집 포함'
+        description: "Also run shop extension collection"
         required: false
-        default: '아니오'
-        type: choice
-        options:
-          - '아니오'
-          - '예'
+        default: false
+        type: boolean
 
 concurrency:
-  group: fast-backfill-${{ github.event.inputs.account_name || github.event.inputs.account_names || 'all' }}-${{ github.event.inputs.start_date }}-${{ github.event.inputs.end_date }}
+  group: fast-backfill-${{ inputs.account_name || inputs.account_names || 'all' }}-${{ inputs.start_date }}-${{ inputs.end_date }}
   cancel-in-progress: false
 
 jobs:
@@ -113,6 +103,7 @@ jobs:
       NAVER_ADS_API_KEY: ${{ secrets.NAVER_ADS_API_KEY }}
       NAVER_ADS_SECRET: ${{ secrets.NAVER_ADS_SECRET }}
       ACCOUNT_MASTER_FILE: account_master.xlsx
+      ACCOUNT_MASTER_XLSX_B64: ${{ secrets.ACCOUNT_MASTER_XLSX_B64 }}
 
     steps:
       - name: Checkout
@@ -121,71 +112,56 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-          cache: 'pip'
+          python-version: "3.11"
+          cache: pip
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install requests python-dotenv sqlalchemy psycopg2-binary pandas openpyxl
-
 
       - name: Write workflow guide
         if: always()
         run: |
           {
-            echo "## 02 수동 백필"
+            echo "## 02 Manual Backfill"
             echo
-            echo "- 용도: 과거 구간 재수집 / 특정 계정 점검 / 쇼핑검색·확장소재 백필"
-            echo "- 대상 계정: `${{ github.event.inputs.account_name || github.event.inputs.account_names || 'all' }}`"
-            echo "- 기간: `${{ github.event.inputs.start_date }}` ~ `${{ github.event.inputs.end_date }}`"
-            echo "- raw 입력값: collect_mode=`${{ github.event.inputs.collect_mode }}`, sa_scope=`${{ github.event.inputs.sa_scope }}`, run_target=`${{ github.event.inputs.run_target }}`, shop_ext_bucket=`${{ github.event.inputs.shop_ext_bucket }}`"
-            echo "- raw 입력값: fast=`${{ github.event.inputs.fast }}`, sync_dim_first_day=`${{ github.event.inputs.sync_dim_first_day }}`, shopping_only=`${{ github.event.inputs.shopping_only }}`, with_shop_ext=`${{ github.event.inputs.with_shop_ext }}`, with_gfa=`${{ github.event.inputs.with_gfa }}`"
+            echo "- Account: `${{ inputs.account_name || inputs.account_names || 'all' }}`"
+            echo "- Date range: `${{ inputs.start_date }}` ~ `${{ inputs.end_date }}`"
+            echo "- Mode: `${{ inputs.collect_mode }}` / scope: `${{ inputs.sa_scope }}`"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Run fast backfill
+        shell: bash
         run: |
-          CMD=(python fast_backfill.py \
-            --start "${{ github.event.inputs.start_date }}" \
-            --end "${{ github.event.inputs.end_date }}" \
-            --workers "${{ github.event.inputs.workers }}" \
-            --collect_mode "${{ github.event.inputs.collect_mode }}" \
-            --sa_scope "${{ github.event.inputs.sa_scope }}" \
-            --run_target "${{ github.event.inputs.run_target }}" \
-            --shop_ext_bucket "${{ github.event.inputs.shop_ext_bucket }}")
+          set -euo pipefail
+          CMD=(python fast_backfill.py
+            --start "${{ inputs.start_date }}"
+            --end "${{ inputs.end_date }}"
+            --workers "${{ inputs.workers }}"
+            --collect_mode "${{ inputs.collect_mode }}"
+            --sa_scope "${{ inputs.sa_scope }}"
+            --run_target "${{ inputs.run_target }}"
+            --shop_ext_bucket "${{ inputs.shop_ext_bucket }}")
 
-          if [ -n "${{ github.event.inputs.account_name }}" ]; then
-            CMD+=(--account_name "${{ github.event.inputs.account_name }}")
-          fi
-          if [ -n "${{ github.event.inputs.account_names }}" ]; then
-            CMD+=(--account_names "${{ github.event.inputs.account_names }}")
-          fi
-          if [ "${{ github.event.inputs.fast }}" = "예" ]; then
-            CMD+=(--fast)
-          fi
-          if [ "${{ github.event.inputs.sync_dim_first_day }}" = "예" ]; then
-            CMD+=(--sync_dim_first_day)
-          fi
-          if [ "${{ github.event.inputs.with_gfa }}" = "예" ]; then
-            CMD+=(--with_gfa)
-          fi
-          if [ "${{ github.event.inputs.shopping_only }}" = "예" ]; then
-            CMD+=(--shopping_only)
-          fi
-          if [ "${{ github.event.inputs.with_shop_ext }}" = "예" ]; then
-            CMD+=(--with_shop_ext)
-          fi
+          [[ -n "${{ inputs.account_name }}" ]] && CMD+=(--account_name "${{ inputs.account_name }}")
+          [[ -n "${{ inputs.account_names }}" ]] && CMD+=(--account_names "${{ inputs.account_names }}")
+          [[ "${{ inputs.fast }}" == "true" ]] && CMD+=(--fast)
+          [[ "${{ inputs.sync_dim_first_day }}" == "true" ]] && CMD+=(--sync_dim_first_day)
+          [[ "${{ inputs.with_gfa }}" == "true" ]] && CMD+=(--with_gfa)
+          [[ "${{ inputs.shopping_only }}" == "true" ]] && CMD+=(--shopping_only)
+          [[ "${{ inputs.with_shop_ext }}" == "true" ]] && CMD+=(--with_shop_ext)
 
-          printf '실행 명령어:'
+          printf 'Running:'
           printf ' %q' "${CMD[@]}"
           printf '\n'
           "${CMD[@]}"
 
       - name: Upload split debug rows
-        if: always()
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: split-debug-rows-${{ github.run_number }}
           path: debug_split_rows/*.csv
           if-no-files-found: ignore
+          retention-days: 3

@@ -166,6 +166,8 @@ def _classify_help_failure(script_name: str, output: str) -> tuple[str, bool]:
     last = text.splitlines()[-1] if text else '출력 없음'
     if 'ModuleNotFoundError' in text or 'No module named' in text:
         return (f'help 체크 참고 | {script_name} | 현재 환경 의존성 미설치: {last}', False)
+    if 'Could not parse SQLAlchemy URL' in text:
+        return (f'help 체크 참고 | {script_name} | 현재 환경 DATABASE_URL 미설정/미유효: {last}', False)
     if '환경변수가 없습니다' in text:
         return (f'help 체크 실패 | {script_name} | 도움말 전에 환경변수 검사가 실행됨: {last}', True)
     return (f'help 체크 실패 | {script_name} | {last}', True)

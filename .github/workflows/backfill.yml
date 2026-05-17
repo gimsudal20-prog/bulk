@@ -1,41 +1,41 @@
-name: 02 Manual Backfill
-run-name: 02 Manual Backfill | ${{ inputs.account_name || inputs.account_names || 'all' }} | ${{ inputs.start_date }}~${{ inputs.end_date }}
+name: 02 수동 백필
+run-name: 02 수동 백필 | ${{ inputs.account_name || inputs.account_names || '전체' }} | ${{ inputs.start_date }}~${{ inputs.end_date }}
 
 on:
   workflow_dispatch:
     inputs:
       start_date:
-        description: "Start date (YYYY-MM-DD)"
+        description: "시작일(YYYY-MM-DD)"
         required: true
         default: "2026-03-11"
         type: string
       end_date:
-        description: "End date (YYYY-MM-DD)"
+        description: "종료일(YYYY-MM-DD)"
         required: true
         default: "2026-03-18"
         type: string
       account_name:
-        description: "Single account name"
+        description: "단일 계정명"
         required: false
         default: ""
         type: string
       account_names:
-        description: "Comma-separated account names"
+        description: "쉼표로 구분한 계정명"
         required: false
         default: ""
         type: string
       workers:
-        description: "Concurrent workers"
+        description: "동시 작업자 수"
         required: false
         default: "3"
         type: string
       fast:
-        description: "Use fast collection mode"
+        description: "빠른 수집 모드 사용"
         required: false
         default: false
         type: boolean
       collect_mode:
-        description: "Collection mode"
+        description: "수집 모드"
         required: false
         default: sa_with_device
         type: choice
@@ -44,7 +44,7 @@ on:
           - sa_only
           - device_only
       sa_scope:
-        description: "Search ad scope"
+        description: "검색광고 범위"
         required: false
         default: full
         type: choice
@@ -52,7 +52,7 @@ on:
           - full
           - ad_only
       run_target:
-        description: "Run target"
+        description: "실행 대상"
         required: false
         default: sa_only
         type: choice
@@ -61,7 +61,7 @@ on:
           - shop_ext_only
           - sa_and_shop_ext
       shop_ext_bucket:
-        description: "Shop extension bucket"
+        description: "쇼핑 확장 범위"
         required: false
         default: shopping
         type: choice
@@ -70,22 +70,22 @@ on:
           - non_shopping
           - all
       sync_dim_first_day:
-        description: "Collect dimensions on the first day only"
+        description: "첫날에만 차원 정보 수집"
         required: false
         default: false
         type: boolean
       with_gfa:
-        description: "Also run GFA collection"
+        description: "GFA 수집도 실행"
         required: false
         default: false
         type: boolean
       shopping_only:
-        description: "Collect shopping search campaigns only"
+        description: "쇼핑 검색 캠페인만 수집"
         required: false
         default: false
         type: boolean
       with_shop_ext:
-        description: "Also run shop extension collection"
+        description: "쇼핑 확장 수집도 실행"
         required: false
         default: false
         type: boolean
@@ -96,6 +96,7 @@ concurrency:
 
 jobs:
   run-backfill:
+    name: 수동 백필 실행
     runs-on: ubuntu-latest
     env:
       TZ: Asia/Seoul
@@ -106,32 +107,32 @@ jobs:
       ACCOUNT_MASTER_XLSX_B64: ${{ secrets.ACCOUNT_MASTER_XLSX_B64 }}
 
     steps:
-      - name: Checkout
+      - name: 코드 체크아웃
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Python 설정
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
 
-      - name: Install dependencies
+      - name: 의존성 설치
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Write workflow guide
+      - name: 워크플로우 안내 작성
         if: always()
         run: |
           {
-            echo "## 02 Manual Backfill"
+            echo "## 02 수동 백필"
             echo
-            echo "- Account: `${{ inputs.account_name || inputs.account_names || 'all' }}`"
-            echo "- Date range: `${{ inputs.start_date }}` ~ `${{ inputs.end_date }}`"
-            echo "- Mode: `${{ inputs.collect_mode }}` / scope: `${{ inputs.sa_scope }}`"
+            echo "- 계정: `${{ inputs.account_name || inputs.account_names || '전체' }}`"
+            echo "- 기간: `${{ inputs.start_date }}` ~ `${{ inputs.end_date }}`"
+            echo "- 모드: `${{ inputs.collect_mode }}` / 범위: `${{ inputs.sa_scope }}`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Run fast backfill
+      - name: 빠른 백필 실행
         shell: bash
         run: |
           set -euo pipefail
@@ -152,12 +153,12 @@ jobs:
           [[ "${{ inputs.shopping_only }}" == "true" ]] && CMD+=(--shopping_only)
           [[ "${{ inputs.with_shop_ext }}" == "true" ]] && CMD+=(--with_shop_ext)
 
-          printf 'Running:'
+          printf '실행 명령:'
           printf ' %q' "${CMD[@]}"
           printf '\n'
           "${CMD[@]}"
 
-      - name: Upload split debug rows
+      - name: 분할 디버그 행 업로드
         if: failure()
         uses: actions/upload-artifact@v4
         with:

@@ -1,40 +1,40 @@
-name: 03 New Account Backfill
-run-name: 03 New Account Backfill | ${{ inputs.account_name }} | ${{ inputs.start_date }}~${{ inputs.end_date }}
+name: 03 신규 계정 백필
+run-name: 03 신규 계정 백필 | ${{ inputs.account_name }} | ${{ inputs.start_date }}~${{ inputs.end_date }}
 
 on:
   workflow_dispatch:
     inputs:
       account_name:
-        description: "Account name for backfill"
+        description: "백필할 계정명"
         required: true
         type: string
       start_date:
-        description: "Start date (YYYY-MM-DD)"
+        description: "시작일(YYYY-MM-DD)"
         required: true
         default: "2026-02-01"
         type: string
       end_date:
-        description: "End date (YYYY-MM-DD)"
+        description: "종료일(YYYY-MM-DD)"
         required: true
         default: "2026-03-10"
         type: string
       workers:
-        description: "Concurrent workers"
+        description: "동시 작업자 수"
         required: true
         default: "1"
         type: string
       sync_dim_first_day:
-        description: "Collect dimensions on the first day only"
+        description: "첫날에만 차원 정보 수집"
         required: true
         default: true
         type: boolean
       shopping_only:
-        description: "Shopping search campaigns only"
+        description: "쇼핑 검색 캠페인만 수집"
         required: false
         default: false
         type: boolean
       with_shop_ext:
-        description: "Also run shop extension collection"
+        description: "쇼핑 확장 수집도 실행"
         required: false
         default: false
         type: boolean
@@ -45,6 +45,7 @@ concurrency:
 
 jobs:
   backfill:
+    name: 신규 계정 백필 실행
     runs-on: ubuntu-latest
     env:
       TZ: Asia/Seoul
@@ -55,31 +56,31 @@ jobs:
       ACCOUNT_MASTER_XLSX_B64: ${{ secrets.ACCOUNT_MASTER_XLSX_B64 }}
 
     steps:
-      - name: Checkout
+      - name: 코드 체크아웃
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Python 설정
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
 
-      - name: Install dependencies
+      - name: 의존성 설치
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Write workflow guide
+      - name: 워크플로우 안내 작성
         if: always()
         run: |
           {
-            echo "## 03 New Account Backfill"
+            echo "## 03 신규 계정 백필"
             echo
-            echo "- Account: `${{ inputs.account_name }}`"
-            echo "- Date range: `${{ inputs.start_date }}` ~ `${{ inputs.end_date }}`"
+            echo "- 계정: `${{ inputs.account_name }}`"
+            echo "- 기간: `${{ inputs.start_date }}` ~ `${{ inputs.end_date }}`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Run legacy single-account backfill
+      - name: 레거시 단일 계정 백필 실행
         shell: bash
         run: |
           set -euo pipefail
@@ -93,7 +94,7 @@ jobs:
           [[ "${{ inputs.shopping_only }}" == "true" ]] && CMD+=(--shopping_only)
           [[ "${{ inputs.with_shop_ext }}" == "true" ]] && CMD+=(--with_shop_ext)
 
-          printf 'Running:'
+          printf '실행 명령:'
           printf ' %q' "${CMD[@]}"
           printf '\n'
           "${CMD[@]}"

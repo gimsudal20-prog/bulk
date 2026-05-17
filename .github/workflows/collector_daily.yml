@@ -1,5 +1,5 @@
-name: 01 Main Daily Collection
-run-name: 01 Main Daily Collection | ${{ github.event_name == 'workflow_dispatch' && format('manual | {0} | fast={1}', inputs.collect_mode, inputs.fast) || 'schedule' }}
+name: 01 메인 일일 수집
+run-name: 01 메인 일일 수집 | ${{ github.event_name == 'workflow_dispatch' && format('수동 | {0} | 빠른실행={1}', inputs.collect_mode, inputs.fast) || '스케줄' }}
 
 on:
   schedule:
@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       collect_mode:
-        description: "Collection mode"
+        description: "수집 모드"
         required: false
         default: sa_with_device
         type: choice
@@ -16,7 +16,7 @@ on:
           - sa_only
           - device_only
       fast:
-        description: "Use fast mode for manual run"
+        description: "수동 실행 시 빠른 모드 사용"
         required: false
         default: true
         type: boolean
@@ -27,6 +27,7 @@ concurrency:
 
 jobs:
   run-collector:
+    name: 메인 수집 실행
     runs-on: ubuntu-latest
     env:
       TZ: Asia/Seoul
@@ -37,38 +38,38 @@ jobs:
       ACCOUNT_MASTER_XLSX_B64: ${{ secrets.ACCOUNT_MASTER_XLSX_B64 }}
 
     steps:
-      - name: Checkout
+      - name: 코드 체크아웃
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Python 설정
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
 
-      - name: Install dependencies
+      - name: 의존성 설치
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Write workflow guide
+      - name: 워크플로우 안내 작성
         if: always()
         run: |
           {
-            echo "## 01 Main Daily Collection"
+            echo "## 01 메인 일일 수집"
             echo
-            echo "- Manual mode: `${{ inputs.collect_mode || 'sa_with_device' }}`"
-            echo "- Manual fast: `${{ inputs.fast || true }}`"
+            echo "- 수동 모드: `${{ inputs.collect_mode || 'sa_with_device' }}`"
+            echo "- 빠른 실행: `${{ inputs.fast || true }}`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Run collector
+      - name: 수집기 실행
         shell: bash
         env:
           DISPATCH_COLLECT_MODE: ${{ inputs.collect_mode }}
           DISPATCH_FAST: ${{ inputs.fast }}
         run: |
           set -euo pipefail
-          echo "Current KST: $(date +%F' '%H:%M:%S)"
+          echo "현재 KST: $(date +%F' '%H:%M:%S)"
 
           KST_HOUR=$(date +%H)
           YESTERDAY=$(date -d "yesterday" +%F)
@@ -87,7 +88,7 @@ jobs:
             fi
 
             if [[ "${COLLECT_MODE}" == "device_only" ]]; then
-              echo "Skipping same-day fast refresh in device_only mode."
+              echo "device_only 모드에서는 당일 빠른 갱신을 건너뜁니다."
             else
               python collector.py --date "${TODAY}" --workers 2 --collect_mode "${COLLECT_MODE}" --fast
             fi

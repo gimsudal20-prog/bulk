@@ -1,35 +1,35 @@
-name: Manual Collector Run
-run-name: Manual Collector | ${{ inputs.date || 'yesterday' }} | ${{ inputs.account_name || inputs.account_names || inputs.customer_id || 'all' }}
+name: 수동 수집 실행
+run-name: 수동 수집 | ${{ inputs.date || '어제' }} | ${{ inputs.account_name || inputs.account_names || inputs.customer_id || '전체' }}
 
 on:
   workflow_dispatch:
     inputs:
       date:
-        description: "Collection date (YYYY-MM-DD). Empty uses collector.py default."
+        description: "수집일(YYYY-MM-DD). 비워두면 collector.py 기본값 사용."
         required: false
         type: string
       account_name:
-        description: "Single account name or partial match"
+        description: "단일 계정명 또는 일부 일치"
         required: false
         default: ""
         type: string
       account_names:
-        description: "Comma-separated account names"
+        description: "쉼표로 구분한 계정명"
         required: false
         default: ""
         type: string
       customer_id:
-        description: "Direct customer_id target"
+        description: "customer_id 직접 지정"
         required: false
         default: ""
         type: string
       workers:
-        description: "Concurrent workers"
+        description: "동시 작업자 수"
         required: true
         default: "1"
         type: string
       collect_mode:
-        description: "Collection mode"
+        description: "수집 모드"
         required: true
         default: sa_with_device
         type: choice
@@ -38,7 +38,7 @@ on:
           - sa_only
           - device_only
       sa_scope:
-        description: "Search ad scope"
+        description: "검색광고 범위"
         required: true
         default: full
         type: choice
@@ -46,22 +46,22 @@ on:
           - full
           - ad_only
       shopping_only:
-        description: "Shopping search campaigns only"
+        description: "쇼핑 검색 캠페인만"
         required: true
         default: false
         type: boolean
       skip_dim:
-        description: "Skip dimension sync"
+        description: "차원 정보 동기화 건너뛰기"
         required: true
         default: false
         type: boolean
       fast:
-        description: "Use fast collection mode"
+        description: "빠른 수집 모드 사용"
         required: true
         default: false
         type: boolean
       include_gfa_accounts:
-        description: "Include GFA accounts from the account master"
+        description: "계정 마스터의 GFA 계정 포함"
         required: true
         default: false
         type: boolean
@@ -75,6 +75,7 @@ concurrency:
 
 jobs:
   run-collector:
+    name: 수동 수집 실행
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
@@ -87,23 +88,23 @@ jobs:
       ACCOUNT_MASTER_XLSX_B64: ${{ secrets.ACCOUNT_MASTER_XLSX_B64 }}
 
     steps:
-      - name: Checkout
+      - name: 코드 체크아웃
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Python 설정
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
 
-      - name: Install dependencies
+      - name: 의존성 설치
         shell: bash
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Validate required secrets
+      - name: 필수 시크릿 검증
         shell: bash
         run: |
           set -euo pipefail
@@ -113,14 +114,14 @@ jobs:
           [[ -z "${DATABASE_URL:-}" ]] && missing+=("DATABASE_URL")
 
           if (( ${#missing[@]} > 0 )); then
-            echo "Missing GitHub Secrets: ${missing[*]}"
+            echo "누락된 GitHub Secrets: ${missing[*]}"
             exit 1
           fi
 
-      - name: Show run summary
+      - name: 실행 요약 표시
         shell: bash
         run: |
-          echo "Current KST: $(TZ=Asia/Seoul date '+%F %T')"
+          echo "현재 KST: $(TZ=Asia/Seoul date '+%F %T')"
           echo "date=${{ inputs.date }}"
           echo "account_name=${{ inputs.account_name }}"
           echo "account_names=${{ inputs.account_names }}"
@@ -133,7 +134,7 @@ jobs:
           echo "fast=${{ inputs.fast }}"
           echo "include_gfa_accounts=${{ inputs.include_gfa_accounts }}"
 
-      - name: Run collector.py
+      - name: collector.py 실행
         shell: bash
         run: |
           set -euo pipefail
@@ -152,10 +153,10 @@ jobs:
           [[ "${{ inputs.fast }}" == "true" ]] && CMD+=(--fast)
           [[ "${{ inputs.include_gfa_accounts }}" == "true" ]] && CMD+=(--include_gfa_accounts)
 
-          echo "Running: ${CMD[*]}"
+          echo "실행 명령: ${CMD[*]}"
           "${CMD[@]}" 2>&1 | tee manual_collector.log
 
-      - name: Upload run log
+      - name: 실행 로그 업로드
         if: always()
         uses: actions/upload-artifact@v4
         with:

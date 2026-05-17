@@ -1,5 +1,5 @@
-name: 05 GFA Sync
-run-name: 05 GFA Sync | ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'schedule' }}
+name: 05 GFA 동기화
+run-name: 05 GFA 동기화 | ${{ github.event_name == 'workflow_dispatch' && '수동' || '스케줄' }}
 
 on:
   schedule:
@@ -8,6 +8,7 @@ on:
 
 jobs:
   run-gfa-collector:
+    name: GFA 수집 실행
     runs-on: ubuntu-latest
     env:
       TZ: Asia/Seoul
@@ -26,35 +27,35 @@ jobs:
       GFA_DOWNLOAD_DIR: gfa_downloads
 
     steps:
-      - name: Checkout
+      - name: 코드 체크아웃
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Python 설정
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
 
-      - name: Install dependencies
+      - name: 의존성 설치
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install playwright
 
-      - name: Write workflow guide
+      - name: 워크플로우 안내 작성
         if: always()
         run: |
           {
-            echo "## 05 GFA Sync"
+            echo "## 05 GFA 동기화"
             echo
-            echo "- Purpose: collect GFA account performance into the shared database."
-            echo "- Debug artifacts upload only when the job fails."
+            echo "- 목적: GFA 계정 성과를 공용 데이터베이스에 수집합니다."
+            echo "- 디버그 산출물은 작업 실패 시에만 업로드됩니다."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Install Chromium
+      - name: Chromium 설치
         run: python -m playwright install --with-deps chromium
 
-      - name: Check GFA environment
+      - name: GFA 환경 확인
         run: |
           echo "has DATABASE_URL=$([ -n "$DATABASE_URL" ] && echo yes || echo no)"
           echo "has GFA_ACCESS_TOKEN=$([ -n "$GFA_ACCESS_TOKEN" ] && echo yes || echo no)"
@@ -64,15 +65,15 @@ jobs:
           echo "has GFA_ID=$([ -n "$GFA_ID" ] && echo yes || echo no)"
           echo "has GFA_PW=$([ -n "$GFA_PW" ] && echo yes || echo no)"
 
-      - name: Run GFA collector
+      - name: GFA 수집기 실행
         run: |
           if [ -f collector_gfa.py ]; then
             python collector_gfa.py
           else
-            echo "collector_gfa.py is not present in this source; skipping GFA collection."
+            echo "collector_gfa.py가 이 소스에 없어 GFA 수집을 건너뜁니다."
           fi
 
-      - name: Upload GFA debug artifacts
+      - name: GFA 디버그 산출물 업로드
         if: failure()
         uses: actions/upload-artifact@v4
         with:

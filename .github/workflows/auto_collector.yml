@@ -1,5 +1,5 @@
-name: 06 Auto OFF Check
-run-name: 06 Auto OFF Check | ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'hourly' }}
+name: 06 자동 OFF 확인
+run-name: 06 자동 OFF 확인 | ${{ github.event_name == 'workflow_dispatch' && '수동' || '매시간' }}
 
 on:
   schedule:
@@ -8,6 +8,7 @@ on:
 
 jobs:
   run-hourly-check:
+    name: OFF 상태 자동 확인
     runs-on: ubuntu-latest
     env:
       TZ: Asia/Seoul
@@ -19,28 +20,28 @@ jobs:
       ACCOUNT_MASTER_XLSX_B64: ${{ secrets.ACCOUNT_MASTER_XLSX_B64 }}
 
     steps:
-      - name: Checkout code
+      - name: 코드 체크아웃
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Python 설정
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
 
-      - name: Install dependencies
+      - name: 의존성 설치
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Write workflow guide
+      - name: 워크플로우 안내 작성
         if: always()
         run: |
           {
-            echo "## 06 Auto OFF Check"
+            echo "## 06 자동 OFF 확인"
             echo
-            echo "- Purpose: hourly auto check for OFF campaigns/accounts."
+            echo "- 목적: OFF 캠페인/계정을 매시간 자동 확인합니다."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Run OFF scanner
+      - name: OFF 스캐너 실행
         run: python check_off.py

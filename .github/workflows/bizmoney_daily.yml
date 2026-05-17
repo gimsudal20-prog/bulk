@@ -1,5 +1,5 @@
-name: 04 BizMoney Daily Collection
-run-name: 04 BizMoney Daily Collection | ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'schedule' }}
+name: 04 비즈머니 일일 수집
+run-name: 04 비즈머니 일일 수집 | ${{ github.event_name == 'workflow_dispatch' && '수동' || '스케줄' }}
 
 on:
   workflow_dispatch:
@@ -12,6 +12,7 @@ concurrency:
 
 jobs:
   run-bizmoney:
+    name: 비즈머니 수집 실행
     runs-on: ubuntu-latest
     env:
       TZ: Asia/Seoul
@@ -22,21 +23,21 @@ jobs:
       ACCOUNT_MASTER_XLSX_B64: ${{ secrets.ACCOUNT_MASTER_XLSX_B64 }}
 
     steps:
-      - name: Checkout
+      - name: 코드 체크아웃
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Python 설정
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
 
-      - name: Install dependencies
+      - name: 의존성 설치
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Restore account master
+      - name: 계정 마스터 복원
         shell: bash
         run: |
           set -euo pipefail
@@ -53,14 +54,14 @@ jobs:
           fi
           test -f "${ACCOUNT_MASTER_FILE}"
 
-      - name: Write workflow guide
+      - name: 워크플로우 안내 작성
         if: always()
         run: |
           {
-            echo "## 04 BizMoney Daily Collection"
+            echo "## 04 비즈머니 일일 수집"
             echo
-            echo "- Purpose: save account-level BizMoney balances."
+            echo "- 목적: 계정별 비즈머니 잔액을 저장합니다."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Run BizMoney collector
+      - name: 비즈머니 수집기 실행
         run: python collect_bizmoney.py

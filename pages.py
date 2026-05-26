@@ -55,12 +55,6 @@ def _render_page_header(nav: str, latest: dict | None, f: dict | None = None) ->
         f"<span class='nv-meta-chip {escape(tone)}'>{escape(label)}</span>"
         for tone, label in chips
     )
-    action_html = "".join([
-        "<span class='nv-action-chip'>스냅샷</span>",
-        "<span class='nv-icon-chip'>↻</span>",
-        "<span class='nv-icon-chip'>↗</span>",
-        "<span class='nv-action-chip primary'>새 광고 만들기</span>",
-    ])
     st.markdown(
         f"""
         <div class='nv-console-head'>
@@ -70,7 +64,6 @@ def _render_page_header(nav: str, latest: dict | None, f: dict | None = None) ->
                     <div class='nv-h1'>{escape(nav)}</div>
                     <p class='nv-page-sub'>{escape(subtitle)}</p>
                 </div>
-                <div class='nv-console-actions'>{action_html}</div>
             </div>
             <div class='nv-filter-bar'>
                 <div class='nv-filter-search'>제목, 채널, 상태로 필터하기</div>

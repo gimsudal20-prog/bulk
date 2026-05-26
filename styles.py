@@ -145,38 +145,6 @@ h1, h2, h3, h4, h5, h6 {
   gap: 18px;
   padding: 16px 18px 14px;
 }
-.nv-console-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
-}
-.nv-action-chip,
-.nv-icon-chip {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 34px;
-  border: 1px solid var(--nv-line);
-  background: var(--nv-bg);
-  color: var(--nv-text-soft);
-  font-size: 12px;
-  font-weight: 800;
-  border-radius: 5px;
-  box-shadow: var(--nv-shadow-soft);
-}
-.nv-action-chip {
-  padding: 0 12px;
-}
-.nv-action-chip.primary {
-  background: var(--nv-primary);
-  color: #fff;
-  border-color: var(--nv-primary);
-}
-.nv-icon-chip {
-  width: 34px;
-  font-size: 15px;
-}
 .nv-filter-bar {
   display: flex;
   align-items: center;
@@ -799,7 +767,6 @@ div[data-testid="stHorizontalBlock"] {
     align-items: flex-start;
     flex-direction: column;
   }
-  .nv-console-actions,
   .nv-page-meta {
     justify-content: flex-start;
   }

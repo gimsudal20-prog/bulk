@@ -267,14 +267,22 @@ def _get_campaign_top_keyword_map(kw_bundle: pd.DataFrame, top_n: int = 5) -> di
     return out
 
 
-def _get_campaign_top_shopping_query_map(shop_terms: pd.DataFrame, top_n: int = 3) -> dict[str, str]:
+def _pick_shopping_query_metric_col(shop_terms: pd.DataFrame, prefer_purchase: bool) -> str | None:
+    if shop_terms is None or shop_terms.empty:
+        return None
+    cols = set(shop_terms.columns)
+    preferred = ["purchase_conv", "total_conv"] if prefer_purchase else ["total_conv", "purchase_conv"]
+    return next((col for col in preferred if col in cols), None)
+
+
+def _get_campaign_top_shopping_query_map(shop_terms: pd.DataFrame, top_n: int = 3, prefer_purchase: bool = True) -> dict[str, str]:
     out: dict[str, str] = {}
     if shop_terms is None or shop_terms.empty:
         return out
     required = {'campaign_name', 'query_text'}
     if not required.issubset(set(shop_terms.columns)):
         return out
-    metric_col = 'purchase_conv' if 'purchase_conv' in shop_terms.columns else ('total_conv' if 'total_conv' in shop_terms.columns else None)
+    metric_col = _pick_shopping_query_metric_col(shop_terms, prefer_purchase)
     if metric_col is None:
         return out
     qdf = shop_terms.copy()
@@ -311,6 +319,7 @@ def _build_campaign_report_text(
     is_shopping_only: bool,
     combined_toggle: bool,
     kpi_mode: str,
+    report_uses_purchase: bool = False,
     campaign_top_keyword_map: dict[str, str] | None = None,
     campaign_top_shopping_query_map: dict[str, str] | None = None,
 ) -> str:
@@ -342,8 +351,11 @@ def _build_campaign_report_text(
         campaign_name = str(row.get('campaign_name', '') or '').strip()
         if not campaign_name:
             continue
-        if is_shopping_only:
-            keyword_text = campaign_top_shopping_query_map.get(campaign_name, '없음')
+        use_purchase_metrics = bool(report_uses_purchase)
+        if use_purchase_metrics:
+            keyword_text = campaign_top_shopping_query_map.get(campaign_name) if is_shopping_only else None
+            if not keyword_text:
+                keyword_text = campaign_top_keyword_map.get(campaign_name, '없음')
             section = "\n".join([
                 f"[ {campaign_name} 성과 요약 ]",
                 _format_report_line("노출수", f"{int(float(row.get('imp', 0))):,}"),
@@ -356,14 +368,12 @@ def _build_campaign_report_text(
                 _format_report_line("주요 전환 키워드", keyword_text),
             ])
         else:
-            if combined_toggle or kpi_mode != 'shopping_purchase':
-                c_conv_val = row.get('tot_conv', 0)
-                c_sales_val = row.get('tot_sales', 0)
-            else:
-                c_conv_val = row.get('conv', 0)
-                c_sales_val = row.get('sales', 0)
+            c_conv_val = row.get('tot_conv', 0)
+            c_sales_val = row.get('tot_sales', 0)
             c_roas_val = _safe_div(float(c_sales_val), float(row.get('cost', 0)), 100.0)
-            keyword_text = campaign_top_keyword_map.get(campaign_name, '없음')
+            keyword_text = campaign_top_shopping_query_map.get(campaign_name) if is_shopping_only else None
+            if not keyword_text:
+                keyword_text = campaign_top_keyword_map.get(campaign_name, '없음')
             section = "\n".join([
                 f"[ {campaign_name} 성과 요약 ]",
                 _format_report_line("노출수", f"{int(float(row.get('imp', 0))):,}"),
@@ -380,7 +390,8 @@ def _build_campaign_report_text(
     if not sections:
         return ''
 
-    title = f"[ 캠페인별 성과 요약 | {selected_type_label} ]"
+    metric_label = "구매완료 데이터" if report_uses_purchase else "보고서 전환"
+    title = f"[ 캠페인별 성과 요약 | {selected_type_label} | {metric_label} ]"
     return "\n\n".join([title, *sections])
 
 
@@ -1232,6 +1243,19 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
             value=False,
             help="기존 요약 아래에 캠페인별 성과 요약을 동일한 형식으로 추가합니다.",
         )
+        report_metric_options = ["보고서 전환"]
+        if can_use_purchase_toggle:
+            report_metric_options.append("구매완료 데이터")
+        report_metric_default = "구매완료 데이터" if "구매완료 데이터" in report_metric_options and kpi_mode == "shopping_purchase" else "보고서 전환"
+        if st.session_state.get("overview_text_report_metric_mode") not in report_metric_options:
+            st.session_state["overview_text_report_metric_mode"] = report_metric_default
+        report_metric_mode = st.segmented_control(
+            "보고서 데이터 기준",
+            report_metric_options,
+            default=report_metric_default,
+            key="overview_text_report_metric_mode",
+        )
+        report_uses_purchase = report_metric_mode == "구매완료 데이터"
         generate_text_report = st.button("텍스트 보고서 생성", key="overview_generate_text_report", use_container_width=True)
         top_kw_str = "없음"
         try:
@@ -1255,7 +1279,7 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
             try:
                 shop_terms_df = query_shopping_search_terms(engine, f["start"], f["end"], tuple(cids))
                 if shop_terms_df is not None and not shop_terms_df.empty:
-                    metric_col = "purchase_conv" if "purchase_conv" in shop_terms_df.columns else ("total_conv" if "total_conv" in shop_terms_df.columns else None)
+                    metric_col = _pick_shopping_query_metric_col(shop_terms_df, prefer_purchase=report_uses_purchase)
                     if metric_col is not None:
                         top_shop_terms = (
                             shop_terms_df.groupby("query_text", dropna=False)[metric_col]
@@ -1265,14 +1289,14 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
                         top_shop_terms = top_shop_terms[top_shop_terms[metric_col] > 0].sort_values(metric_col, ascending=False).head(3)
                         if not top_shop_terms.empty:
                             shop_kw_str = ", ".join([f"{r['query_text']}({int(r[metric_col]):,}회)" for _, r in top_shop_terms.iterrows()])
-                    campaign_top_shopping_query_map = _get_campaign_top_shopping_query_map(shop_terms_df, top_n=3)
+                    campaign_top_shopping_query_map = _get_campaign_top_shopping_query_map(shop_terms_df, top_n=3, prefer_purchase=report_uses_purchase)
             except Exception:
                 pass
 
         campaign_top_keyword_map = _get_campaign_top_keyword_map(cur_kw, top_n=5)
         is_shopping_only = ("쇼핑" in selected_type_label and "파워링크" not in selected_type_label and selected_type_label != "전체 유형")
 
-        if is_shopping_only:
+        if report_uses_purchase:
             report_text = "\n".join([
                 f"[ {selected_type_label} 성과 요약 ]",
                 _format_report_line("노출수", f"{int(float(cur.get('imp', 0))):,}"),
@@ -1282,17 +1306,12 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
                 _format_report_line("구매완료수", _format_report_count(cur.get('conv', 0.0))),
                 _format_report_line("구매완료 매출", f"{int(float(cur.get('sales', 0))):,}원"),
                 _format_report_line("구매 ROAS", f"{float(cur.get('roas', 0)):.1f}%"),
-                _format_report_line("주요 전환 키워드", shop_kw_str)
+                _format_report_line("주요 전환 키워드", shop_kw_str if is_shopping_only else top_kw_str)
             ])
         else:
-            if combined_toggle or kpi_mode != "shopping_purchase":
-                c_conv_val = cur.get('tot_conv', 0)
-                c_sales_val = cur.get('tot_sales', 0)
-                c_roas_val = cur.get('tot_roas', 0)
-            else:
-                c_conv_val = cur.get('conv', 0)
-                c_sales_val = cur.get('sales', 0)
-                c_roas_val = cur.get('roas', 0)
+            c_conv_val = cur.get('tot_conv', 0)
+            c_sales_val = cur.get('tot_sales', 0)
+            c_roas_val = cur.get('tot_roas', 0)
 
             report_text = "\n".join([
                 f"[ {selected_type_label} 성과 요약 ]",
@@ -1303,7 +1322,7 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
                 _format_report_line("전환수", f"{float(c_conv_val):.1f}"),
                 _format_report_line("총전환매출", f"{int(float(c_sales_val)):,}원"),
                 _format_report_line("ROAS", f"{float(c_roas_val):.1f}%"),
-                _format_report_line("주요 유입 키워드", top_kw_str)
+                _format_report_line("주요 유입 키워드", shop_kw_str if is_shopping_only else top_kw_str)
             ])
             
         if include_campaign_breakdown:
@@ -1313,6 +1332,7 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
                 is_shopping_only=is_shopping_only,
                 combined_toggle=combined_toggle,
                 kpi_mode=kpi_mode,
+                report_uses_purchase=report_uses_purchase,
                 campaign_top_keyword_map=campaign_top_keyword_map,
                 campaign_top_shopping_query_map=campaign_top_shopping_query_map,
             )

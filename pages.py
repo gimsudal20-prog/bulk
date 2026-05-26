@@ -11,6 +11,7 @@ import streamlit_compat  # noqa: F401
 from data import *
 from ui import render_hero
 from page_helpers import BUILD_TAG, build_filters
+from perf_utils import render_perf_panel, reset_perf_events
 
 
 PAGE_DESCRIPTIONS = {
@@ -126,6 +127,10 @@ def main():
             st.error("설정 메뉴에서 동기화를 진행해주세요.")
             return
         f = build_filters(meta, get_campaign_type_options_cached(engine), engine)
+        st.session_state["_show_perf_diag"] = bool(f.get("show_diagnostics", False))
+        reset_perf_events()
+    else:
+        st.session_state["_show_perf_diag"] = False
 
     _render_page_header(nav, latest, f)
 
@@ -163,6 +168,8 @@ def main():
     else:
         from view_settings import page_settings
         page_settings(engine)
+
+    render_perf_panel()
 
 if __name__ == "__main__":
     main()

@@ -12,6 +12,8 @@ from sqlalchemy.exc import OperationalError, StatementError, InterfaceError
 from sqlalchemy.pool import QueuePool
 from datetime import date
 
+from perf_utils import record_db_timing
+
 # ==========================================
 # 1. Database Connection (QueuePool 적용)
 # ==========================================
@@ -36,6 +38,42 @@ def _require_database_url() -> str:
         db_url += "&sslmode=require" if "?" in db_url else "?sslmode=require"
     return db_url
 
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = str(os.getenv(name, "1" if default else "0") or "").strip().lower()
+    return raw in {"1", "true", "yes", "y", "on"}
+
+
+def _ensure_dashboard_indexes(engine) -> None:
+    if not _env_bool("DASHBOARD_ENSURE_INDEXES", True):
+        return
+
+    index_sql = [
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dash_fact_campaign_customer_dt ON fact_campaign_daily (customer_id, dt)",
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dash_fact_campaign_campaign ON fact_campaign_daily (customer_id, campaign_id)",
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dash_fact_keyword_customer_dt ON fact_keyword_daily (customer_id, dt)",
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dash_fact_keyword_keyword ON fact_keyword_daily (customer_id, keyword_id)",
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dash_fact_ad_customer_dt ON fact_ad_daily (customer_id, dt)",
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dash_fact_ad_ad ON fact_ad_daily (customer_id, ad_id)",
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dash_fact_shop_customer_dt ON fact_shopping_query_daily (customer_id, dt)",
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dash_fact_shop_campaign ON fact_shopping_query_daily (customer_id, campaign_id)",
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dash_dim_campaign_customer_campaign ON dim_campaign (customer_id, campaign_id)",
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dash_dim_adgroup_customer_adgroup ON dim_adgroup (customer_id, adgroup_id)",
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dash_dim_keyword_customer_keyword ON dim_keyword (customer_id, keyword_id)",
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dash_dim_ad_customer_ad ON dim_ad (customer_id, ad_id)",
+    ]
+    try:
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            conn.execute(text("SET lock_timeout TO '2s'"))
+            conn.execute(text("SET statement_timeout TO '120s'"))
+            for stmt in index_sql:
+                try:
+                    conn.execute(text(stmt))
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
 @st.cache_resource
 def get_engine():
     db_url = _require_database_url()
@@ -52,7 +90,7 @@ def get_engine():
     pool_timeout = _env_int("DASHBOARD_DB_POOL_TIMEOUT", 20, min_value=5)
     pool_recycle = _env_int("DASHBOARD_DB_POOL_RECYCLE", 1800, min_value=60)
 
-    return create_engine(
+    engine = create_engine(
         db_url,
         poolclass=QueuePool,
         pool_pre_ping=True,
@@ -63,6 +101,8 @@ def get_engine():
         connect_args=connect_args,
         future=True,
     )
+    _ensure_dashboard_indexes(engine)
+    return engine
 
 def db_ping(engine) -> bool:
     try:
@@ -120,16 +160,34 @@ def get_table_columns(_engine, table_name: str) -> list:
 def sql_read(_engine, query: str, params: dict = None) -> pd.DataFrame:
     last_error = None
     for attempt in range(3):
+        t0 = time.perf_counter()
         try:
             with _engine.connect() as conn:
-                return pd.read_sql(text(query), conn, params=params)
+                df = pd.read_sql(text(query), conn, params=params)
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
+            record_db_timing("db", _query_label(query), elapsed_ms, rows=len(df.index), attempt=attempt + 1)
+            return df
         except Exception as e:
             last_error = e
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
+            record_db_timing("db_error", _query_label(query), elapsed_ms, attempt=attempt + 1, error=type(e).__name__)
             time.sleep(1.0)
             
     st.cache_resource.clear()
     st.error(f"DB 연결이 지연되고 있습니다. 잠시 후 새로고침(F5) 해주세요. (사유: {last_error})")
     st.stop()
+
+
+def _query_label(query: str) -> str:
+    compact = " ".join(str(query or "").split())
+    if not compact:
+        return "empty query"
+    upper = compact.upper()
+    for marker in ["FROM ", "UPDATE ", "INSERT INTO ", "DELETE FROM "]:
+        idx = upper.find(marker)
+        if idx >= 0:
+            return compact[idx:idx + 120]
+    return compact[:120]
 
 def sql_exec(_engine, query: str, params: dict = None) -> None:
     last_error = None
@@ -430,7 +488,7 @@ def seed_from_accounts_xlsx(engine, df=None, file_buffer=None):
         return {"meta": 0}
 
 
-@st.cache_data(ttl=43200, max_entries=10, show_spinner=False)
+@st.cache_data(ttl=43200, max_entries=30, show_spinner=False)
 def get_meta(_engine) -> pd.DataFrame:
     if not table_exists(_engine, "dim_customer"):
         return pd.DataFrame()
@@ -475,7 +533,7 @@ def get_meta(_engine) -> pd.DataFrame:
             df["operating_weekdays"] = DEFAULT_OPERATING_WEEKDAYS
     return df
 
-@st.cache_data(ttl=43200, max_entries=10, show_spinner=False)
+@st.cache_data(ttl=43200, max_entries=30, show_spinner=False)
 def load_dim_campaign(_engine) -> pd.DataFrame:
     if not table_exists(_engine, "dim_campaign"):
         return pd.DataFrame()
@@ -494,7 +552,7 @@ def load_dim_campaign(_engine) -> pd.DataFrame:
         df["customer_id"] = _normalize_customer_id_series(df["customer_id"])
     return df
 
-@st.cache_data(ttl=43200, max_entries=10, show_spinner=False)
+@st.cache_data(ttl=43200, max_entries=30, show_spinner=False)
 def get_campaign_type_options_cached(_engine) -> list:
     """엔진 기준으로 캠페인 유형 옵션을 캐시해서 반환한다."""
     dim_campaign = load_dim_campaign(_engine)
@@ -518,7 +576,7 @@ def _map_campaign_types(df: pd.DataFrame, col_name: str) -> pd.DataFrame:
         df[col_name] = df[col_name].apply(lambda x: mapping.get(str(x).upper(), x) if pd.notna(x) else x)
     return df
 
-@st.cache_data(ttl=43200, max_entries=10, show_spinner=False)
+@st.cache_data(ttl=43200, max_entries=30, show_spinner=False)
 def get_latest_dates(_engine) -> dict:
     dates = {}
     for tbl in ["fact_campaign_daily", "fact_adgroup_daily", "fact_keyword_daily", "fact_ad_daily", "fact_shopping_query_daily"]:
@@ -950,7 +1008,7 @@ def _compute_total_ratio_metrics(row: dict) -> dict:
     row["wishlist_roas"] = (wishlist_sales / cost * 100) if cost > 0 else 0
     return row
 
-@st.cache_data(ttl=300, max_entries=10, show_spinner=False)
+@st.cache_data(ttl=300, max_entries=30, show_spinner=False)
 def query_budget_bundle(_engine, cids: tuple, yesterday: date, avg_d1: date, avg_d2: date, month_d1: date, month_d2: date, prev_month_d1: date, prev_month_d2: date, avg_days: int) -> pd.DataFrame:
     meta = get_meta(_engine)
     if meta.empty:
@@ -1057,7 +1115,7 @@ def update_customer_operating_weekdays(_engine, cid: int, weekdays: str):
         st.error(f"운영 요일 업데이트 실패: {e}")
 
 
-@st.cache_data(ttl=43200, max_entries=10, show_spinner=False)
+@st.cache_data(ttl=43200, max_entries=30, show_spinner=False)
 def query_campaign_off_log(_engine, d1: date, d2: date, cids: tuple) -> pd.DataFrame:
     if not table_exists(_engine, "fact_campaign_off_log"):
         return pd.DataFrame()
@@ -1070,7 +1128,7 @@ def query_campaign_off_log(_engine, d1: date, d2: date, cids: tuple) -> pd.DataF
         {"d1": str(d1), "d2": str(d2), **cid_params},
     )
 
-@st.cache_data(ttl=43200, max_entries=20, show_spinner=False)
+@st.cache_data(ttl=43200, max_entries=60, show_spinner=False)
 def get_entity_totals(_engine, entity: str, d1: date, d2: date, cids: tuple, type_sel: tuple) -> dict:
     if not table_exists(_engine, f"fact_{entity}_daily"):
         return {}
@@ -1108,7 +1166,7 @@ def get_entity_totals(_engine, entity: str, d1: date, d2: date, cids: tuple, typ
     row["tot_sales"] = row.get("tot_sales", 0)
     return _compute_total_ratio_metrics(row)
 
-@st.cache_data(ttl=43200, max_entries=10, show_spinner=False)
+@st.cache_data(ttl=43200, max_entries=40, show_spinner=False)
 def query_campaign_bundle(_engine, d1: date, d2: date, cids: tuple, type_sel: tuple, topn_cost: int = 0) -> pd.DataFrame:
     if not table_exists(_engine, "fact_campaign_daily"):
         return pd.DataFrame()
@@ -1146,7 +1204,7 @@ def query_campaign_bundle(_engine, d1: date, d2: date, cids: tuple, type_sel: tu
     df = sql_read(_engine, sql, {"d1": str(d1), "d2": str(d2), **cid_params, **type_params})
     return _finalize_bundle_df(df, "campaign_type")
 
-@st.cache_data(ttl=43200, max_entries=10, show_spinner=False)
+@st.cache_data(ttl=43200, max_entries=40, show_spinner=False)
 def query_keyword_bundle(_engine, d1: date, d2: date, cids, type_sel: tuple, topn_cost: int = 0, include_dt: bool = False) -> pd.DataFrame:
     if not table_exists(_engine, "fact_keyword_daily"):
         return pd.DataFrame()
@@ -1186,7 +1244,7 @@ def query_keyword_bundle(_engine, d1: date, d2: date, cids, type_sel: tuple, top
     df = sql_read(_engine, sql, {"d1": str(d1), "d2": str(d2), **cid_params, **type_params})
     return _finalize_bundle_df(df, "campaign_type_label")
 
-@st.cache_data(ttl=43200, max_entries=10, show_spinner=False)
+@st.cache_data(ttl=43200, max_entries=40, show_spinner=False)
 def query_ad_bundle(_engine, d1: date, d2: date, cids: tuple, type_sel: tuple, topn_cost: int = 0, top_k: int = 50, include_dt: bool = False) -> pd.DataFrame:
     if not table_exists(_engine, "fact_ad_daily"):
         return pd.DataFrame()
@@ -1227,7 +1285,7 @@ def query_ad_bundle(_engine, d1: date, d2: date, cids: tuple, type_sel: tuple, t
     df = sql_read(_engine, sql, {"d1": str(d1), "d2": str(d2), **cid_params, **type_params})
     return _finalize_bundle_df(df, "campaign_type_label")
 
-@st.cache_data(ttl=43200, max_entries=10, show_spinner=False)
+@st.cache_data(ttl=43200, max_entries=40, show_spinner=False)
 def query_campaign_timeseries(_engine, d1: date, d2: date, cids: tuple, type_sel: tuple) -> pd.DataFrame:
     if not table_exists(_engine, "fact_campaign_daily"):
         return pd.DataFrame()
@@ -1326,7 +1384,7 @@ def query_overview_report_source_cache(_engine, source_kind: str, d1: date, d2: 
         {"d1": str(d1), "d2": str(d2), "source_kind": str(source_kind), **cid_params, **type_params},
     )
 
-@st.cache_data(ttl=43200, max_entries=10, show_spinner=False)
+@st.cache_data(ttl=43200, max_entries=40, show_spinner=False)
 def query_shopping_search_terms(_engine, d1: date, d2: date, cids: tuple) -> pd.DataFrame:
     if not table_exists(_engine, "fact_shopping_query_daily"):
         return pd.DataFrame()
@@ -1356,3 +1414,4 @@ def query_shopping_search_terms(_engine, d1: date, d2: date, cids: tuple) -> pd.
     """
     df = sql_read(_engine, sql, {"d1": str(d1), "d2": str(d2), **cid_params})
     return df
+

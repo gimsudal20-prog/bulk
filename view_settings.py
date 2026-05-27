@@ -171,6 +171,15 @@ def _apply_connection_filters(conn_df: pd.DataFrame, platform: str, manager: str
     return out.reset_index(drop=True)
 
 
+def _manager_options(conn_df: pd.DataFrame, dash_accounts: pd.DataFrame) -> list[str]:
+    managers: set[str] = {"미배정"}
+    for df in [conn_df, dash_accounts]:
+        if df is None or df.empty or "manager" not in df.columns:
+            continue
+        managers.update(_clean_manager(value) for value in df["manager"].dropna().tolist())
+    return sorted(managers)
+
+
 def _save_platform_connections(engine, edited_df: pd.DataFrame) -> int:
     if edited_df is None or edited_df.empty:
         return 0
@@ -226,6 +235,7 @@ def page_settings(engine) -> None:
 
     conn_df = _platform_connections_editor_df(engine)
     dash_accounts = _dashboard_accounts_df(engine)
+    manager_options = _manager_options(conn_df, dash_accounts)
 
     metric_a, metric_b, metric_c = st.columns(3)
     active_count = int(conn_df["is_active"].sum()) if not conn_df.empty and "is_active" in conn_df.columns else 0
@@ -241,13 +251,17 @@ def page_settings(engine) -> None:
                 f"{row.account_name} · {row.manager} · {row.customer_id}"
                 for row in dash_accounts.itertuples(index=False)
             ]
-            c_acc, c_platform, c_pid = st.columns([1.6, 0.8, 1.4], gap="small")
+            c_acc, c_platform, c_manager, c_pid = st.columns([1.6, 0.8, 0.9, 1.4], gap="small")
             with c_acc:
                 selected_account = st.selectbox("대시보드 계정", account_options, key="connection_seed_account")
             with c_platform:
                 seed_platform = st.selectbox("플랫폼", ["naver", "meta", "google"], key="connection_seed_platform")
             selected_idx = account_options.index(selected_account)
             seed_row = dash_accounts.iloc[selected_idx]
+            seed_manager_default = _clean_manager(seed_row["manager"])
+            seed_manager_index = manager_options.index(seed_manager_default) if seed_manager_default in manager_options else 0
+            with c_manager:
+                seed_manager = st.selectbox("담당자", manager_options, index=seed_manager_index, key="connection_seed_manager")
             with c_pid:
                 seed_account_id = st.text_input(
                     "플랫폼 계정 ID",
@@ -263,7 +277,7 @@ def page_settings(engine) -> None:
                             "id": "",
                             "platform": seed_platform,
                             "account_label": seed_row["account_name"],
-                            "manager": seed_row["manager"],
+                            "manager": seed_manager,
                             "customer_id": seed_row["customer_id"],
                             "account_id": seed_account_id,
                             "is_active": True,
@@ -296,7 +310,7 @@ def page_settings(engine) -> None:
             "id": None,
             "platform": st.column_config.SelectboxColumn("플랫폼", options=["naver", "meta", "google"], required=True, width="small"),
             "account_label": st.column_config.TextColumn("대시보드 계정명", required=True, help="예: 핵이득마켓", width="medium"),
-            "manager": st.column_config.TextColumn("담당자", required=True, help="저장 시 대시보드 계정의 담당자에도 반영됩니다.", width="small"),
+            "manager": st.column_config.SelectboxColumn("담당자", options=manager_options, required=True, help="기존 담당자 목록에서 선택하면 대시보드 계정의 담당자에도 반영됩니다.", width="small"),
             "customer_id": st.column_config.TextColumn("대시보드 커스텀 ID", help="비워두면 플랫폼 계정 ID를 기준으로 담당자를 연결합니다.", width="medium"),
             "account_id": st.column_config.TextColumn("플랫폼 계정 ID", required=True, help="Meta는 광고계정 ID, Google은 고객 ID", width="medium"),
             "is_active": st.column_config.CheckboxColumn("수집", default=True, width="small"),

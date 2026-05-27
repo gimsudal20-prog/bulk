@@ -1,0 +1,214 @@
+name: 08 Google Ads 동기화
+run-name: 08 Google Ads 동기화 | ${{ github.event_name == 'workflow_dispatch' && '수동' || '스케줄' }}
+
+on:
+  schedule:
+    - cron: "40 19 * * *" # KST 04:40
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: "시작일(YYYY-MM-DD). 비우면 어제"
+        required: false
+        default: ""
+        type: string
+      end_date:
+        description: "종료일(YYYY-MM-DD). 비우면 시작일"
+        required: false
+        default: ""
+        type: string
+      account_name:
+        description: "대시보드 계정명. 비우면 등록된 활성 Google 계정"
+        required: false
+        default: ""
+        type: string
+      customer_id:
+        description: "Google Ads 고객 ID. 비우면 등록된 활성 Google 계정"
+        required: false
+        default: ""
+        type: string
+      manager:
+        description: "대시보드 담당자명. 신규 명시 계정에만 사용"
+        required: false
+        default: ""
+        type: string
+
+concurrency:
+  group: google-ads-collector
+  cancel-in-progress: false
+
+jobs:
+  run-google-ads-collector:
+    name: Google Ads 수집 실행
+    runs-on: ubuntu-latest
+    env:
+      TZ: Asia/Seoul
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      GOOGLE_ADS_DEVELOPER_TOKEN: ${{ secrets.GOOGLE_ADS_DEVELOPER_TOKEN }}
+      GOOGLE_ADS_CLIENT_ID: ${{ secrets.GOOGLE_ADS_CLIENT_ID }}
+      GOOGLE_ADS_CLIENT_SECRET: ${{ secrets.GOOGLE_ADS_CLIENT_SECRET }}
+      GOOGLE_ADS_REFRESH_TOKEN: ${{ secrets.GOOGLE_ADS_REFRESH_TOKEN }}
+      GOOGLE_ADS_LOGIN_CUSTOMER_ID: ${{ secrets.GOOGLE_ADS_LOGIN_CUSTOMER_ID || vars.GOOGLE_ADS_LOGIN_CUSTOMER_ID }}
+      GOOGLE_ADS_API_VERSION: ${{ vars.GOOGLE_ADS_API_VERSION || 'v22' }}
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: 의존성 설치
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 필수 시크릿 검증
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=()
+          [[ -z "${DATABASE_URL:-}" ]] && missing+=("DATABASE_URL")
+          [[ -z "${GOOGLE_ADS_DEVELOPER_TOKEN:-}" ]] && missing+=("GOOGLE_ADS_DEVELOPER_TOKEN")
+          [[ -z "${GOOGLE_ADS_CLIENT_ID:-}" ]] && missing+=("GOOGLE_ADS_CLIENT_ID")
+          [[ -z "${GOOGLE_ADS_CLIENT_SECRET:-}" ]] && missing+=("GOOGLE_ADS_CLIENT_SECRET")
+          if (( ${#missing[@]} > 0 )); then
+            echo "누락된 GitHub Secrets: ${missing[*]}"
+            exit 1
+          fi
+          if [[ -z "${GOOGLE_ADS_REFRESH_TOKEN:-}" ]]; then
+            echo "GOOGLE_ADS_REFRESH_TOKEN이 없으면 DB에 저장된 계정별 refresh_token을 사용합니다."
+          fi
+
+      - name: 워크플로우 안내 작성
+        if: always()
+        run: |
+          {
+            echo "## 08 Google Ads 동기화"
+            echo
+            echo "- 목적: Google Ads 캠페인/소재 성과를 대시보드 DB에 저장합니다."
+            echo "- API 버전: ${GOOGLE_ADS_API_VERSION}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Google Ads 수집기 실행
+        shell: bash
+        run: |
+          set -euo pipefail
+          CMD=(python collector_google_ads.py)
+          account_name="${{ inputs.account_name }}"
+          customer_id="${{ inputs.customer_id }}"
+          manager="${{ inputs.manager }}"
+
+          [[ -n "${{ inputs.start_date }}" ]] && CMD+=(--start "${{ inputs.start_date }}")
+          [[ -n "${{ inputs.end_date }}" ]] && CMD+=(--end "${{ inputs.end_date }}")
+          [[ -n "$account_name" ]] && CMD+=(--account_name "$account_name")
+          [[ -n "$customer_id" ]] && CMD+=(--customer_id "$customer_id")
+          [[ -n "$manager" ]] && CMD+=(--manager "$manager")
+
+          printf '실행 명령:'
+          printf ' %q' "${CMD[@]}"
+          printf '\n'
+          "${CMD[@]}"
+
+      - name: DB 적재 결과 확인
+        shell: bash
+        env:
+          INPUT_START_DATE: ${{ inputs.start_date }}
+          INPUT_END_DATE: ${{ inputs.end_date }}
+          INPUT_CUSTOMER_ID: ${{ inputs.customer_id }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          from datetime import date, timedelta
+
+          from sqlalchemy import create_engine, text
+
+          def clean(value: object) -> str:
+              return str(value or "").strip()
+
+          def normalize_customer_id(value: object) -> str:
+              raw = clean(value)
+              if raw.endswith(".0") and raw[:-2].isdigit():
+                  raw = raw[:-2]
+              return "".join(ch for ch in raw if ch.isdigit())
+
+          start = clean(os.getenv("INPUT_START_DATE"))
+          end = clean(os.getenv("INPUT_END_DATE")) or start
+          if not start:
+              yesterday = date.today() - timedelta(days=1)
+              start = end = yesterday.isoformat()
+
+          customer_id = normalize_customer_id(os.getenv("INPUT_CUSTOMER_ID"))
+          if not customer_id:
+              customer_id = normalize_customer_id(os.getenv("GOOGLE_ADS_CUSTOMER_ID"))
+
+          engine = create_engine(os.environ["DATABASE_URL"], pool_pre_ping=True)
+          params = {"start": start, "end": end, "customer_id": customer_id}
+          account_filter = "AND customer_id = :customer_id" if customer_id else ""
+          queries = {
+              "fact_campaign_daily": f"""
+                  SELECT COUNT(*) AS rows,
+                         COALESCE(SUM(cost), 0) AS cost,
+                         COALESCE(SUM(imp), 0) AS impressions
+                  FROM fact_campaign_daily
+                  WHERE dt BETWEEN :start AND :end
+                  {account_filter}
+              """,
+              "fact_ad_daily": f"""
+                  SELECT COUNT(*) AS rows,
+                         COALESCE(SUM(cost), 0) AS cost,
+                         COALESCE(SUM(imp), 0) AS impressions
+                  FROM fact_ad_daily
+                  WHERE dt BETWEEN :start AND :end
+                  {account_filter}
+              """,
+              "dim_campaign": f"""
+                  SELECT COUNT(*) AS rows,
+                         STRING_AGG(DISTINCT COALESCE(campaign_tp, ''), ', ' ORDER BY COALESCE(campaign_tp, '')) AS campaign_types
+                  FROM dim_campaign
+                  WHERE 1=1
+                  {account_filter}
+              """,
+          }
+
+          lines = [
+              "## DB 적재 결과 확인",
+              "",
+              f"- 기간: {start} ~ {end}",
+              f"- customer_id: {customer_id or 'ALL'}",
+          ]
+          with engine.connect() as conn:
+              if customer_id:
+                  account_row = conn.execute(
+                      text("""
+                          SELECT account_name, manager
+                          FROM dim_customer
+                          WHERE customer_id = :customer_id
+                      """),
+                      params,
+                  ).mappings().first()
+                  if account_row:
+                      print(
+                          f"[Google Ads DB] dim_customer account_name={account_row['account_name']} manager={account_row['manager']}",
+                          flush=True,
+                      )
+                      lines.append(f"- `dim_customer` account_name={account_row['account_name']}, manager={account_row['manager']}")
+                  else:
+                      print(f"[Google Ads DB] dim_customer missing customer_id={customer_id}", flush=True)
+                      lines.append(f"- `dim_customer` missing customer_id={customer_id}")
+
+              for table, sql in queries.items():
+                  row = conn.execute(text(sql), params).mappings().one()
+                  if table == "dim_campaign":
+                      print(f"[Google Ads DB] {table} rows={row['rows']} campaign_types={row['campaign_types']}", flush=True)
+                      lines.append(f"- `{table}` rows={row['rows']}, campaign_types={row['campaign_types']}")
+                  else:
+                      print(f"[Google Ads DB] {table} rows={row['rows']} cost={row['cost']} impressions={row['impressions']}", flush=True)
+                      lines.append(f"- `{table}` rows={row['rows']}, cost={row['cost']}, impressions={row['impressions']}")
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fp:
+              fp.write("\n".join(lines) + "\n")
+          PY

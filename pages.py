@@ -34,6 +34,8 @@ NAV_CONFIG = [
     ("설정 및 연결", "설정", ":material/settings:"),
 ]
 
+NAV_LABELS = {page_key: short_label for page_key, short_label, _icon in NAV_CONFIG}
+
 
 def _render_page_header(nav: str, latest: dict | None, f: dict | None = None) -> None:
     subtitle = PAGE_DESCRIPTIONS.get(nav, "")
@@ -106,22 +108,15 @@ def main():
         if st.session_state.get("nav_page") not in nav_items:
             st.session_state["nav_page"] = nav_items[0]
 
-        for page_key, short_label, icon in NAV_CONFIG:
-            if page_key not in nav_items:
-                continue
-            is_active = st.session_state.get("nav_page") == page_key
-            if st.button(
-                short_label,
-                key=f"nav_btn_{page_key}",
-                icon=icon,
-                use_container_width=True,
-                type="primary" if is_active else "secondary",
-            ):
-                if not is_active:
-                    st.session_state["nav_page"] = page_key
-                    st.rerun()
-
-        nav = st.session_state.get("nav_page", nav_items[0])
+        current_nav = st.session_state.get("nav_page", nav_items[0])
+        nav = st.radio(
+            "Navigation",
+            nav_items,
+            index=nav_items.index(current_nav),
+            format_func=lambda page_key: NAV_LABELS.get(page_key, page_key),
+            label_visibility="collapsed",
+        )
+        st.session_state["nav_page"] = nav
 
     f = None
     if nav != "설정 및 연결":

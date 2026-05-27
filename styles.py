@@ -641,12 +641,12 @@ h1, h2, h3, h4, h5, h6 {
   font-size: 14px !important;
 }
 [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {
-  background: var(--nv-bg) !important;
-  box-shadow: var(--nv-shadow-soft) !important;
-  border: 1px solid var(--nv-line) !important;
+  background: var(--nv-primary) !important;
+  box-shadow: none !important;
+  border: 1px solid var(--nv-primary) !important;
 }
 [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) p {
-  color: var(--nv-primary) !important;
+  color: #fff !important;
   font-weight: 800 !important;
 }
 

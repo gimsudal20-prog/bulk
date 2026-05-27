@@ -21,7 +21,7 @@ PAGE_DESCRIPTIONS = {
     "성과 분석 · 키워드": "키워드와 쇼핑 상품소재의 유입, 비용, 전환 효율을 분석합니다.",
     "성과 분석 · 소재": "광고 소재와 랜딩페이지 단위의 성과를 점검합니다.",
     "쇼핑 검색어 분석": "쇼핑 검색어 기준으로 구매와 전환 기회를 찾습니다.",
-    "설정 및 연결": "계정 연결, 동기화, 목표 ROAS 기준을 관리합니다.",
+    "설정 및 연결": "계정 연결, 담당자 연동, 동기화 도구를 관리합니다.",
 }
 
 NAV_CONFIG = [
@@ -117,7 +117,9 @@ def main():
                 use_container_width=True,
                 type="primary" if is_active else "secondary",
             ):
-                st.session_state["nav_page"] = page_key
+                if not is_active:
+                    st.session_state["nav_page"] = page_key
+                    st.rerun()
 
         nav = st.session_state.get("nav_page", nav_items[0])
 

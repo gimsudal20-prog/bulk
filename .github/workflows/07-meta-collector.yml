@@ -1,0 +1,96 @@
+name: 07 Meta Ads 동기화
+run-name: 07 Meta Ads 동기화 | ${{ github.event_name == 'workflow_dispatch' && '수동' || '스케줄' }}
+
+on:
+  schedule:
+    - cron: "20 19 * * *" # KST 04:20
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: "시작일(YYYY-MM-DD). 비우면 어제"
+        required: false
+        default: ""
+        type: string
+      end_date:
+        description: "종료일(YYYY-MM-DD). 비우면 시작일"
+        required: false
+        default: ""
+        type: string
+      account_name:
+        description: "단일 계정명 일부 일치"
+        required: false
+        default: ""
+        type: string
+      ad_account_id:
+        description: "Meta 광고 계정 ID(act_ 포함 가능)"
+        required: false
+        default: ""
+        type: string
+
+concurrency:
+  group: meta-collector
+  cancel-in-progress: false
+
+jobs:
+  run-meta-collector:
+    name: Meta Ads 수집 실행
+    runs-on: ubuntu-latest
+    env:
+      TZ: Asia/Seoul
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
+      META_GRAPH_API_VERSION: ${{ vars.META_GRAPH_API_VERSION || 'v25.0' }}
+      ACCOUNT_MASTER_FILE: account_master.xlsx
+      ACCOUNT_MASTER_XLSX_B64: ${{ secrets.ACCOUNT_MASTER_XLSX_B64 }}
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: 의존성 설치
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 필수 시크릿 검증
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=()
+          [[ -z "${DATABASE_URL:-}" ]] && missing+=("DATABASE_URL")
+          [[ -z "${META_ACCESS_TOKEN:-}" ]] && missing+=("META_ACCESS_TOKEN")
+          if (( ${#missing[@]} > 0 )); then
+            echo "누락된 GitHub Secrets: ${missing[*]}"
+            exit 1
+          fi
+
+      - name: 워크플로우 안내 작성
+        if: always()
+        run: |
+          {
+            echo "## 07 Meta Ads 동기화"
+            echo
+            echo "- 목적: Meta 캠페인/광고 성과를 대시보드 DB에 저장합니다."
+            echo "- API 버전: `${META_GRAPH_API_VERSION}`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Meta 수집기 실행
+        shell: bash
+        run: |
+          set -euo pipefail
+          CMD=(python collector_meta.py)
+          [[ -n "${{ inputs.start_date }}" ]] && CMD+=(--start "${{ inputs.start_date }}")
+          [[ -n "${{ inputs.end_date }}" ]] && CMD+=(--end "${{ inputs.end_date }}")
+          [[ -n "${{ inputs.account_name }}" ]] && CMD+=(--account_name "${{ inputs.account_name }}")
+          [[ -n "${{ inputs.ad_account_id }}" ]] && CMD+=(--ad_account_id "${{ inputs.ad_account_id }}")
+
+          printf '실행 명령:'
+          printf ' %q' "${CMD[@]}"
+          printf '\n'
+          "${CMD[@]}"

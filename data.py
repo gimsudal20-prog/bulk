@@ -393,6 +393,10 @@ def _prepare_accounts_meta_df(df: pd.DataFrame) -> pd.DataFrame:
         c_clean = str(c).replace(" ", "").lower()
         if c_clean in ["커스텀id", "customerid", "customer_id", "id", "고객id"]:
             rename_map[c] = "customer_id"
+        elif c_clean in ["메타광고계정id", "metaadaccountid", "meta_ad_account_id", "adaccountid", "ad_account_id"]:
+            rename_map[c] = "meta_ad_account_id"
+        elif c_clean in ["platform", "플랫폼"]:
+            rename_map[c] = "platform"
         elif c_clean in ["업체명", "accountname", "account_name", "name", "계정명"]:
             rename_map[c] = "account_name"
         elif c_clean in ["담당자", "manager"]:
@@ -402,10 +406,17 @@ def _prepare_accounts_meta_df(df: pd.DataFrame) -> pd.DataFrame:
 
     df = df.rename(columns=rename_map)
 
+    if "customer_id" not in df.columns and "meta_ad_account_id" in df.columns:
+        df["customer_id"] = df["meta_ad_account_id"]
+
     if "customer_id" not in df.columns or "account_name" not in df.columns:
-        raise ValueError("accounts.xlsx에는 '업체명'과 '커스텀 ID' 컬럼이 필요합니다.")
+        raise ValueError("accounts.xlsx에는 '업체명'과 '커스텀 ID' 또는 '메타 광고 계정 ID' 컬럼이 필요합니다.")
 
     df["customer_id"] = _normalize_customer_id_series(df["customer_id"])
+    if "meta_ad_account_id" in df.columns:
+        meta_ids = _normalize_customer_id_series(df["meta_ad_account_id"]).str.replace(r"^act_", "", regex=True)
+        df["customer_id"] = df["customer_id"].where(df["customer_id"].ne(""), meta_ids)
+    df["customer_id"] = df["customer_id"].str.replace(r"^act_", "", regex=True)
     df["account_name"] = df["account_name"].fillna("").astype(str).str.strip()
 
     if "manager" in df.columns:

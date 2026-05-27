@@ -33,6 +33,7 @@ KEY_FILES = [
     'view_budget.py',
     'view_trend.py',
     'collector.py',
+    'collector_meta.py',
     'collector_backfill_recent_sa.py',
     'fast_backfill.py',
     'collector_shop_ext.py',
@@ -41,6 +42,7 @@ KEY_FILES = [
 
 RUNTIME_HELP_SCRIPTS = [
     'collector.py',
+    'collector_meta.py',
     'collector_backfill_recent_sa.py',
     'fast_backfill.py',
     'collector_shop_ext.py',

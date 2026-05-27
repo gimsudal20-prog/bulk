@@ -8,7 +8,7 @@ from datetime import date
 
 # Streamlit page config MUST be the first Streamlit command
 st.set_page_config(
-    page_title="네이버 검색광고 통합 대시보드",
+    page_title="광고 통합 대시보드",
     layout="wide",
     initial_sidebar_state="expanded",
 )

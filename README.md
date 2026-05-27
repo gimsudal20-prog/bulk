@@ -22,6 +22,21 @@ python smoke_check.py --with-help --with-regression
 
 If NAVER omits the PC/mobile split report, the collector now keeps the total as `UNSEGMENTED`. The Streamlit UI displays this bucket as an unsegmented total, so totals remain visible instead of disappearing.
 
+## Meta Ads collection
+
+Meta campaign/ad performance can be synced into the same dashboard tables with:
+
+```bash
+python collector_meta.py --date 2026-05-15 --ad_account_id act_143436265335363
+```
+
+Required environment variables:
+
+- `DATABASE_URL`
+- `META_ACCESS_TOKEN`
+
+For scheduled GitHub Actions, add `META_ACCESS_TOKEN` as a repository secret. Meta accounts can be listed in `account_master.xlsx` with `platform=meta` and `meta_ad_account_id`, or supplied manually with `--ad_account_id`.
+
 ## Retired media placement data
 
 The media placement page and `fact_media_daily` collection path are retired. Existing database data can be checked with:

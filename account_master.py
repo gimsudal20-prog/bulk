@@ -112,7 +112,13 @@ def _canonicalize(df: pd.DataFrame) -> pd.DataFrame:
         "customer_id": "customer_id",
         "id": "customer_id",
         "메타광고계정id": "meta_ad_account_id",
+        "metaadaccountid": "meta_ad_account_id",
+        "meta_ad_account_id": "meta_ad_account_id",
+        "adaccountid": "meta_ad_account_id",
+        "ad_account_id": "meta_ad_account_id",
         "메타픽셀id": "meta_pixel_id",
+        "metapixelid": "meta_pixel_id",
+        "meta_pixel_id": "meta_pixel_id",
         "비즈머니그룹키": "bizmoney_group_key",
         "비즈머니수집방식": "bizmoney_mode",
         "bizmoneymode": "bizmoney_mode",
@@ -163,6 +169,7 @@ def _canonicalize(df: pd.DataFrame) -> pd.DataFrame:
         out["platform"] = "naver"
     else:
         out["platform"] = out["platform"].replace({"": "naver"}).fillna("naver")
+    out["platform"] = out["platform"].map(lambda x: {"메타": "meta", "페이스북": "meta", "facebook": "meta", "네이버": "naver"}.get(_clean_text(x).lower(), _clean_text(x).lower() or "naver"))
 
     if not out["account_name"].astype(str).str.strip().any() and "client_group_name" in out.columns:
         out["account_name"] = out["client_group_name"]

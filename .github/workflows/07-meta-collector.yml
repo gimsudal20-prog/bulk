@@ -159,6 +159,25 @@ jobs:
               f"- customer_id: {account_id or 'ALL'}",
           ]
           with engine.connect() as conn:
+              if account_id:
+                  account_row = conn.execute(
+                      text("""
+                          SELECT account_name, manager
+                          FROM dim_customer
+                          WHERE customer_id = :customer_id
+                      """),
+                      params,
+                  ).mappings().first()
+                  if account_row:
+                      print(
+                          f"[Meta DB] dim_customer account_name={account_row['account_name']} manager={account_row['manager']}",
+                          flush=True,
+                      )
+                      lines.append(f"- `dim_customer` account_name={account_row['account_name']}, manager={account_row['manager']}")
+                  else:
+                      print(f"[Meta DB] dim_customer missing customer_id={account_id}", flush=True)
+                      lines.append(f"- `dim_customer` missing customer_id={account_id}")
+
               for table, sql in queries.items():
                   row = conn.execute(text(sql), params).mappings().one()
                   print(f"[Meta DB] {table} rows={row['rows']} cost={row['cost']} impressions={row['impressions']}", flush=True)

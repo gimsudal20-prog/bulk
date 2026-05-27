@@ -189,6 +189,11 @@ def _ensure_dashboard_account(engine: Engine, account: dict[str, str]) -> None:
         )
 
 
+def _account_matches_id(account: dict[str, str], explicit_id: str) -> bool:
+    wanted = _normalize_ad_account_id(explicit_id)
+    return _normalize_ad_account_id(account.get("id")) == wanted
+
+
 def _build_campaign_dim_rows(customer_id: str, campaigns: Iterable[dict[str, Any]], insights: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     rows: dict[str, dict[str, Any]] = {}
     for item in campaigns:
@@ -438,13 +443,21 @@ def _load_accounts(args: argparse.Namespace) -> list[dict[str, str]]:
     accounts = load_meta_accounts(file_path=args.account_master)
     explicit_id = _clean_text(args.ad_account_id or os.getenv("META_AD_ACCOUNT_ID"))
     if explicit_id:
-        accounts = [{
-            "id": explicit_id,
-            "name": _clean_text(args.account_name) or _normalize_ad_account_id(explicit_id),
-            "manager": "",
-            "group_name": "",
-            "pixel_id": "",
-        }]
+        matched = next((account for account in accounts if _account_matches_id(account, explicit_id)), None)
+        if matched:
+            account = dict(matched)
+            if args.account_name:
+                account["name"] = _clean_text(args.account_name)
+            account["id"] = explicit_id
+            accounts = [account]
+        else:
+            accounts = [{
+                "id": explicit_id,
+                "name": _clean_text(args.account_name) or _normalize_ad_account_id(explicit_id),
+                "manager": "",
+                "group_name": "",
+                "pixel_id": "",
+            }]
     if args.account_name and not explicit_id:
         token = args.account_name.strip().lower()
         accounts = [a for a in accounts if token in str(a.get("name", "")).lower()]

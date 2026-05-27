@@ -264,7 +264,6 @@ def load_meta_accounts(file_path: Optional[str] = None) -> List[Dict[str, str]]:
     df = load_account_master_df(file_path=file_path, include_disabled=False)
     if df.empty:
         return []
-    df = df[df["platform"].str.lower().eq("meta")].copy()
     df = df[df["meta_ad_account_id"].astype(str).str.strip().ne("")].copy()
     return [{
         "id": str(r["meta_ad_account_id"]).strip(),

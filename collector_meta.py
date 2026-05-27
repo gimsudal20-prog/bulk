@@ -449,8 +449,15 @@ def _load_accounts(args: argparse.Namespace) -> list[dict[str, str]]:
             if args.account_name:
                 account["name"] = _clean_text(args.account_name)
             account["id"] = explicit_id
+            log(
+                "[Meta] account master match "
+                f"id={_normalize_ad_account_id(explicit_id)} "
+                f"name={_clean_text(account.get('name')) or '(blank)'} "
+                f"manager={_clean_text(account.get('manager')) or '(blank)'}"
+            )
             accounts = [account]
         else:
+            log(f"[Meta] account master match not found id={_normalize_ad_account_id(explicit_id)}")
             accounts = [{
                 "id": explicit_id,
                 "name": _clean_text(args.account_name) or _normalize_ad_account_id(explicit_id),

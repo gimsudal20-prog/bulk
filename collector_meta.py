@@ -276,7 +276,7 @@ def _load_db_meta_accounts(engine: Engine) -> list[dict[str, str]]:
             rows = conn.execute(
                 text(
                     """
-                    SELECT account_label, account_id, customer_id
+                    SELECT account_label, account_id, customer_id, access_token
                     FROM platform_credentials
                     WHERE LOWER(platform) IN ('meta', 'facebook', 'facebook_ads')
                       AND COALESCE(is_active, TRUE) = TRUE
@@ -300,6 +300,7 @@ def _load_db_meta_accounts(engine: Engine) -> list[dict[str, str]]:
                 "manager": "",
                 "group_name": "",
                 "pixel_id": "",
+                "access_token": _clean_text(row.get("access_token")),
             }
         )
     return accounts
@@ -331,11 +332,12 @@ def _ensure_platform_connections_schema(engine: Engine) -> None:
         conn.execute(text("CREATE INDEX IF NOT EXISTS idx_platform_credentials_customer_id ON platform_credentials(customer_id)"))
 
 
-def _remember_db_meta_account(engine: Engine, account: dict[str, str]) -> None:
+def _remember_db_meta_account(engine: Engine, account: dict[str, str], access_token: str = "") -> None:
     account_id = _normalize_ad_account_id(account.get("id"))
     account_name = _clean_text(account.get("name"))
     if not account_id or not account_name:
         return
+    token = _clean_text(access_token)
     _ensure_platform_connections_schema(engine)
     with engine.begin() as conn:
         existing_id = conn.execute(
@@ -357,22 +359,26 @@ def _remember_db_meta_account(engine: Engine, account: dict[str, str]) -> None:
                     """
                     UPDATE platform_credentials
                        SET account_label = :account_label,
+                           access_token = CASE
+                               WHEN :access_token <> '' THEN :access_token
+                               ELSE access_token
+                           END,
                            is_active = TRUE,
                            updated_at = NOW()
                      WHERE id = :id
                     """
                 ),
-                {"id": existing_id, "account_label": account_name},
+                {"id": existing_id, "account_label": account_name, "access_token": token},
             )
         else:
             conn.execute(
                 text(
                     """
-                    INSERT INTO platform_credentials (platform, account_label, account_id, is_active, updated_at)
-                    VALUES ('meta', :account_label, :account_id, TRUE, NOW())
+                    INSERT INTO platform_credentials (platform, account_label, account_id, access_token, is_active, updated_at)
+                    VALUES ('meta', :account_label, :account_id, :access_token, TRUE, NOW())
                     """
                 ),
-                {"account_label": account_name, "account_id": account_id},
+                {"account_label": account_name, "account_id": account_id, "access_token": token},
             )
 
 
@@ -689,9 +695,7 @@ def main() -> int:
     if end < start:
         raise SystemExit("--end must be on or after --start")
 
-    access_token = _clean_text(os.getenv("META_ACCESS_TOKEN"))
-    if not access_token:
-        raise SystemExit("META_ACCESS_TOKEN 환경변수가 필요합니다.")
+    global_access_token = _clean_text(os.getenv("META_ACCESS_TOKEN"))
 
     db_url = _clean_text(os.getenv("DATABASE_URL"))
     if not db_url:
@@ -705,18 +709,34 @@ def main() -> int:
     if not accounts:
         raise SystemExit("수집할 Meta 계정이 없습니다. 설정 > 플랫폼 계정 연결, config/meta_accounts.csv, account_master.xlsx의 meta_ad_account_id 또는 --ad_account_id를 확인하세요.")
 
-    client = MetaApiClient(access_token=access_token, api_version=args.api_version)
-
     explicit_id = _clean_text(args.ad_account_id or os.getenv("META_AD_ACCOUNT_ID"))
-    if explicit_id:
+    if explicit_id and global_access_token:
         for account in accounts:
             if _account_matches_id(account, explicit_id):
-                _remember_db_meta_account(engine, account)
+                _remember_db_meta_account(engine, account, access_token=global_access_token)
                 break
+
+    has_account_tokens = any(_clean_text(account.get("access_token")) for account in accounts)
+    allow_global_token_fallback = bool(explicit_id) or not has_account_tokens
+    if not global_access_token and not has_account_tokens:
+        raise SystemExit("META_ACCESS_TOKEN 환경변수 또는 플랫폼 계정별 access_token이 필요합니다.")
 
     results = []
     failures = 0
+    skipped = 0
     for account in accounts:
+        account_token = _clean_text(account.get("access_token"))
+        if explicit_id and global_access_token and _account_matches_id(account, explicit_id):
+            account_token = global_access_token
+        if not account_token and allow_global_token_fallback:
+            account_token = global_access_token
+        if not account_token:
+            skipped += 1
+            account_label = account.get("name") or account.get("id")
+            log(f"[Meta] SKIP {account_label}: 계정별 Meta access_token이 없어 건너뜁니다.")
+            results.append({"account": account_label, "status": "skipped", "reason": "missing_account_access_token"})
+            continue
+        client = MetaApiClient(access_token=account_token, api_version=args.api_version)
         try:
             results.append(collect_account(engine, client, account, start, end))
         except Exception as exc:
@@ -726,8 +746,12 @@ def main() -> int:
             results.append({"account": account_label, "status": "error", "reason": str(exc)})
 
     ok_count = sum(1 for row in results if row.get("status") == "ok")
-    log(f"[Meta] summary ok={ok_count} failed={failures} total={len(results)}")
-    return 1 if failures else 0
+    log(f"[Meta] summary ok={ok_count} failed={failures} skipped={skipped} total={len(results)}")
+    if failures:
+        return 1
+    if ok_count == 0:
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

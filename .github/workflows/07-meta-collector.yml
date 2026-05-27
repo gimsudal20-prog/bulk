@@ -17,19 +17,19 @@ on:
         default: ""
         type: string
       account_name:
-        description: "대시보드 계정명. 비우면 핵이득마켓"
+        description: "대시보드 계정명. 비우면 등록된 활성 Meta 계정"
         required: false
-        default: "핵이득마켓"
+        default: ""
         type: string
       ad_account_id:
-        description: "Meta 광고 계정 ID(act_ 포함 가능)"
+        description: "Meta 광고 계정 ID(act_ 포함 가능). 비우면 등록된 활성 Meta 계정"
         required: false
-        default: "143436265335363"
+        default: ""
         type: string
       manager:
-        description: "대시보드 담당자명. 비우면 승훈"
+        description: "대시보드 담당자명. 신규 명시 계정에만 사용"
         required: false
-        default: "승훈"
+        default: ""
         type: string
 
 concurrency:

@@ -253,6 +253,8 @@ def _build_campaign_type_filter(column_name: str, type_sel: tuple, param_prefix:
         "파워컨텐츠": "POWER_CONTENTS",
         "브랜드검색": "BRAND_SEARCH",
         "플레이스": "PLACE",
+        "메타": "메타",
+        "META": "메타",
     }
     db_types = [rev_map.get(t, t) for t in normalized_types]
     where_sql, params = _build_in_filter(f"c.{safe_column}", db_types, param_prefix)
@@ -581,12 +583,13 @@ def get_campaign_type_options(dim_campaign: pd.DataFrame) -> list:
 
     mapping = {"WEB_SITE": "파워링크", "SHOPPING": "쇼핑검색", "POWER_CONTENT": "파워컨텐츠", "POWER_CONTENTS": "파워컨텐츠", "BRAND_SEARCH": "브랜드검색", "PLACE": "플레이스"}
     raw_opts = [str(x) for x in dim_campaign[col_name].dropna().unique() if str(x).strip()]
+    mapping["META"] = "메타"
     opts = list(set([mapping.get(x.upper(), x) for x in raw_opts]))
     return sorted(opts) if opts else ["파워링크", "쇼핑검색"]
 
 def _map_campaign_types(df: pd.DataFrame, col_name: str) -> pd.DataFrame:
     if not df.empty and col_name in df.columns:
-        mapping = {"WEB_SITE": "파워링크", "SHOPPING": "쇼핑검색", "POWER_CONTENT": "파워컨텐츠", "POWER_CONTENTS": "파워컨텐츠", "BRAND_SEARCH": "브랜드검색", "PLACE": "플레이스"}
+        mapping = {"WEB_SITE": "파워링크", "SHOPPING": "쇼핑검색", "POWER_CONTENT": "파워컨텐츠", "POWER_CONTENTS": "파워컨텐츠", "BRAND_SEARCH": "브랜드검색", "PLACE": "플레이스", "META": "메타"}
         df[col_name] = df[col_name].apply(lambda x: mapping.get(str(x).upper(), x) if pd.notna(x) else x)
     return df
 

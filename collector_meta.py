@@ -204,7 +204,7 @@ def _build_campaign_dim_rows(customer_id: str, campaigns: Iterable[dict[str, Any
             "customer_id": customer_id,
             "campaign_id": campaign_id,
             "campaign_name": _clean_text(item.get("name")) or campaign_id,
-            "campaign_tp": _clean_text(item.get("objective")) or "META",
+            "campaign_tp": "메타",
             "status": _clean_text(item.get("effective_status")) or _clean_text(item.get("status")),
         }
     for item in insights:
@@ -214,7 +214,7 @@ def _build_campaign_dim_rows(customer_id: str, campaigns: Iterable[dict[str, Any
                 "customer_id": customer_id,
                 "campaign_id": campaign_id,
                 "campaign_name": _clean_text(item.get("campaign_name")) or campaign_id,
-                "campaign_tp": "META",
+                "campaign_tp": "메타",
                 "status": "",
             }
     return list(rows.values())

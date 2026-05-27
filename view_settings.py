@@ -69,6 +69,22 @@ def _dashboard_accounts_df(_engine) -> pd.DataFrame:
     return out[out["customer_id"] != ""].drop_duplicates("customer_id", keep="last").sort_values(["manager", "account_name"]).reset_index(drop=True)
 
 
+def _resolve_dashboard_customer_id(engine, account_label: str, customer_id: str, account_id: str) -> str:
+    explicit_customer_id = _clean_customer_id(customer_id)
+    if explicit_customer_id:
+        return explicit_customer_id
+
+    clean_label = _clean_text(account_label).casefold()
+    if clean_label:
+        accounts = _dashboard_accounts_df(engine)
+        if not accounts.empty:
+            matched = accounts[accounts["account_name"].astype(str).str.strip().str.casefold() == clean_label]
+            if not matched.empty:
+                return _clean_customer_id(matched.iloc[0]["customer_id"])
+
+    return _clean_customer_id(account_id)
+
+
 def _platform_connections_editor_df(engine) -> pd.DataFrame:
     df = get_platform_credentials(engine)
     cols = ["id", "platform", "account_label", "manager", "customer_id", "account_id", "is_active"]
@@ -112,6 +128,7 @@ def _sync_connection_manager_to_customer(engine, account_label: str, customer_id
                    SET account_name = :account_name,
                        manager = :manager
                  WHERE REGEXP_REPLACE(CAST(customer_id AS TEXT), '\\.0+$', '') = :customer_id
+                    OR LOWER(TRIM(CAST(account_name AS TEXT))) = LOWER(:account_name)
                 """
             ),
             {"customer_id": customer_id, "account_name": clean_label, "manager": clean_manager},
@@ -125,6 +142,7 @@ def _sync_connection_manager_to_customer(engine, account_label: str, customer_id
                     SELECT 1
                     FROM dim_customer
                     WHERE REGEXP_REPLACE(CAST(customer_id AS TEXT), '\\.0+$', '') = :customer_id
+                       OR LOWER(TRIM(CAST(account_name AS TEXT))) = LOWER(:account_name)
                 )
                 """
             ),
@@ -167,6 +185,7 @@ def _save_platform_connections(engine, edited_df: pd.DataFrame) -> int:
             continue
         if not platform or not account_label or not account_id:
             raise ValueError("플랫폼, 대시보드 계정명, 플랫폼 계정 ID는 모두 입력해야 합니다.")
+        resolved_customer_id = _resolve_dashboard_customer_id(engine, account_label, dashboard_customer_id, account_id)
         upsert_platform_credential(
             engine,
             {
@@ -174,12 +193,12 @@ def _save_platform_connections(engine, edited_df: pd.DataFrame) -> int:
                 "platform": platform,
                 "account_label": account_label,
                 "manager": manager,
-                "customer_id": _credential_customer_id(dashboard_customer_id),
+                "customer_id": _credential_customer_id(resolved_customer_id),
                 "account_id": account_id,
                 "is_active": bool(row.get("is_active", True)),
             },
         )
-        _sync_connection_manager_to_customer(engine, account_label, dashboard_customer_id or account_id, manager)
+        _sync_connection_manager_to_customer(engine, account_label, resolved_customer_id, manager)
         count += 1
     return count
 

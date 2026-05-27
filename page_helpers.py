@@ -28,6 +28,7 @@ BUILD_TAG = os.getenv("APP_BUILD", "")
 TOPUP_STATIC_THRESHOLD = _env_int("TOPUP_STATIC_THRESHOLD", 50000)
 TOPUP_AVG_DAYS = _env_int("TOPUP_AVG_DAYS", 3)
 TOPUP_DAYS_COVER = _env_int("TOPUP_DAYS_COVER", 2)
+DASHBOARD_DATA_CACHE_TTL = _env_int("DASHBOARD_DATA_CACHE_TTL", 300)
 
 
 def _normalize_customer_id_value_for_page(value) -> str:
@@ -73,7 +74,7 @@ def _all_customer_ids(meta: pd.DataFrame) -> list:
     s = _customer_id_int_series_for_page(meta["customer_id"])
     return sorted(s.drop_duplicates().tolist())
 
-@st.cache_data(ttl=43200, max_entries=8, show_spinner=False)
+@st.cache_data(ttl=DASHBOARD_DATA_CACHE_TTL, max_entries=8, show_spinner=False)
 def _build_filter_maps(meta: pd.DataFrame) -> Dict:
     if meta is None or meta.empty:
         return {

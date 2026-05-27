@@ -44,6 +44,9 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw in {"1", "true", "yes", "y", "on"}
 
 
+DASHBOARD_DATA_CACHE_TTL = _env_int("DASHBOARD_DATA_CACHE_TTL", 300, min_value=30)
+
+
 def _ensure_dashboard_indexes(engine) -> None:
     if not _env_bool("DASHBOARD_ENSURE_INDEXES", True):
         return
@@ -128,7 +131,7 @@ def _validate_sql_identifier(name: str, label: str = "identifier") -> str:
         raise ValueError(f"유효하지 않은 SQL {label}: {name}")
     return value
 
-@st.cache_data(ttl=43200, max_entries=20, show_spinner=False)
+@st.cache_data(ttl=DASHBOARD_DATA_CACHE_TTL, max_entries=20, show_spinner=False)
 def get_table_columns(_engine, table_name: str) -> list:
     safe_table_name = _validate_sql_identifier(table_name, "table name")
     for attempt in range(3):
@@ -156,7 +159,7 @@ def get_table_columns(_engine, table_name: str) -> list:
         except Exception:
             return []
 
-@st.cache_data(ttl=43200, max_entries=30, show_spinner=False)
+@st.cache_data(ttl=DASHBOARD_DATA_CACHE_TTL, max_entries=30, show_spinner=False)
 def sql_read(_engine, query: str, params: dict = None) -> pd.DataFrame:
     last_error = None
     for attempt in range(3):
@@ -499,7 +502,7 @@ def seed_from_accounts_xlsx(engine, df=None, file_buffer=None):
         return {"meta": 0}
 
 
-@st.cache_data(ttl=43200, max_entries=30, show_spinner=False)
+@st.cache_data(ttl=DASHBOARD_DATA_CACHE_TTL, max_entries=30, show_spinner=False)
 def get_meta(_engine) -> pd.DataFrame:
     if not table_exists(_engine, "dim_customer"):
         return pd.DataFrame()
@@ -544,7 +547,7 @@ def get_meta(_engine) -> pd.DataFrame:
             df["operating_weekdays"] = DEFAULT_OPERATING_WEEKDAYS
     return df
 
-@st.cache_data(ttl=43200, max_entries=30, show_spinner=False)
+@st.cache_data(ttl=DASHBOARD_DATA_CACHE_TTL, max_entries=30, show_spinner=False)
 def load_dim_campaign(_engine) -> pd.DataFrame:
     if not table_exists(_engine, "dim_campaign"):
         return pd.DataFrame()
@@ -563,7 +566,7 @@ def load_dim_campaign(_engine) -> pd.DataFrame:
         df["customer_id"] = _normalize_customer_id_series(df["customer_id"])
     return df
 
-@st.cache_data(ttl=43200, max_entries=30, show_spinner=False)
+@st.cache_data(ttl=DASHBOARD_DATA_CACHE_TTL, max_entries=30, show_spinner=False)
 def get_campaign_type_options_cached(_engine) -> list:
     """엔진 기준으로 캠페인 유형 옵션을 캐시해서 반환한다."""
     dim_campaign = load_dim_campaign(_engine)
@@ -587,7 +590,7 @@ def _map_campaign_types(df: pd.DataFrame, col_name: str) -> pd.DataFrame:
         df[col_name] = df[col_name].apply(lambda x: mapping.get(str(x).upper(), x) if pd.notna(x) else x)
     return df
 
-@st.cache_data(ttl=43200, max_entries=30, show_spinner=False)
+@st.cache_data(ttl=DASHBOARD_DATA_CACHE_TTL, max_entries=30, show_spinner=False)
 def get_latest_dates(_engine) -> dict:
     dates = {}
     for tbl in ["fact_campaign_daily", "fact_adgroup_daily", "fact_keyword_daily", "fact_ad_daily", "fact_shopping_query_daily"]:
@@ -1126,7 +1129,7 @@ def update_customer_operating_weekdays(_engine, cid: int, weekdays: str):
         st.error(f"운영 요일 업데이트 실패: {e}")
 
 
-@st.cache_data(ttl=43200, max_entries=30, show_spinner=False)
+@st.cache_data(ttl=DASHBOARD_DATA_CACHE_TTL, max_entries=30, show_spinner=False)
 def query_campaign_off_log(_engine, d1: date, d2: date, cids: tuple) -> pd.DataFrame:
     if not table_exists(_engine, "fact_campaign_off_log"):
         return pd.DataFrame()
@@ -1139,7 +1142,7 @@ def query_campaign_off_log(_engine, d1: date, d2: date, cids: tuple) -> pd.DataF
         {"d1": str(d1), "d2": str(d2), **cid_params},
     )
 
-@st.cache_data(ttl=43200, max_entries=60, show_spinner=False)
+@st.cache_data(ttl=DASHBOARD_DATA_CACHE_TTL, max_entries=60, show_spinner=False)
 def get_entity_totals(_engine, entity: str, d1: date, d2: date, cids: tuple, type_sel: tuple) -> dict:
     if not table_exists(_engine, f"fact_{entity}_daily"):
         return {}
@@ -1177,7 +1180,7 @@ def get_entity_totals(_engine, entity: str, d1: date, d2: date, cids: tuple, typ
     row["tot_sales"] = row.get("tot_sales", 0)
     return _compute_total_ratio_metrics(row)
 
-@st.cache_data(ttl=43200, max_entries=40, show_spinner=False)
+@st.cache_data(ttl=DASHBOARD_DATA_CACHE_TTL, max_entries=40, show_spinner=False)
 def query_campaign_bundle(_engine, d1: date, d2: date, cids: tuple, type_sel: tuple, topn_cost: int = 0) -> pd.DataFrame:
     if not table_exists(_engine, "fact_campaign_daily"):
         return pd.DataFrame()
@@ -1215,7 +1218,7 @@ def query_campaign_bundle(_engine, d1: date, d2: date, cids: tuple, type_sel: tu
     df = sql_read(_engine, sql, {"d1": str(d1), "d2": str(d2), **cid_params, **type_params})
     return _finalize_bundle_df(df, "campaign_type")
 
-@st.cache_data(ttl=43200, max_entries=40, show_spinner=False)
+@st.cache_data(ttl=DASHBOARD_DATA_CACHE_TTL, max_entries=40, show_spinner=False)
 def query_keyword_bundle(_engine, d1: date, d2: date, cids, type_sel: tuple, topn_cost: int = 0, include_dt: bool = False) -> pd.DataFrame:
     if not table_exists(_engine, "fact_keyword_daily"):
         return pd.DataFrame()
@@ -1255,7 +1258,7 @@ def query_keyword_bundle(_engine, d1: date, d2: date, cids, type_sel: tuple, top
     df = sql_read(_engine, sql, {"d1": str(d1), "d2": str(d2), **cid_params, **type_params})
     return _finalize_bundle_df(df, "campaign_type_label")
 
-@st.cache_data(ttl=43200, max_entries=40, show_spinner=False)
+@st.cache_data(ttl=DASHBOARD_DATA_CACHE_TTL, max_entries=40, show_spinner=False)
 def query_ad_bundle(_engine, d1: date, d2: date, cids: tuple, type_sel: tuple, topn_cost: int = 0, top_k: int = 50, include_dt: bool = False) -> pd.DataFrame:
     if not table_exists(_engine, "fact_ad_daily"):
         return pd.DataFrame()
@@ -1296,7 +1299,7 @@ def query_ad_bundle(_engine, d1: date, d2: date, cids: tuple, type_sel: tuple, t
     df = sql_read(_engine, sql, {"d1": str(d1), "d2": str(d2), **cid_params, **type_params})
     return _finalize_bundle_df(df, "campaign_type_label")
 
-@st.cache_data(ttl=43200, max_entries=40, show_spinner=False)
+@st.cache_data(ttl=DASHBOARD_DATA_CACHE_TTL, max_entries=40, show_spinner=False)
 def query_campaign_timeseries(_engine, d1: date, d2: date, cids: tuple, type_sel: tuple) -> pd.DataFrame:
     if not table_exists(_engine, "fact_campaign_daily"):
         return pd.DataFrame()
@@ -1395,7 +1398,7 @@ def query_overview_report_source_cache(_engine, source_kind: str, d1: date, d2: 
         {"d1": str(d1), "d2": str(d2), "source_kind": str(source_kind), **cid_params, **type_params},
     )
 
-@st.cache_data(ttl=43200, max_entries=40, show_spinner=False)
+@st.cache_data(ttl=DASHBOARD_DATA_CACHE_TTL, max_entries=40, show_spinner=False)
 def query_shopping_search_terms(_engine, d1: date, d2: date, cids: tuple) -> pd.DataFrame:
     if not table_exists(_engine, "fact_shopping_query_daily"):
         return pd.DataFrame()

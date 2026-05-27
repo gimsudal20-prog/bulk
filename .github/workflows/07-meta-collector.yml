@@ -47,9 +47,6 @@ jobs:
       META_GRAPH_API_VERSION: ${{ vars.META_GRAPH_API_VERSION || 'v25.0' }}
       ACCOUNT_MASTER_FILE: account_master.xlsx
       ACCOUNT_MASTER_XLSX_B64: ${{ secrets.ACCOUNT_MASTER_XLSX_B64 }}
-      META_DEFAULT_AD_ACCOUNT_ID: "143436265335363"
-      META_DEFAULT_ACCOUNT_NAME: "핵이득마켓"
-      META_DEFAULT_MANAGER: "승훈"
 
     steps:
       - name: 코드 체크아웃
@@ -96,9 +93,6 @@ jobs:
           account_name="${{ inputs.account_name }}"
           ad_account_id="${{ inputs.ad_account_id }}"
           manager="${{ inputs.manager }}"
-          account_name="${account_name:-$META_DEFAULT_ACCOUNT_NAME}"
-          ad_account_id="${ad_account_id:-$META_DEFAULT_AD_ACCOUNT_ID}"
-          manager="${manager:-$META_DEFAULT_MANAGER}"
 
           [[ -n "${{ inputs.start_date }}" ]] && CMD+=(--start "${{ inputs.start_date }}")
           [[ -n "${{ inputs.end_date }}" ]] && CMD+=(--end "${{ inputs.end_date }}")
@@ -117,7 +111,6 @@ jobs:
           INPUT_START_DATE: ${{ inputs.start_date }}
           INPUT_END_DATE: ${{ inputs.end_date }}
           INPUT_AD_ACCOUNT_ID: ${{ inputs.ad_account_id }}
-          META_DEFAULT_AD_ACCOUNT_ID: ${{ env.META_DEFAULT_AD_ACCOUNT_ID }}
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -143,7 +136,7 @@ jobs:
               yesterday = date.today() - timedelta(days=1)
               start = end = yesterday.isoformat()
 
-          account_id = normalize_account_id(os.getenv("INPUT_AD_ACCOUNT_ID")) or normalize_account_id(os.getenv("META_DEFAULT_AD_ACCOUNT_ID"))
+          account_id = normalize_account_id(os.getenv("INPUT_AD_ACCOUNT_ID"))
           if not account_id:
               account_id = normalize_account_id(os.getenv("META_AD_ACCOUNT_ID"))
 
@@ -167,11 +160,12 @@ jobs:
                   WHERE dt BETWEEN :start AND :end
                   {account_filter}
               """,
-              "dim_campaign": """
+              "dim_campaign": f"""
                   SELECT COUNT(*) AS rows,
                          STRING_AGG(DISTINCT COALESCE(campaign_tp, ''), ', ' ORDER BY COALESCE(campaign_tp, '')) AS campaign_types
                   FROM dim_campaign
-                  WHERE customer_id = :customer_id
+                  WHERE 1=1
+                  {account_filter}
               """,
           }
 

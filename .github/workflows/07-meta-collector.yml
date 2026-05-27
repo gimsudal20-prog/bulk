@@ -26,6 +26,11 @@ on:
         required: false
         default: ""
         type: string
+      manager:
+        description: "대시보드 담당자명(단일 계정 수집 시)"
+        required: false
+        default: ""
+        type: string
 
 concurrency:
   group: meta-collector
@@ -89,6 +94,7 @@ jobs:
           [[ -n "${{ inputs.end_date }}" ]] && CMD+=(--end "${{ inputs.end_date }}")
           [[ -n "${{ inputs.account_name }}" ]] && CMD+=(--account_name "${{ inputs.account_name }}")
           [[ -n "${{ inputs.ad_account_id }}" ]] && CMD+=(--ad_account_id "${{ inputs.ad_account_id }}")
+          [[ -n "${{ inputs.manager }}" ]] && CMD+=(--manager "${{ inputs.manager }}")
 
           printf '실행 명령:'
           printf ' %q' "${CMD[@]}"

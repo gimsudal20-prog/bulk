@@ -6,7 +6,7 @@ Required env:
 - META_ACCESS_TOKEN
 
 Account sources:
-- account_master.xlsx rows where platform=meta and meta_ad_account_id is filled
+- account_master.xlsx rows where meta_ad_account_id is filled
 - or --ad_account_id / META_AD_ACCOUNT_ID for a single account
 """
 from __future__ import annotations
@@ -442,12 +442,15 @@ def collect_account(engine: Engine, client: MetaApiClient, account: dict[str, st
 def _load_accounts(args: argparse.Namespace) -> list[dict[str, str]]:
     accounts = load_meta_accounts(file_path=args.account_master)
     explicit_id = _clean_text(args.ad_account_id or os.getenv("META_AD_ACCOUNT_ID"))
+    explicit_manager = _clean_text(args.manager or os.getenv("META_MANAGER"))
     if explicit_id:
         matched = next((account for account in accounts if _account_matches_id(account, explicit_id)), None)
         if matched:
             account = dict(matched)
             if args.account_name:
                 account["name"] = _clean_text(args.account_name)
+            if explicit_manager:
+                account["manager"] = explicit_manager
             account["id"] = explicit_id
             log(
                 "[Meta] account master match "
@@ -461,7 +464,7 @@ def _load_accounts(args: argparse.Namespace) -> list[dict[str, str]]:
             accounts = [{
                 "id": explicit_id,
                 "name": _clean_text(args.account_name) or _normalize_ad_account_id(explicit_id),
-                "manager": "",
+                "manager": explicit_manager,
                 "group_name": "",
                 "pixel_id": "",
             }]
@@ -483,6 +486,7 @@ def main() -> int:
     parser.add_argument("--account_name", default="", help="filter by account name substring")
     parser.add_argument("--account_names", default="", help="comma-separated exact account names")
     parser.add_argument("--ad_account_id", default="", help="single Meta ad account id, with or without act_")
+    parser.add_argument("--manager", default="", help="dashboard manager name for explicit Meta ad account runs")
     parser.add_argument("--account-master", default=os.getenv("ACCOUNT_MASTER_FILE", "account_master.xlsx"), help="account master workbook path")
     parser.add_argument("--api-version", default=os.getenv("META_GRAPH_API_VERSION", DEFAULT_API_VERSION), help="Meta Graph API version")
     args = parser.parse_args()

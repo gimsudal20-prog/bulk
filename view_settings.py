@@ -86,18 +86,52 @@ def _collect_changed_roas_rows(original_df: pd.DataFrame, edited_df: pd.DataFram
 
 def _platform_connections_editor_df(engine) -> pd.DataFrame:
     df = get_platform_credentials(engine)
-    cols = ["id", "platform", "account_label", "account_id", "is_active"]
+    cols = ["id", "platform", "account_label", "manager", "account_id", "is_active"]
     if df is None or df.empty:
         return pd.DataFrame(columns=cols)
     for col in cols:
         if col not in df.columns:
-            df[col] = "" if col != "is_active" else True
+            df[col] = "미배정" if col == "manager" else ("" if col != "is_active" else True)
     out = df[cols].copy()
     out["platform"] = out["platform"].fillna("").astype(str)
     out["account_label"] = out["account_label"].fillna("").astype(str)
+    out["manager"] = out["manager"].fillna("미배정").astype(str).str.strip()
+    out.loc[out["manager"].isin(["", "nan", "None", "NaN"]), "manager"] = "미배정"
     out["account_id"] = out["account_id"].fillna("").astype(str)
     out["is_active"] = out["is_active"].fillna(True).astype(bool)
     return out.sort_values(["platform", "account_label", "account_id"]).reset_index(drop=True)
+
+
+def _sync_connection_manager_to_customer(engine, account_label: str, account_id: str, manager: str) -> None:
+    customer_id = str(account_id or "").strip()
+    if customer_id.startswith("act_"):
+        customer_id = customer_id[4:]
+    if customer_id.endswith(".0") and customer_id[:-2].isdigit():
+        customer_id = customer_id[:-2]
+    if not customer_id:
+        return
+
+    clean_label = str(account_label or "").strip() or customer_id
+    clean_manager = str(manager or "").strip() or "미배정"
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE IF NOT EXISTS dim_customer (customer_id TEXT PRIMARY KEY, account_name TEXT, manager TEXT)"
+            )
+        )
+        conn.execute(text("ALTER TABLE dim_customer ADD COLUMN IF NOT EXISTS manager TEXT"))
+        conn.execute(
+            text(
+                """
+                INSERT INTO dim_customer (customer_id, account_name, manager)
+                VALUES (:customer_id, :account_name, :manager)
+                ON CONFLICT (customer_id) DO UPDATE SET
+                    account_name = EXCLUDED.account_name,
+                    manager = EXCLUDED.manager
+                """
+            ),
+            {"customer_id": customer_id, "account_name": clean_label, "manager": clean_manager},
+        )
 
 
 def _save_platform_connections(engine, edited_df: pd.DataFrame) -> int:
@@ -107,6 +141,7 @@ def _save_platform_connections(engine, edited_df: pd.DataFrame) -> int:
     for _, row in edited_df.iterrows():
         platform = str(row.get("platform", "") or "").strip().lower()
         account_label = str(row.get("account_label", "") or "").strip()
+        manager = str(row.get("manager", "") or "").strip() or "미배정"
         account_id = str(row.get("account_id", "") or "").strip()
         if not platform and not account_label and not account_id:
             continue
@@ -118,10 +153,12 @@ def _save_platform_connections(engine, edited_df: pd.DataFrame) -> int:
                 "id": None if pd.isna(row.get("id")) or str(row.get("id", "")).strip() == "" else int(row.get("id")),
                 "platform": platform,
                 "account_label": account_label,
+                "manager": manager,
                 "account_id": account_id,
                 "is_active": bool(row.get("is_active", True)),
             },
         )
+        _sync_connection_manager_to_customer(engine, account_label, account_id, manager)
         count += 1
     return count
 
@@ -252,6 +289,7 @@ def page_settings(engine) -> None:
                 "id": None,
                 "platform": st.column_config.SelectboxColumn("플랫폼", options=["naver", "meta", "google"], required=True),
                 "account_label": st.column_config.TextColumn("대시보드 계정명", required=True, help="예: 핵이득마켓"),
+                "manager": st.column_config.TextColumn("담당자", required=True, help="예: 승훈"),
                 "account_id": st.column_config.TextColumn("플랫폼 계정 ID", required=True, help="Meta는 광고계정 ID, Google은 고객 ID"),
                 "is_active": st.column_config.CheckboxColumn("수집", default=True),
             },

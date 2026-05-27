@@ -177,7 +177,7 @@ def _ensure_dashboard_account(engine: Engine, account: dict[str, str]) -> None:
     if not customer_id:
         return
     account_name = _clean_text(account.get("name")) or customer_id
-    manager = _clean_text(account.get("manager")) or "미배정"
+    manager = _clean_text(account.get("manager"))
     with engine.begin() as conn:
         conn.execute(
             text(
@@ -186,10 +186,14 @@ def _ensure_dashboard_account(engine: Engine, account: dict[str, str]) -> None:
                 VALUES (:customer_id, :account_name, :manager, 0, '0,1,2,3,4,5,6')
                 ON CONFLICT (customer_id) DO UPDATE SET
                     account_name = EXCLUDED.account_name,
-                    manager = EXCLUDED.manager
+                    manager = CASE
+                        WHEN EXCLUDED.manager <> '' AND EXCLUDED.manager <> '미배정'
+                        THEN EXCLUDED.manager
+                        ELSE dim_customer.manager
+                    END
                 """
             ),
-            {"customer_id": customer_id, "account_name": account_name, "manager": manager},
+            {"customer_id": customer_id, "account_name": account_name, "manager": manager or "미배정"},
         )
 
 
@@ -276,7 +280,7 @@ def _load_db_meta_accounts(engine: Engine) -> list[dict[str, str]]:
             rows = conn.execute(
                 text(
                     """
-                    SELECT account_label, account_id, customer_id, access_token
+                    SELECT account_label, account_id, customer_id, manager, access_token
                     FROM platform_credentials
                     WHERE LOWER(platform) IN ('meta', 'facebook', 'facebook_ads')
                       AND COALESCE(is_active, TRUE) = TRUE
@@ -297,7 +301,7 @@ def _load_db_meta_accounts(engine: Engine) -> list[dict[str, str]]:
             {
                 "id": account_id,
                 "name": _clean_text(row.get("account_label")) or account_id,
-                "manager": "",
+                "manager": _clean_text(row.get("manager")),
                 "group_name": "",
                 "pixel_id": "",
                 "access_token": _clean_text(row.get("access_token")),
@@ -315,6 +319,7 @@ def _ensure_platform_connections_schema(engine: Engine) -> None:
                     id BIGSERIAL PRIMARY KEY,
                     platform VARCHAR(30) NOT NULL,
                     account_label VARCHAR(120) NOT NULL,
+                    manager VARCHAR(120) NULL,
                     customer_id BIGINT NULL,
                     account_id VARCHAR(120) NULL,
                     access_token TEXT NULL,
@@ -328,6 +333,7 @@ def _ensure_platform_connections_schema(engine: Engine) -> None:
                 """
             )
         )
+        conn.execute(text("ALTER TABLE platform_credentials ADD COLUMN IF NOT EXISTS manager VARCHAR(120)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS idx_platform_credentials_platform ON platform_credentials(platform)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS idx_platform_credentials_customer_id ON platform_credentials(customer_id)"))
 
@@ -338,6 +344,7 @@ def _remember_db_meta_account(engine: Engine, account: dict[str, str], access_to
     if not account_id or not account_name:
         return
     token = _clean_text(access_token)
+    manager = _clean_text(account.get("manager")) or "미배정"
     _ensure_platform_connections_schema(engine)
     with engine.begin() as conn:
         existing_id = conn.execute(
@@ -359,6 +366,7 @@ def _remember_db_meta_account(engine: Engine, account: dict[str, str], access_to
                     """
                     UPDATE platform_credentials
                        SET account_label = :account_label,
+                           manager = :manager,
                            access_token = CASE
                                WHEN :access_token <> '' THEN :access_token
                                ELSE access_token
@@ -368,17 +376,17 @@ def _remember_db_meta_account(engine: Engine, account: dict[str, str], access_to
                      WHERE id = :id
                     """
                 ),
-                {"id": existing_id, "account_label": account_name, "access_token": token},
+                {"id": existing_id, "account_label": account_name, "manager": manager, "access_token": token},
             )
         else:
             conn.execute(
                 text(
                     """
-                    INSERT INTO platform_credentials (platform, account_label, account_id, access_token, is_active, updated_at)
-                    VALUES ('meta', :account_label, :account_id, :access_token, TRUE, NOW())
+                    INSERT INTO platform_credentials (platform, account_label, manager, account_id, access_token, is_active, updated_at)
+                    VALUES ('meta', :account_label, :manager, :account_id, :access_token, TRUE, NOW())
                     """
                 ),
-                {"account_label": account_name, "account_id": account_id, "access_token": token},
+                {"account_label": account_name, "manager": manager, "account_id": account_id, "access_token": token},
             )
 
 

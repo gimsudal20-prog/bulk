@@ -612,6 +612,7 @@ def ensure_platform_credentials_table(_engine) -> None:
         id BIGSERIAL PRIMARY KEY,
         platform VARCHAR(30) NOT NULL,
         account_label VARCHAR(120) NOT NULL,
+        manager VARCHAR(120) NULL,
         customer_id BIGINT NULL,
         account_id VARCHAR(120) NULL,
         access_token TEXT NULL,
@@ -624,6 +625,7 @@ def ensure_platform_credentials_table(_engine) -> None:
     );
     """
     sql_exec(_engine, sql)
+    sql_exec(_engine, "ALTER TABLE platform_credentials ADD COLUMN IF NOT EXISTS manager VARCHAR(120)")
     sql_exec(_engine, "CREATE INDEX IF NOT EXISTS idx_platform_credentials_platform ON platform_credentials(platform)")
     sql_exec(_engine, "CREATE INDEX IF NOT EXISTS idx_platform_credentials_customer_id ON platform_credentials(customer_id)")
     if "_table_names_cache" in st.session_state:
@@ -684,6 +686,7 @@ def upsert_platform_credential(_engine, row: dict) -> None:
         "id": row.get("id"),
         "platform": str(row.get("platform", "")).strip().lower(),
         "account_label": str(row.get("account_label", "")).strip(),
+        "manager": str(row.get("manager", "")).strip() or "미배정",
         "customer_id": None if str(row.get("customer_id", "")).strip() in ["", "None", "nan"] else int(row.get("customer_id")),
         "account_id": str(row.get("account_id", "")).strip(),
         "access_token": str(row.get("access_token", "")).strip(),
@@ -704,13 +707,26 @@ def upsert_platform_credential(_engine, row: dict) -> None:
             UPDATE platform_credentials
                SET platform=:platform,
                    account_label=:account_label,
+                   manager=:manager,
                    customer_id=:customer_id,
                    account_id=:account_id,
-                   access_token=:access_token,
-                   refresh_token=:refresh_token,
+                   access_token=CASE
+                       WHEN :access_token <> '' THEN :access_token
+                       ELSE access_token
+                   END,
+                   refresh_token=CASE
+                       WHEN :refresh_token <> '' THEN :refresh_token
+                       ELSE refresh_token
+                   END,
                    app_id=:app_id,
-                   app_secret=:app_secret,
-                   extra_json=CAST(:extra_json AS JSONB),
+                   app_secret=CASE
+                       WHEN :app_secret <> '' THEN :app_secret
+                       ELSE app_secret
+                   END,
+                   extra_json=CASE
+                       WHEN :extra_json <> '{}' THEN CAST(:extra_json AS JSONB)
+                       ELSE extra_json
+                   END,
                    is_active=:is_active,
                    updated_at=NOW()
              WHERE id=:id
@@ -722,9 +738,9 @@ def upsert_platform_credential(_engine, row: dict) -> None:
             _engine,
             """
             INSERT INTO platform_credentials
-                (platform, account_label, customer_id, account_id, access_token, refresh_token, app_id, app_secret, extra_json, is_active, updated_at)
+                (platform, account_label, manager, customer_id, account_id, access_token, refresh_token, app_id, app_secret, extra_json, is_active, updated_at)
             VALUES
-                (:platform, :account_label, :customer_id, :account_id, :access_token, :refresh_token, :app_id, :app_secret, CAST(:extra_json AS JSONB), :is_active, NOW())
+                (:platform, :account_label, :manager, :customer_id, :account_id, :access_token, :refresh_token, :app_id, :app_secret, CAST(:extra_json AS JSONB), :is_active, NOW())
             """,
             payload,
         )

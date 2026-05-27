@@ -9,7 +9,13 @@ import streamlit_compat  # noqa: F401
 import streamlit_antd_components as sac
 from sqlalchemy import text
 
-from data import sql_read, db_ping, seed_from_accounts_xlsx
+from data import (
+    get_platform_credentials,
+    sql_read,
+    db_ping,
+    seed_from_accounts_xlsx,
+    upsert_platform_credential,
+)
 from ui import render_toolbar
 
 
@@ -76,6 +82,48 @@ def _collect_changed_roas_rows(original_df: pd.DataFrame, edited_df: pd.DataFram
                 "min_roas": new_m,
             })
     return changed
+
+
+def _platform_connections_editor_df(engine) -> pd.DataFrame:
+    df = get_platform_credentials(engine)
+    cols = ["id", "platform", "account_label", "account_id", "is_active"]
+    if df is None or df.empty:
+        return pd.DataFrame(columns=cols)
+    for col in cols:
+        if col not in df.columns:
+            df[col] = "" if col != "is_active" else True
+    out = df[cols].copy()
+    out["platform"] = out["platform"].fillna("").astype(str)
+    out["account_label"] = out["account_label"].fillna("").astype(str)
+    out["account_id"] = out["account_id"].fillna("").astype(str)
+    out["is_active"] = out["is_active"].fillna(True).astype(bool)
+    return out.sort_values(["platform", "account_label", "account_id"]).reset_index(drop=True)
+
+
+def _save_platform_connections(engine, edited_df: pd.DataFrame) -> int:
+    if edited_df is None or edited_df.empty:
+        return 0
+    count = 0
+    for _, row in edited_df.iterrows():
+        platform = str(row.get("platform", "") or "").strip().lower()
+        account_label = str(row.get("account_label", "") or "").strip()
+        account_id = str(row.get("account_id", "") or "").strip()
+        if not platform and not account_label and not account_id:
+            continue
+        if not platform or not account_label or not account_id:
+            raise ValueError("플랫폼, 대시보드 계정명, 플랫폼 계정 ID는 모두 입력해야 합니다.")
+        upsert_platform_credential(
+            engine,
+            {
+                "id": None if pd.isna(row.get("id")) or str(row.get("id", "")).strip() == "" else int(row.get("id")),
+                "platform": platform,
+                "account_label": account_label,
+                "account_id": account_id,
+                "is_active": bool(row.get("is_active", True)),
+            },
+        )
+        count += 1
+    return count
 
 
 @st.fragment
@@ -191,6 +239,38 @@ def page_settings(engine) -> None:
     # ⚙️ 탭 2: 대시보드 관리 기능
     # ====================================================
     elif selected_tab == '대시보드 관리':
+        st.markdown("### 플랫폼 계정 연결")
+        st.caption("업체명 하나에 네이버, 메타, 구글 계정을 붙여 관리합니다. 수집기는 활성화된 연결을 자동으로 읽습니다.")
+
+        conn_df = _platform_connections_editor_df(engine)
+        edited_conn_df = st.data_editor(
+            conn_df,
+            hide_index=True,
+            use_container_width=True,
+            num_rows="dynamic",
+            column_config={
+                "id": None,
+                "platform": st.column_config.SelectboxColumn("플랫폼", options=["naver", "meta", "google"], required=True),
+                "account_label": st.column_config.TextColumn("대시보드 계정명", required=True, help="예: 핵이득마켓"),
+                "account_id": st.column_config.TextColumn("플랫폼 계정 ID", required=True, help="Meta는 광고계정 ID, Google은 고객 ID"),
+                "is_active": st.column_config.CheckboxColumn("수집", default=True),
+            },
+            key="platform_connections_editor",
+        )
+        col_conn_a, col_conn_b = st.columns([1.1, 3])
+        with col_conn_a:
+            if st.button("계정 연결 저장", type="primary", use_container_width=True, icon=":material/save:"):
+                try:
+                    saved = _save_platform_connections(engine, edited_conn_df)
+                    st.cache_data.clear()
+                    st.success(f"저장 완료! ({saved}건)", icon=":material/check_circle:")
+                    time.sleep(1)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"저장 실패: {e}", icon=":material/error:")
+
+        sac.divider(align='center', color='gray', key='div_platform_connections')
+
         st.markdown("### accounts.xlsx → DB 동기화")
         
         with st.container():

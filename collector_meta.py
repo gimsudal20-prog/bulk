@@ -6,20 +6,24 @@ Required env:
 - META_ACCESS_TOKEN
 
 Account sources:
+- config/meta_accounts.csv rows where enabled is not false
 - account_master.xlsx rows where meta_ad_account_id is filled
 - or --ad_account_id / META_AD_ACCOUNT_ID for a single account
 """
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections import defaultdict
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
 from sqlalchemy import text
@@ -192,6 +196,184 @@ def _ensure_dashboard_account(engine: Engine, account: dict[str, str]) -> None:
 def _account_matches_id(account: dict[str, str], explicit_id: str) -> bool:
     wanted = _normalize_ad_account_id(explicit_id)
     return _normalize_ad_account_id(account.get("id")) == wanted
+
+
+def _row_value(row: dict[str, object], *names: str) -> str:
+    wanted = {re.sub(r"\s+", "", name).strip().lower() for name in names}
+    for key, value in row.items():
+        normalized_key = re.sub(r"\s+", "", str(key or "")).strip().lower()
+        if normalized_key in wanted:
+            return _clean_text(value)
+    return ""
+
+
+def _load_config_meta_accounts(file_path: str) -> list[dict[str, str]]:
+    path_text = _clean_text(file_path)
+    if not path_text:
+        return []
+    path = Path(path_text)
+    if not path.exists():
+        return []
+
+    rows: list[dict[str, str]] = []
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        for raw in csv.DictReader(handle):
+            enabled = _row_value(raw, "enabled", "use_yn", "active", "사용여부")
+            if enabled and enabled.strip().lower() in {"n", "no", "false", "0", "off", "disabled", "미사용"}:
+                continue
+            account_id = _normalize_ad_account_id(
+                _row_value(raw, "ad_account_id", "meta_ad_account_id", "metaadaccountid", "id", "메타광고계정id")
+            )
+            if not account_id:
+                continue
+            rows.append(
+                {
+                    "id": account_id,
+                    "name": _row_value(raw, "account_name", "dashboard_account_name", "name", "naver_account_name", "계정명", "업체명"),
+                    "manager": _row_value(raw, "manager", "담당자", "owner"),
+                    "group_name": _row_value(raw, "group_name", "client_group_name", "그룹명"),
+                    "pixel_id": _row_value(raw, "pixel_id", "meta_pixel_id", "픽셀id"),
+                }
+            )
+    return rows
+
+
+def _merge_account_sources(*sources: list[dict[str, str]]) -> list[dict[str, str]]:
+    merged: dict[str, dict[str, str]] = {}
+    for source in sources:
+        for account in source:
+            account_id = _normalize_ad_account_id(account.get("id"))
+            if not account_id:
+                continue
+            current = merged.get(account_id, {})
+            next_account = dict(current)
+            for key, value in account.items():
+                cleaned = _clean_text(value)
+                if cleaned:
+                    next_account[key] = cleaned
+            next_account["id"] = account_id
+            merged[account_id] = next_account
+    return list(merged.values())
+
+
+def _load_db_meta_accounts(engine: Engine) -> list[dict[str, str]]:
+    try:
+        with engine.connect() as conn:
+            exists = conn.execute(
+                text(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM information_schema.tables
+                        WHERE table_schema = 'public'
+                          AND table_name = 'platform_credentials'
+                    )
+                    """
+                )
+            ).scalar()
+            if not exists:
+                return []
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT account_label, account_id, customer_id
+                    FROM platform_credentials
+                    WHERE LOWER(platform) IN ('meta', 'facebook', 'facebook_ads')
+                      AND COALESCE(is_active, TRUE) = TRUE
+                    ORDER BY updated_at DESC, id DESC
+                    """
+                )
+            ).mappings().all()
+    except Exception as exc:
+        log(f"[Meta] platform connection load skipped | {type(exc).__name__}: {exc}")
+        return []
+
+    accounts: list[dict[str, str]] = []
+    for row in rows:
+        account_id = _normalize_ad_account_id(row.get("account_id") or row.get("customer_id"))
+        if not account_id:
+            continue
+        accounts.append(
+            {
+                "id": account_id,
+                "name": _clean_text(row.get("account_label")) or account_id,
+                "manager": "",
+                "group_name": "",
+                "pixel_id": "",
+            }
+        )
+    return accounts
+
+
+def _ensure_platform_connections_schema(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS platform_credentials (
+                    id BIGSERIAL PRIMARY KEY,
+                    platform VARCHAR(30) NOT NULL,
+                    account_label VARCHAR(120) NOT NULL,
+                    customer_id BIGINT NULL,
+                    account_id VARCHAR(120) NULL,
+                    access_token TEXT NULL,
+                    refresh_token TEXT NULL,
+                    app_id VARCHAR(200) NULL,
+                    app_secret TEXT NULL,
+                    extra_json JSONB DEFAULT '{}'::jsonb,
+                    is_active BOOLEAN DEFAULT TRUE,
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+                """
+            )
+        )
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_platform_credentials_platform ON platform_credentials(platform)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_platform_credentials_customer_id ON platform_credentials(customer_id)"))
+
+
+def _remember_db_meta_account(engine: Engine, account: dict[str, str]) -> None:
+    account_id = _normalize_ad_account_id(account.get("id"))
+    account_name = _clean_text(account.get("name"))
+    if not account_id or not account_name:
+        return
+    _ensure_platform_connections_schema(engine)
+    with engine.begin() as conn:
+        existing_id = conn.execute(
+            text(
+                """
+                SELECT id
+                FROM platform_credentials
+                WHERE LOWER(platform) = 'meta'
+                  AND account_id = :account_id
+                ORDER BY id DESC
+                LIMIT 1
+                """
+            ),
+            {"account_id": account_id},
+        ).scalar()
+        if existing_id:
+            conn.execute(
+                text(
+                    """
+                    UPDATE platform_credentials
+                       SET account_label = :account_label,
+                           is_active = TRUE,
+                           updated_at = NOW()
+                     WHERE id = :id
+                    """
+                ),
+                {"id": existing_id, "account_label": account_name},
+            )
+        else:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO platform_credentials (platform, account_label, account_id, is_active, updated_at)
+                    VALUES ('meta', :account_label, :account_id, TRUE, NOW())
+                    """
+                ),
+                {"account_label": account_name, "account_id": account_id},
+            )
 
 
 def _build_campaign_dim_rows(customer_id: str, campaigns: Iterable[dict[str, Any]], insights: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -439,8 +621,15 @@ def collect_account(engine: Engine, client: MetaApiClient, account: dict[str, st
     }
 
 
-def _load_accounts(args: argparse.Namespace) -> list[dict[str, str]]:
-    accounts = load_meta_accounts(file_path=args.account_master)
+def _load_accounts(args: argparse.Namespace, engine: Engine) -> list[dict[str, str]]:
+    config_accounts = _load_config_meta_accounts(args.meta_accounts)
+    db_accounts = _load_db_meta_accounts(engine)
+    master_accounts = load_meta_accounts(file_path=args.account_master)
+    accounts = _merge_account_sources(master_accounts, config_accounts, db_accounts)
+    if config_accounts:
+        log(f"[Meta] config accounts loaded file={args.meta_accounts} count={len(config_accounts)}")
+    if db_accounts:
+        log(f"[Meta] DB platform connections loaded count={len(db_accounts)}")
     explicit_id = _clean_text(args.ad_account_id or os.getenv("META_AD_ACCOUNT_ID"))
     explicit_manager = _clean_text(args.manager or os.getenv("META_MANAGER"))
     if explicit_id:
@@ -487,6 +676,7 @@ def main() -> int:
     parser.add_argument("--account_names", default="", help="comma-separated exact account names")
     parser.add_argument("--ad_account_id", default="", help="single Meta ad account id, with or without act_")
     parser.add_argument("--manager", default="", help="dashboard manager name for explicit Meta ad account runs")
+    parser.add_argument("--meta-accounts", default=os.getenv("META_ACCOUNTS_FILE", "config/meta_accounts.csv"), help="CSV mapping Meta ad account ids to dashboard account names/managers")
     parser.add_argument("--account-master", default=os.getenv("ACCOUNT_MASTER_FILE", "account_master.xlsx"), help="account master workbook path")
     parser.add_argument("--api-version", default=os.getenv("META_GRAPH_API_VERSION", DEFAULT_API_VERSION), help="Meta Graph API version")
     args = parser.parse_args()
@@ -507,13 +697,22 @@ def main() -> int:
     if not db_url:
         raise SystemExit("DATABASE_URL 환경변수가 필요합니다.")
 
-    accounts = _load_accounts(args)
-    if not accounts:
-        raise SystemExit("수집할 Meta 계정이 없습니다. account_master.xlsx의 platform=meta/meta_ad_account_id 또는 --ad_account_id를 확인하세요.")
-
     engine = get_engine(db_url)
     ensure_meta_schema(engine)
+    _ensure_platform_connections_schema(engine)
+
+    accounts = _load_accounts(args, engine)
+    if not accounts:
+        raise SystemExit("수집할 Meta 계정이 없습니다. 설정 > 플랫폼 계정 연결, config/meta_accounts.csv, account_master.xlsx의 meta_ad_account_id 또는 --ad_account_id를 확인하세요.")
+
     client = MetaApiClient(access_token=access_token, api_version=args.api_version)
+
+    explicit_id = _clean_text(args.ad_account_id or os.getenv("META_AD_ACCOUNT_ID"))
+    if explicit_id:
+        for account in accounts:
+            if _account_matches_id(account, explicit_id):
+                _remember_db_meta_account(engine, account)
+                break
 
     results = []
     failures = 0

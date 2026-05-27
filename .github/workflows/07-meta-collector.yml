@@ -167,6 +167,12 @@ jobs:
                   WHERE dt BETWEEN :start AND :end
                   {account_filter}
               """,
+              "dim_campaign": """
+                  SELECT COUNT(*) AS rows,
+                         STRING_AGG(DISTINCT COALESCE(campaign_tp, ''), ', ' ORDER BY COALESCE(campaign_tp, '')) AS campaign_types
+                  FROM dim_campaign
+                  WHERE customer_id = :customer_id
+              """,
           }
 
           lines = [
@@ -197,8 +203,12 @@ jobs:
 
               for table, sql in queries.items():
                   row = conn.execute(text(sql), params).mappings().one()
-                  print(f"[Meta DB] {table} rows={row['rows']} cost={row['cost']} impressions={row['impressions']}", flush=True)
-                  lines.append(f"- `{table}` rows={row['rows']}, cost={row['cost']}, impressions={row['impressions']}")
+                  if table == "dim_campaign":
+                      print(f"[Meta DB] {table} rows={row['rows']} campaign_types={row['campaign_types']}", flush=True)
+                      lines.append(f"- `{table}` rows={row['rows']}, campaign_types={row['campaign_types']}")
+                  else:
+                      print(f"[Meta DB] {table} rows={row['rows']} cost={row['cost']} impressions={row['impressions']}", flush=True)
+                      lines.append(f"- `{table}` rows={row['rows']}, cost={row['cost']}, impressions={row['impressions']}")
 
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fp:
               fp.write("\n".join(lines) + "\n")

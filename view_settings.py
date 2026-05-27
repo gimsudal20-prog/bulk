@@ -11,82 +11,67 @@ from sqlalchemy import text
 
 from data import (
     get_platform_credentials,
-    sql_read,
     db_ping,
+    get_meta,
     seed_from_accounts_xlsx,
     upsert_platform_credential,
 )
 from ui import render_toolbar
 
 
+def _clean_text(value, fallback: str = "") -> str:
+    cleaned = str(value or "").strip()
+    if cleaned in {"nan", "None", "NaN"}:
+        return fallback
+    return cleaned or fallback
+
+
+def _clean_manager(value) -> str:
+    return _clean_text(value, "미배정")
+
+
+def _clean_customer_id(value) -> str:
+    raw = _clean_text(value)
+    if not raw:
+        return ""
+    if raw.startswith("act_"):
+        raw = raw[4:]
+    if raw.endswith(".0") and raw[:-2].isdigit():
+        raw = raw[:-2]
+    compact = raw.replace("-", "").replace(" ", "")
+    return compact if compact.isdigit() else raw
+
+
+def _credential_customer_id(value):
+    customer_id = _clean_customer_id(value)
+    return int(customer_id) if customer_id.isdigit() else None
+
 
 @st.cache_data(ttl=300, show_spinner=False, max_entries=20)
-def _cached_roas_campaigns(_engine) -> pd.DataFrame:
-    sql = """
-        SELECT 
-            c.customer_id, 
-            COALESCE(cust.account_name, CAST(c.customer_id AS VARCHAR)) as account_name,
-            COALESCE(cust.manager, '미배정') as manager,
-            c.campaign_id, 
-            c.campaign_name, 
-            c.target_roas, 
-            c.min_roas 
-        FROM dim_campaign c
-        LEFT JOIN dim_customer cust 
-          ON REGEXP_REPLACE(CAST(c.customer_id AS TEXT), '\\.0+$', '') = REGEXP_REPLACE(CAST(cust.customer_id AS TEXT), '\\.0+$', '')
-    """
+def _dashboard_accounts_df(_engine) -> pd.DataFrame:
     try:
-        df = sql_read(_engine, sql)
-        if df is None or df.empty:
-            return pd.DataFrame()
-        return df.sort_values(["manager", "account_name", "campaign_name"]).reset_index(drop=True)
+        meta = get_meta(_engine)
     except Exception:
-        return pd.DataFrame()
-
-
-@st.cache_data(ttl=300, show_spinner=False, max_entries=20)
-def _settings_filter_maps(camp_df: pd.DataFrame):
-    if camp_df is None or camp_df.empty:
-        return {"managers": ["전체"], "manager_to_accounts": {"전체": ["전체"]}}
-    work = camp_df[["manager", "account_name"]].copy()
-    work["manager"] = work["manager"].fillna("미배정").astype(str)
-    work["account_name"] = work["account_name"].fillna("").astype(str)
-    managers = ["전체"] + sorted([x for x in work["manager"].unique().tolist() if x])
-    manager_to_accounts = {"전체": ["전체"] + sorted([x for x in work["account_name"].unique().tolist() if x])}
-    for mgr, grp in work.groupby("manager", sort=True):
-        manager_to_accounts[str(mgr)] = ["전체"] + sorted([x for x in grp["account_name"].unique().tolist() if x])
-    return {"managers": managers, "manager_to_accounts": manager_to_accounts}
-
-
-def _normalize_roas_value(v):
-    return float(v) if pd.notna(v) else None
-
-
-def _collect_changed_roas_rows(original_df: pd.DataFrame, edited_df: pd.DataFrame) -> list[dict]:
-    if original_df is None or edited_df is None or original_df.empty or edited_df.empty:
-        return []
-    base = original_df[["customer_id", "campaign_id", "target_roas", "min_roas"]].copy()
-    new = edited_df[["customer_id", "campaign_id", "target_roas", "min_roas"]].copy()
-    merged = base.merge(new, on=["customer_id", "campaign_id"], suffixes=("_old", "_new"), how="inner")
-    changed = []
-    for _, row in merged.iterrows():
-        old_t = _normalize_roas_value(row.get("target_roas_old"))
-        new_t = _normalize_roas_value(row.get("target_roas_new"))
-        old_m = _normalize_roas_value(row.get("min_roas_old"))
-        new_m = _normalize_roas_value(row.get("min_roas_new"))
-        if old_t != new_t or old_m != new_m:
-            changed.append({
-                "customer_id": str(row.get("customer_id")),
-                "campaign_id": str(row.get("campaign_id")),
-                "target_roas": new_t,
-                "min_roas": new_m,
-            })
-    return changed
+        return pd.DataFrame(columns=["customer_id", "account_name", "manager"])
+    if meta is None or meta.empty:
+        return pd.DataFrame(columns=["customer_id", "account_name", "manager"])
+    cols = [c for c in ["customer_id", "account_name", "manager"] if c in meta.columns]
+    out = meta[cols].copy()
+    if "customer_id" not in out.columns:
+        out["customer_id"] = ""
+    if "account_name" not in out.columns:
+        out["account_name"] = out["customer_id"].astype(str)
+    if "manager" not in out.columns:
+        out["manager"] = "미배정"
+    out["customer_id"] = out["customer_id"].map(_clean_customer_id)
+    out["account_name"] = out["account_name"].map(_clean_text)
+    out["manager"] = out["manager"].map(_clean_manager)
+    return out[out["customer_id"] != ""].drop_duplicates("customer_id", keep="last").sort_values(["manager", "account_name"]).reset_index(drop=True)
 
 
 def _platform_connections_editor_df(engine) -> pd.DataFrame:
     df = get_platform_credentials(engine)
-    cols = ["id", "platform", "account_label", "manager", "account_id", "is_active"]
+    cols = ["id", "platform", "account_label", "manager", "customer_id", "account_id", "is_active"]
     if df is None or df.empty:
         return pd.DataFrame(columns=cols)
     for col in cols:
@@ -97,41 +82,75 @@ def _platform_connections_editor_df(engine) -> pd.DataFrame:
     out["account_label"] = out["account_label"].fillna("").astype(str)
     out["manager"] = out["manager"].fillna("미배정").astype(str).str.strip()
     out.loc[out["manager"].isin(["", "nan", "None", "NaN"]), "manager"] = "미배정"
+    out["customer_id"] = out["customer_id"].map(_clean_customer_id)
     out["account_id"] = out["account_id"].fillna("").astype(str)
     out["is_active"] = out["is_active"].fillna(True).astype(bool)
     return out.sort_values(["platform", "account_label", "account_id"]).reset_index(drop=True)
 
 
-def _sync_connection_manager_to_customer(engine, account_label: str, account_id: str, manager: str) -> None:
-    customer_id = str(account_id or "").strip()
-    if customer_id.startswith("act_"):
-        customer_id = customer_id[4:]
-    if customer_id.endswith(".0") and customer_id[:-2].isdigit():
-        customer_id = customer_id[:-2]
+def _sync_connection_manager_to_customer(engine, account_label: str, customer_id: str, manager: str) -> None:
+    customer_id = _clean_customer_id(customer_id)
     if not customer_id:
         return
 
-    clean_label = str(account_label or "").strip() or customer_id
-    clean_manager = str(manager or "").strip() or "미배정"
+    clean_label = _clean_text(account_label, customer_id)
+    clean_manager = _clean_manager(manager)
     with engine.begin() as conn:
         conn.execute(
             text(
-                "CREATE TABLE IF NOT EXISTS dim_customer (customer_id TEXT PRIMARY KEY, account_name TEXT, manager TEXT)"
+                "CREATE TABLE IF NOT EXISTS dim_customer (customer_id TEXT, account_name TEXT, manager TEXT, monthly_budget BIGINT DEFAULT 0, operating_weekdays TEXT DEFAULT '0,1,2,3,4,5,6')"
             )
         )
+        conn.execute(text("ALTER TABLE dim_customer ADD COLUMN IF NOT EXISTS account_name TEXT"))
         conn.execute(text("ALTER TABLE dim_customer ADD COLUMN IF NOT EXISTS manager TEXT"))
+        conn.execute(text("ALTER TABLE dim_customer ADD COLUMN IF NOT EXISTS monthly_budget BIGINT DEFAULT 0"))
+        conn.execute(text("ALTER TABLE dim_customer ADD COLUMN IF NOT EXISTS operating_weekdays TEXT DEFAULT '0,1,2,3,4,5,6'"))
         conn.execute(
             text(
                 """
-                INSERT INTO dim_customer (customer_id, account_name, manager)
-                VALUES (:customer_id, :account_name, :manager)
-                ON CONFLICT (customer_id) DO UPDATE SET
-                    account_name = EXCLUDED.account_name,
-                    manager = EXCLUDED.manager
+                UPDATE dim_customer
+                   SET account_name = :account_name,
+                       manager = :manager
+                 WHERE REGEXP_REPLACE(CAST(customer_id AS TEXT), '\\.0+$', '') = :customer_id
                 """
             ),
             {"customer_id": customer_id, "account_name": clean_label, "manager": clean_manager},
         )
+        conn.execute(
+            text(
+                """
+                INSERT INTO dim_customer (customer_id, account_name, manager)
+                SELECT :customer_id, :account_name, :manager
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM dim_customer
+                    WHERE REGEXP_REPLACE(CAST(customer_id AS TEXT), '\\.0+$', '') = :customer_id
+                )
+                """
+            ),
+            {"customer_id": customer_id, "account_name": clean_label, "manager": clean_manager},
+        )
+
+
+def _connection_filter_options(conn_df: pd.DataFrame) -> dict[str, list[str]]:
+    if conn_df is None or conn_df.empty:
+        return {"platforms": ["전체"], "managers": ["전체"]}
+    platforms = ["전체"] + sorted([x for x in conn_df["platform"].dropna().astype(str).unique().tolist() if x])
+    managers = ["전체"] + sorted([x for x in conn_df["manager"].dropna().astype(str).unique().tolist() if x])
+    return {"platforms": platforms, "managers": managers}
+
+
+def _apply_connection_filters(conn_df: pd.DataFrame, platform: str, manager: str, active_only: bool) -> pd.DataFrame:
+    if conn_df is None or conn_df.empty:
+        return conn_df
+    out = conn_df.copy()
+    if platform != "전체":
+        out = out[out["platform"] == platform]
+    if manager != "전체":
+        out = out[out["manager"] == manager]
+    if active_only:
+        out = out[out["is_active"]]
+    return out.reset_index(drop=True)
 
 
 def _save_platform_connections(engine, edited_df: pd.DataFrame) -> int:
@@ -142,8 +161,9 @@ def _save_platform_connections(engine, edited_df: pd.DataFrame) -> int:
         platform = str(row.get("platform", "") or "").strip().lower()
         account_label = str(row.get("account_label", "") or "").strip()
         manager = str(row.get("manager", "") or "").strip() or "미배정"
+        dashboard_customer_id = _clean_customer_id(row.get("customer_id", ""))
         account_id = str(row.get("account_id", "") or "").strip()
-        if not platform and not account_label and not account_id:
+        if not platform and not account_label and not dashboard_customer_id and not account_id:
             continue
         if not platform or not account_label or not account_id:
             raise ValueError("플랫폼, 대시보드 계정명, 플랫폼 계정 ID는 모두 입력해야 합니다.")
@@ -154,11 +174,12 @@ def _save_platform_connections(engine, edited_df: pd.DataFrame) -> int:
                 "platform": platform,
                 "account_label": account_label,
                 "manager": manager,
+                "customer_id": _credential_customer_id(dashboard_customer_id),
                 "account_id": account_id,
                 "is_active": bool(row.get("is_active", True)),
             },
         )
-        _sync_connection_manager_to_customer(engine, account_label, account_id, manager)
+        _sync_connection_manager_to_customer(engine, account_label, dashboard_customer_id or account_id, manager)
         count += 1
     return count
 
@@ -167,7 +188,7 @@ def _save_platform_connections(engine, edited_df: pd.DataFrame) -> int:
 def page_settings(engine) -> None:
     render_toolbar(
         "설정 및 데이터 관리",
-        "계정 동기화, 목표 ROAS, 대시보드 운영 도구를 관리합니다.",
+        "플랫폼 계정 연동, 담당자 연결, 대시보드 운영 도구를 관리합니다.",
         [{"label": "관리자", "tone": "primary"}],
     )
     try: 
@@ -179,196 +200,164 @@ def page_settings(engine) -> None:
     st.markdown("<br>", unsafe_allow_html=True)
 
     # ====================================================
-    # 🍎 iOS 스타일 Segmented Control (Bootstrap 아이콘)
+    # 플랫폼 계정 및 담당자 연동
     # ====================================================
-    selected_tab = sac.segmented(
-        items=[
-            sac.SegmentedItem(label='목표 ROAS 설정', icon='bullseye'),
-            sac.SegmentedItem(label='대시보드 관리', icon='server'),
-        ],
-        align='center',
-        size='sm',
-        color='dark',        
-        bg_color='#f1f5f9',  
-        radius='xl',         
-        divider=False,
-        use_container_width=True,
-        key='settings_main_tab' # 상단 탭 고유 키 부여
-    )
-    
-    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("### 플랫폼 계정 연결")
+    st.caption("네이버, 메타, 구글 계정을 대시보드 계정과 연결합니다. 담당자를 저장하면 대시보드 계정 정보에도 함께 반영됩니다.")
 
-    # ====================================================
-    # 🎯 탭 1: 캠페인별 목표 ROAS 설정
-    # ====================================================
-    if selected_tab == '목표 ROAS 설정':
-        st.markdown("### 캠페인별 목표 ROAS 설정")
-        st.caption("담당자 및 업체를 선택하고 캠페인별 최소/목표 ROAS를 입력하세요.")
+    conn_df = _platform_connections_editor_df(engine)
+    dash_accounts = _dashboard_accounts_df(engine)
 
-        try:
-            with engine.begin() as conn:
-                try: conn.execute(text("ALTER TABLE dim_campaign ADD COLUMN target_roas DOUBLE PRECISION;"))
-                except Exception: pass
-                try: conn.execute(text("ALTER TABLE dim_campaign ADD COLUMN min_roas DOUBLE PRECISION;"))
-                except Exception: pass
+    metric_a, metric_b, metric_c = st.columns(3)
+    active_count = int(conn_df["is_active"].sum()) if not conn_df.empty and "is_active" in conn_df.columns else 0
+    linked_count = int((conn_df["customer_id"].astype(str).str.strip() != "").sum()) if not conn_df.empty and "customer_id" in conn_df.columns else 0
+    manager_count = int(conn_df["manager"].replace("", pd.NA).dropna().nunique()) if not conn_df.empty and "manager" in conn_df.columns else 0
+    metric_a.metric("활성 연동", f"{active_count:,}개")
+    metric_b.metric("대시보드 계정 연결", f"{linked_count:,}개")
+    metric_c.metric("담당자", f"{manager_count:,}명")
 
-            camp_df = _cached_roas_campaigns(engine)
-
-            if not camp_df.empty:
-                filt = _settings_filter_maps(camp_df)
-                col_m, col_a = st.columns(2)
-                with col_m:
-                    sel_manager = st.selectbox("담당자 선택", filt["managers"], key="settings_manager")
-                with col_a:
-                    accounts = filt["manager_to_accounts"].get(sel_manager, ["전체"])
-                    sel_acc = st.selectbox("업체 선택", accounts, key="settings_account")
-
-                temp_df = camp_df
-                if sel_manager != "전체":
-                    temp_df = temp_df[temp_df['manager'] == sel_manager]
-                if sel_acc != "전체":
-                    temp_df = temp_df[temp_df['account_name'] == sel_acc]
-
-                disp_df = temp_df.reset_index(drop=True)
-
-                st.markdown("<br>", unsafe_allow_html=True)
-
-                edited_df = st.data_editor(
-                    disp_df,
-                    hide_index=True,
-                    use_container_width=True,
-                    height=450,
-                    column_config={
-                        "customer_id": None, 
-                        "campaign_id": None, 
-                        "manager": st.column_config.TextColumn("담당자", disabled=True),
-                        "account_name": st.column_config.TextColumn("광고주명", disabled=True),
-                        "campaign_name": st.column_config.TextColumn("캠페인명", disabled=True, width="large"),
-                        "min_roas": st.column_config.NumberColumn("최소 ROAS(%)", min_value=0, step=10, format="%d"),
-                        "target_roas": st.column_config.NumberColumn("목표 ROAS(%)", min_value=0, step=10, format="%d")
-                    },
-                    key=f"roas_editor_{sel_manager}_{sel_acc}"
+    if not dash_accounts.empty:
+        with st.expander("대시보드 계정에서 연동 행 만들기", expanded=False):
+            account_options = [
+                f"{row.account_name} · {row.manager} · {row.customer_id}"
+                for row in dash_accounts.itertuples(index=False)
+            ]
+            c_acc, c_platform, c_pid = st.columns([1.6, 0.8, 1.4], gap="small")
+            with c_acc:
+                selected_account = st.selectbox("대시보드 계정", account_options, key="connection_seed_account")
+            with c_platform:
+                seed_platform = st.selectbox("플랫폼", ["naver", "meta", "google"], key="connection_seed_platform")
+            selected_idx = account_options.index(selected_account)
+            seed_row = dash_accounts.iloc[selected_idx]
+            with c_pid:
+                seed_account_id = st.text_input(
+                    "플랫폼 계정 ID",
+                    value=str(seed_row["customer_id"]) if seed_platform == "naver" else "",
+                    key="connection_seed_account_id",
+                    placeholder="act_123456789 또는 276-154-7013",
                 )
-
-                if st.button("화면의 목표 ROAS 저장", type="primary", icon=":material/save:"):
-                    changed_rows = _collect_changed_roas_rows(disp_df, edited_df)
-                    if not changed_rows:
-                        st.info("변경된 목표 ROAS가 없습니다.", icon=":material/info:")
-                    else:
-                        with st.spinner(f"저장 중입니다... ({len(changed_rows)}건)"):
-                            with engine.begin() as conn:
-                                for row in changed_rows:
-                                    conn.execute(
-                                        text("UPDATE dim_campaign SET target_roas = :t, min_roas = :m WHERE REGEXP_REPLACE(CAST(customer_id AS TEXT), '\\.0+$', '') = :cid AND campaign_id = :campid"),
-                                        {"t": row['target_roas'], "m": row['min_roas'], "cid": row['customer_id'], "campid": row['campaign_id']}
-                                    )
-                        st.success(f"저장 완료! ({len(changed_rows)}건)", icon=":material/check_circle:")
+            c_save, c_note = st.columns([1.1, 2.4], gap="small")
+            with c_save:
+                if st.button("연동 행 저장", type="primary", use_container_width=True, icon=":material/add_link:"):
+                    try:
+                        saved_row = pd.DataFrame([{
+                            "id": "",
+                            "platform": seed_platform,
+                            "account_label": seed_row["account_name"],
+                            "manager": seed_row["manager"],
+                            "customer_id": seed_row["customer_id"],
+                            "account_id": seed_account_id,
+                            "is_active": True,
+                        }])
+                        _save_platform_connections(engine, saved_row)
                         st.cache_data.clear()
+                        st.success("연동 행을 저장했습니다.", icon=":material/check_circle:")
                         time.sleep(1)
                         st.rerun()
-            else:
-                st.info("데이터 동기화를 먼저 진행해주세요.", icon=":material/info:")
+                    except Exception as e:
+                        st.error(f"저장 실패: {e}", icon=":material/error:")
 
-        except Exception as e:
-            st.error(f"오류 발생: {e}", icon=":material/error:")
+    filter_opts = _connection_filter_options(conn_df)
+    f_platform, f_manager, f_active = st.columns([1, 1, 1], gap="small")
+    with f_platform:
+        sel_platform = st.selectbox("플랫폼 필터", filter_opts["platforms"], key="settings_conn_platform")
+    with f_manager:
+        sel_manager = st.selectbox("담당자 필터", filter_opts["managers"], key="settings_conn_manager")
+    with f_active:
+        active_only = st.toggle("활성 연동만", value=False, key="settings_conn_active_only")
 
-    # ====================================================
-    # ⚙️ 탭 2: 대시보드 관리 기능
-    # ====================================================
-    elif selected_tab == '대시보드 관리':
-        st.markdown("### 플랫폼 계정 연결")
-        st.caption("업체명 하나에 네이버, 메타, 구글 계정을 붙여 관리합니다. 수집기는 활성화된 연결을 자동으로 읽습니다.")
-
-        conn_df = _platform_connections_editor_df(engine)
-        edited_conn_df = st.data_editor(
-            conn_df,
-            hide_index=True,
-            use_container_width=True,
-            num_rows="dynamic",
-            column_config={
-                "id": None,
-                "platform": st.column_config.SelectboxColumn("플랫폼", options=["naver", "meta", "google"], required=True),
-                "account_label": st.column_config.TextColumn("대시보드 계정명", required=True, help="예: 핵이득마켓"),
-                "manager": st.column_config.TextColumn("담당자", required=True, help="예: 승훈"),
-                "account_id": st.column_config.TextColumn("플랫폼 계정 ID", required=True, help="Meta는 광고계정 ID, Google은 고객 ID"),
-                "is_active": st.column_config.CheckboxColumn("수집", default=True),
-            },
-            key="platform_connections_editor",
-        )
-        col_conn_a, col_conn_b = st.columns([1.1, 3])
-        with col_conn_a:
-            if st.button("계정 연결 저장", type="primary", use_container_width=True, icon=":material/save:"):
-                try:
-                    saved = _save_platform_connections(engine, edited_conn_df)
-                    st.cache_data.clear()
-                    st.success(f"저장 완료! ({saved}건)", icon=":material/check_circle:")
-                    time.sleep(1)
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"저장 실패: {e}", icon=":material/error:")
-
-        sac.divider(align='center', color='gray', key='div_platform_connections')
-
-        st.markdown("### accounts.xlsx → DB 동기화")
-        
-        with st.container():
-            st.markdown("<div style='background-color:#F8FAFC; padding:16px; border-radius:12px; border:1px solid #E2E8F0; margin-bottom:24px;'>", unsafe_allow_html=True)
-            up = st.file_uploader("accounts.xlsx 업로드", type=["xlsx"])
-            colA, colB, colC = st.columns([1.2, 1.0, 2.2], gap="small")
-            with colA: do_sync = st.button("동기화 실행", use_container_width=True, type="primary", icon=":material/sync:")
-            with colB: 
-                if st.button("캐시 비우기", use_container_width=True, icon=":material/cleaning_services:"): 
-                    st.cache_data.clear()
-                    st.rerun()
-            st.markdown("</div>", unsafe_allow_html=True)
-
-        if do_sync:
+    visible_conn_df = _apply_connection_filters(conn_df, sel_platform, sel_manager, active_only)
+    edited_conn_df = st.data_editor(
+        visible_conn_df,
+        hide_index=True,
+        use_container_width=True,
+        num_rows="dynamic",
+        height=420,
+        column_config={
+            "id": None,
+            "platform": st.column_config.SelectboxColumn("플랫폼", options=["naver", "meta", "google"], required=True, width="small"),
+            "account_label": st.column_config.TextColumn("대시보드 계정명", required=True, help="예: 핵이득마켓", width="medium"),
+            "manager": st.column_config.TextColumn("담당자", required=True, help="저장 시 대시보드 계정의 담당자에도 반영됩니다.", width="small"),
+            "customer_id": st.column_config.TextColumn("대시보드 커스텀 ID", help="비워두면 플랫폼 계정 ID를 기준으로 담당자를 연결합니다.", width="medium"),
+            "account_id": st.column_config.TextColumn("플랫폼 계정 ID", required=True, help="Meta는 광고계정 ID, Google은 고객 ID", width="medium"),
+            "is_active": st.column_config.CheckboxColumn("수집", default=True, width="small"),
+        },
+        key="platform_connections_editor",
+    )
+    col_conn_a, col_conn_b = st.columns([1.1, 3])
+    with col_conn_a:
+        if st.button("계정 연결 저장", type="primary", use_container_width=True, icon=":material/save:"):
             try:
-                df_src = pd.read_excel(up) if up else None
-                res = seed_from_accounts_xlsx(engine, df=df_src)
-                st.success(f"동기화 완료!", icon=":material/check_circle:")
+                saved = _save_platform_connections(engine, edited_conn_df)
                 st.cache_data.clear()
+                st.success(f"저장 완료! ({saved}건)", icon=":material/check_circle:")
                 time.sleep(1)
                 st.rerun()
-            except Exception as e: 
-                st.error(f"실패: {e}", icon=":material/error:")
+            except Exception as e:
+                st.error(f"저장 실패: {e}", icon=":material/error:")
 
-        # ✨ 중복 에러 해결: 모든 divider에 고유 key 추가
-        sac.divider(align='center', color='gray', key='div_1')
+    sac.divider(align='center', color='gray', key='div_platform_connections')
 
-        st.markdown("### 대시보드 속도 최적화")
-        if st.button("초고속 DB 목차 만들기", type="secondary", icon=":material/bolt:"):
-            with st.spinner("진행 중..."):
-                try:
-                    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
-                        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_fcd_dt ON fact_campaign_daily(dt);"))
-                        # ... 필요한 인덱스 쿼리들
-                    st.success("최적화 완료!", icon=":material/check_circle:")
-                except Exception as e:
-                    st.error(f"오류: {e}")
+    st.markdown("### accounts.xlsx → DB 동기화")
+        
+    with st.container():
+        st.markdown("<div style='background-color:#F8FAFC; padding:16px; border-radius:8px; border:1px solid #E2E8F0; margin-bottom:24px;'>", unsafe_allow_html=True)
+        up = st.file_uploader("accounts.xlsx 업로드", type=["xlsx"])
+        colA, colB, colC = st.columns([1.2, 1.0, 2.2], gap="small")
+        with colA: do_sync = st.button("동기화 실행", use_container_width=True, type="primary", icon=":material/sync:")
+        with colB:
+            if st.button("캐시 비우기", use_container_width=True, icon=":material/cleaning_services:"):
+                st.cache_data.clear()
+                st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
 
-        sac.divider(align='center', color='gray', key='div_2')
+    if do_sync:
+        try:
+            df_src = pd.read_excel(up) if up else None
+            seed_from_accounts_xlsx(engine, df=df_src)
+            st.success(f"동기화 완료!", icon=":material/check_circle:")
+            st.cache_data.clear()
+            time.sleep(1)
+            st.rerun()
+        except Exception as e:
+            st.error(f"실패: {e}", icon=":material/error:")
 
-        st.markdown("### DB 찌꺼기 정리")
-        if st.button("DB 대청소 실행", type="secondary", icon=":material/delete_sweep:"):
-            with st.spinner("청소 중..."):
-                try:
-                    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
-                        conn.execute(text("VACUUM ANALYZE fact_campaign_daily;"))
-                    st.success("청소 완료!", icon=":material/check_circle:")
-                except Exception as e:
-                    st.error(f"오류: {e}")
+    # ✨ 중복 에러 해결: 모든 divider에 고유 key 추가
+    sac.divider(align='center', color='gray', key='div_1')
 
-        sac.divider(align='center', color='gray', key='div_3')
+    st.markdown("### 대시보드 속도 최적화")
+    if st.button("초고속 DB 목차 만들기", type="secondary", icon=":material/bolt:"):
+        with st.spinner("진행 중..."):
+            try:
+                with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS idx_fcd_dt ON fact_campaign_daily(dt);"))
+                    # ... 필요한 인덱스 쿼리들
+                st.success("최적화 완료!", icon=":material/check_circle:")
+            except Exception as e:
+                st.error(f"오류: {e}")
 
-        st.markdown("### Danger Zone")
-        with st.container():
-            col_del1, col_del2 = st.columns([2, 1])
-            with col_del1:
-                del_cid = st.text_input("삭제할 커스텀 ID", placeholder="12345678", label_visibility="collapsed")
-                confirm_delete = st.checkbox("영구 삭제 동의")
-            with col_del2:
-                if st.button("영구 삭제 실행", type="primary", use_container_width=True, disabled=not confirm_delete, icon=":material/delete_forever:"):
-                    # 삭제 로직 실행
-                    st.success("삭제 완료!")
-                    st.cache_data.clear()
+    sac.divider(align='center', color='gray', key='div_2')
+
+    st.markdown("### DB 찌꺼기 정리")
+    if st.button("DB 대청소 실행", type="secondary", icon=":material/delete_sweep:"):
+        with st.spinner("청소 중..."):
+            try:
+                with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+                    conn.execute(text("VACUUM ANALYZE fact_campaign_daily;"))
+                st.success("청소 완료!", icon=":material/check_circle:")
+            except Exception as e:
+                st.error(f"오류: {e}")
+
+    sac.divider(align='center', color='gray', key='div_3')
+
+    st.markdown("### Danger Zone")
+    with st.container():
+        col_del1, col_del2 = st.columns([2, 1])
+        with col_del1:
+            del_cid = st.text_input("삭제할 커스텀 ID", placeholder="12345678", label_visibility="collapsed")
+            confirm_delete = st.checkbox("영구 삭제 동의")
+        with col_del2:
+            if st.button("영구 삭제 실행", type="primary", use_container_width=True, disabled=not confirm_delete, icon=":material/delete_forever:"):
+                # 삭제 로직 실행
+                st.success("삭제 완료!")
+                st.cache_data.clear()

@@ -138,18 +138,10 @@ class GoogleAdsClient:
     def search_stream(self, customer_id: str, query: str) -> list[dict[str, Any]]:
         cid = _normalize_customer_id(customer_id)
         url = f"{self.base_url}/customers/{cid}/googleAds:searchStream"
-        headers = {
-            "Authorization": f"Bearer {self.access_token()}",
-            "developer-token": self.developer_token,
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
-        if self.login_customer_id:
-            headers["login-customer-id"] = self.login_customer_id
         req = urllib.request.Request(
             url,
             data=json.dumps({"query": query}).encode("utf-8"),
-            headers=headers,
+            headers=self._headers(),
             method="POST",
         )
         try:
@@ -162,6 +154,9 @@ class GoogleAdsClient:
                 message = parsed.get("error", {}).get("message", raw)
             except Exception:
                 message = raw
+            if exc.code >= 500:
+                log(f"[Google Ads] searchStream {exc.code}; retrying with paged search")
+                return self.search(customer_id, query)
             raise RuntimeError(f"Google Ads API error {exc.code}: {message}") from exc
 
         rows: list[dict[str, Any]] = []
@@ -171,6 +166,48 @@ class GoogleAdsClient:
         elif isinstance(payload, dict):
             rows.extend(payload.get("results") or [])
         return rows
+
+    def _headers(self) -> dict[str, str]:
+        headers = {
+            "Authorization": f"Bearer {self.access_token()}",
+            "developer-token": self.developer_token,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        if self.login_customer_id:
+            headers["login-customer-id"] = self.login_customer_id
+        return headers
+
+    def search(self, customer_id: str, query: str, page_size: int = 10000) -> list[dict[str, Any]]:
+        cid = _normalize_customer_id(customer_id)
+        url = f"{self.base_url}/customers/{cid}/googleAds:search"
+        rows: list[dict[str, Any]] = []
+        page_token = ""
+        while True:
+            body: dict[str, Any] = {"query": query, "pageSize": page_size}
+            if page_token:
+                body["pageToken"] = page_token
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(body).encode("utf-8"),
+                headers=self._headers(),
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    payload = json.loads(resp.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                raw = exc.read().decode("utf-8", errors="replace")
+                try:
+                    parsed = json.loads(raw)
+                    message = parsed.get("error", {}).get("message", raw)
+                except Exception:
+                    message = raw
+                raise RuntimeError(f"Google Ads API error {exc.code}: {message}") from exc
+            rows.extend(payload.get("results") or [])
+            page_token = _clean_text(payload.get("nextPageToken"))
+            if not page_token:
+                return rows
 
 
 def _ensure_platform_connections_schema(engine: Engine) -> None:

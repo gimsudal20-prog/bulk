@@ -10,6 +10,7 @@ import streamlit_antd_components as sac
 from sqlalchemy import text
 
 from data import (
+    clear_platform_credentials_cache,
     get_platform_credentials,
     db_ping,
     get_meta,
@@ -318,12 +319,13 @@ def _repair_known_naver_overrides(engine) -> None:
     if not NAVER_CUSTOMER_ID_OVERRIDES:
         return
     get_platform_credentials(engine)
+    changed = False
     with engine.begin() as conn:
         for account_label, customer_id in NAVER_CUSTOMER_ID_OVERRIDES.items():
             clean_customer_id = _clean_customer_id(customer_id)
             if not clean_customer_id.isdigit():
                 continue
-            conn.execute(
+            result = conn.execute(
                 text(
                     """
                     UPDATE platform_credentials
@@ -337,6 +339,9 @@ def _repair_known_naver_overrides(engine) -> None:
                 ),
                 {"account_label": account_label, "customer_id": int(clean_customer_id), "account_id": clean_customer_id},
             )
+            changed = changed or (getattr(result, "rowcount", 0) or 0) > 0
+    if changed:
+        clear_platform_credentials_cache()
 
 
 def _repair_missing_naver_connections(engine) -> int:

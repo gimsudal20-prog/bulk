@@ -216,7 +216,7 @@ def _connection_filter_options(conn_df: pd.DataFrame) -> dict[str, list[str]]:
     return {"platforms": platforms, "managers": managers}
 
 
-def _apply_connection_filters(conn_df: pd.DataFrame, platform: str, manager: str, active_only: bool) -> pd.DataFrame:
+def _apply_connection_filters(conn_df: pd.DataFrame, platform: str, manager: str, active_only: bool, query: str = "") -> pd.DataFrame:
     if conn_df is None or conn_df.empty:
         return conn_df
     out = conn_df.copy()
@@ -226,6 +226,16 @@ def _apply_connection_filters(conn_df: pd.DataFrame, platform: str, manager: str
         out = out[out["manager"] == manager]
     if active_only:
         out = out[out["is_active"]]
+    query_text = _clean_text(query).casefold()
+    if query_text:
+        haystack = (
+            out["account_label"].fillna("").astype(str)
+            + " "
+            + out["customer_id"].fillna("").astype(str)
+            + " "
+            + out["account_id"].fillna("").astype(str)
+        ).str.casefold()
+        out = out[haystack.str.contains(query_text, regex=False)]
     return out.reset_index(drop=True)
 
 
@@ -434,15 +444,17 @@ def page_settings(engine) -> None:
                         st.error(f"저장 실패: {e}", icon=":material/error:")
 
     filter_opts = _connection_filter_options(conn_df)
-    f_platform, f_manager, f_active = st.columns([1, 1, 1], gap="small")
+    f_platform, f_manager, f_query, f_active = st.columns([0.9, 0.9, 1.4, 0.8], gap="small")
     with f_platform:
         sel_platform = st.selectbox("플랫폼 필터", filter_opts["platforms"], key="settings_conn_platform")
     with f_manager:
         sel_manager = st.selectbox("담당자 필터", filter_opts["managers"], key="settings_conn_manager")
+    with f_query:
+        conn_query = st.text_input("계정명 검색", value="", placeholder="핵이득마켓 또는 2535578", key="settings_conn_query")
     with f_active:
         active_only = st.toggle("활성 연동만", value=False, key="settings_conn_active_only")
 
-    visible_conn_df = _apply_connection_filters(conn_df, sel_platform, sel_manager, active_only)
+    visible_conn_df = _apply_connection_filters(conn_df, sel_platform, sel_manager, active_only, conn_query)
     edited_conn_df = st.data_editor(
         visible_conn_df,
         hide_index=True,

@@ -75,10 +75,15 @@ def _build_alert_display(alert_view: pd.DataFrame) -> pd.DataFrame:
     df["_sort_days"] = days_raw.fillna(9999)
 
     def coerce_base_date(value):
+        if value is None or pd.isna(value):
+            return today
         try:
-            parsed = pd.to_datetime(value).date()
+            parsed_ts = pd.to_datetime(value, errors="coerce")
         except Exception:
             return today
+        if pd.isna(parsed_ts):
+            return today
+        parsed = parsed_ts.date()
         if parsed > today:
             return today
         return parsed

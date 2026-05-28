@@ -180,6 +180,59 @@ def _manager_options(conn_df: pd.DataFrame, dash_accounts: pd.DataFrame) -> list
     return sorted(managers)
 
 
+def _row_id_value(value) -> int | None:
+    try:
+        if pd.isna(value) or str(value).strip() == "":
+            return None
+        return int(value)
+    except Exception:
+        return None
+
+
+def _existing_connection_platform(engine, row_id: int | None) -> str:
+    if not row_id:
+        return ""
+    conn_df = get_platform_credentials(engine)
+    if conn_df is None or conn_df.empty or "id" not in conn_df.columns:
+        return ""
+    matched = conn_df[pd.to_numeric(conn_df["id"], errors="coerce") == row_id]
+    if matched.empty:
+        return ""
+    return str(matched.iloc[0].get("platform", "") or "").strip().lower()
+
+
+def _ensure_naver_connection(engine, account_label: str, customer_id: str, manager: str) -> None:
+    naver_customer_id = _clean_customer_id(customer_id)
+    if not naver_customer_id or not naver_customer_id.isdigit():
+        return
+
+    conn_df = get_platform_credentials(engine)
+    if conn_df is not None and not conn_df.empty:
+        work = conn_df.copy()
+        work["platform"] = work["platform"].fillna("").astype(str).str.lower()
+        work["customer_id_key"] = work["customer_id"].map(_clean_customer_id) if "customer_id" in work.columns else ""
+        work["account_id_key"] = work["account_id"].map(_clean_customer_id) if "account_id" in work.columns else ""
+        has_naver = (
+            (work["platform"] == "naver")
+            & ((work["customer_id_key"] == naver_customer_id) | (work["account_id_key"] == naver_customer_id))
+        ).any()
+        if has_naver:
+            return
+
+    upsert_platform_credential(
+        engine,
+        {
+            "id": None,
+            "platform": "naver",
+            "account_label": account_label,
+            "manager": manager,
+            "customer_id": int(naver_customer_id),
+            "account_id": naver_customer_id,
+            "is_active": True,
+        },
+    )
+
+
 def _save_platform_connections(engine, edited_df: pd.DataFrame) -> int:
     if edited_df is None or edited_df.empty:
         return 0
@@ -195,10 +248,13 @@ def _save_platform_connections(engine, edited_df: pd.DataFrame) -> int:
         if not platform or not account_label or not account_id:
             raise ValueError("플랫폼, 대시보드 계정명, 플랫폼 계정 ID는 모두 입력해야 합니다.")
         resolved_customer_id = _resolve_dashboard_customer_id(engine, account_label, dashboard_customer_id, account_id)
+        row_id = _row_id_value(row.get("id"))
+        if row_id and _existing_connection_platform(engine, row_id) not in {"", platform}:
+            row_id = None
         upsert_platform_credential(
             engine,
             {
-                "id": None if pd.isna(row.get("id")) or str(row.get("id", "")).strip() == "" else int(row.get("id")),
+                "id": row_id,
                 "platform": platform,
                 "account_label": account_label,
                 "manager": manager,
@@ -207,6 +263,8 @@ def _save_platform_connections(engine, edited_df: pd.DataFrame) -> int:
                 "is_active": bool(row.get("is_active", True)),
             },
         )
+        if platform != "naver":
+            _ensure_naver_connection(engine, account_label, resolved_customer_id, manager)
         _sync_connection_manager_to_customer(engine, account_label, resolved_customer_id, manager)
         count += 1
     return count

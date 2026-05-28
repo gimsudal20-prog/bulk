@@ -51,6 +51,9 @@ def _normalize_customer_id_value_for_page(value) -> str:
                 return str(int(as_float))
         except Exception:
             pass
+    compact = value_str.replace("-", "").replace(" ", "")
+    if compact.isdigit():
+        return compact
     return value_str
 
 
@@ -68,15 +71,62 @@ def _customer_id_int_series_for_page(series: pd.Series) -> pd.Series:
         return pd.Series(dtype="int64")
     return numeric.astype("int64")
 
-def _all_customer_ids(meta: pd.DataFrame) -> list:
-    if meta is None or meta.empty or "customer_id" not in meta.columns:
+def _platform_scope_rows(_engine) -> pd.DataFrame:
+    if _engine is None:
+        return pd.DataFrame(columns=["customer_id", "account_name", "manager"])
+    try:
+        conn_df = get_platform_credentials(_engine)
+    except Exception:
+        return pd.DataFrame(columns=["customer_id", "account_name", "manager"])
+    if conn_df is None or conn_df.empty:
+        return pd.DataFrame(columns=["customer_id", "account_name", "manager"])
+
+    work = conn_df.copy()
+    if "is_active" in work.columns:
+        work = work[work["is_active"].fillna(False).astype(bool)].copy()
+    rows = []
+    for _, row in work.iterrows():
+        account_name = str(row.get("account_label", "") or "").strip()
+        if not account_name:
+            continue
+        manager = str(row.get("manager", "") or "").strip()
+        for id_col in ["customer_id", "account_id"]:
+            customer_id = _normalize_customer_id_value_for_page(row.get(id_col, ""))
+            if customer_id and customer_id.isdigit():
+                rows.append({"customer_id": customer_id, "account_name": account_name, "manager": manager})
+    if not rows:
+        return pd.DataFrame(columns=["customer_id", "account_name", "manager"])
+    return pd.DataFrame(rows).drop_duplicates().reset_index(drop=True)
+
+
+def _scope_df(meta: pd.DataFrame, _engine=None) -> pd.DataFrame:
+    base = meta.copy() if meta is not None and not meta.empty else pd.DataFrame(columns=["customer_id", "account_name", "manager"])
+    for col in ["customer_id", "account_name", "manager"]:
+        if col not in base.columns:
+            base[col] = ""
+    base = base[["customer_id", "account_name", "manager"]].copy()
+    linked = _platform_scope_rows(_engine)
+    combined = pd.concat([base, linked], ignore_index=True)
+    if combined.empty:
+        return combined
+    combined["customer_id"] = _normalize_customer_id_series_for_page(combined["customer_id"])
+    combined["account_name"] = combined["account_name"].astype(str).str.strip()
+    combined["manager"] = combined["manager"].astype(str).str.strip()
+    combined = combined[(combined["customer_id"] != "") & (combined["account_name"] != "")]
+    return combined.drop_duplicates().reset_index(drop=True)
+
+
+def _all_customer_ids(meta: pd.DataFrame, _engine=None) -> list:
+    work = _scope_df(meta, _engine)
+    if work.empty or "customer_id" not in work.columns:
         return []
-    s = _customer_id_int_series_for_page(meta["customer_id"])
+    s = _customer_id_int_series_for_page(work["customer_id"])
     return sorted(s.drop_duplicates().tolist())
 
 @st.cache_data(ttl=DASHBOARD_DATA_CACHE_TTL, max_entries=8, show_spinner=False)
-def _build_filter_maps(meta: pd.DataFrame) -> Dict:
-    if meta is None or meta.empty:
+def _build_filter_maps(meta: pd.DataFrame, _engine=None) -> Dict:
+    work = _scope_df(meta, _engine)
+    if work.empty:
         return {
             "managers": [],
             "accounts": [],
@@ -85,21 +135,9 @@ def _build_filter_maps(meta: pd.DataFrame) -> Dict:
             "account_to_cids": {},
         }
 
-    work = meta.copy()
-    if "manager" in work.columns:
-        work["manager"] = work["manager"].astype(str).str.strip()
-    else:
-        work["manager"] = ""
-    if "account_name" in work.columns:
-        work["account_name"] = work["account_name"].astype(str).str.strip()
-    else:
-        work["account_name"] = ""
-    if "customer_id" in work.columns:
-        work["customer_id"] = _customer_id_int_series_for_page(work["customer_id"])
-        work = work.dropna(subset=["customer_id"]).copy()
-        work["customer_id"] = work["customer_id"].astype("int64")
-    else:
-        work["customer_id"] = pd.Series(dtype="int64")
+    work["customer_id"] = _customer_id_int_series_for_page(work["customer_id"])
+    work = work.dropna(subset=["customer_id"]).copy()
+    work["customer_id"] = work["customer_id"].astype("int64")
 
     managers = sorted([x for x in work["manager"].dropna().unique().tolist() if str(x).strip()])
     accounts = sorted([x for x in work["account_name"].dropna().unique().tolist() if str(x).strip()])
@@ -132,18 +170,17 @@ def _build_filter_maps(meta: pd.DataFrame) -> Dict:
     }
 
 
-def resolve_customer_ids(meta: pd.DataFrame, manager_sel: list, account_sel: list) -> list:
-    if meta is None or meta.empty:
-        return []
-
+def resolve_customer_ids(meta: pd.DataFrame, manager_sel: list, account_sel: list, engine=None) -> list:
     manager_sel = [str(x).strip() for x in (manager_sel or []) if str(x).strip()]
     account_sel = [str(x).strip() for x in (account_sel or []) if str(x).strip()]
 
     # 아무 것도 선택하지 않았으면 전체 계정을 반환한다.
     if not manager_sel and not account_sel:
-        return _all_customer_ids(meta)
+        return _all_customer_ids(meta, engine)
 
-    df = meta.copy()
+    df = _scope_df(meta, engine)
+    if df.empty:
+        return []
     if manager_sel and "manager" in df.columns:
         df = df[df["manager"].astype(str).str.strip().isin(manager_sel)]
     if account_sel and "account_name" in df.columns:
@@ -230,7 +267,7 @@ def build_filters(meta: pd.DataFrame, type_opts: List[str], engine=None) -> Dict
         }
     sv = st.session_state["filters_v8"]
 
-    filter_maps = _build_filter_maps(meta)
+    filter_maps = _build_filter_maps(meta, engine)
     managers = filter_maps.get("managers", [])
     accounts = filter_maps.get("accounts", [])
 
@@ -344,9 +381,9 @@ def build_filters(meta: pd.DataFrame, type_opts: List[str], engine=None) -> Dict
         st.session_state["filters_v8"] = dict(updated_filters)
         sv = st.session_state["filters_v8"]
 
-    cids = resolve_customer_ids(meta, manager_sel, account_sel)
+    cids = resolve_customer_ids(meta, manager_sel, account_sel, engine)
     if not cids and not (manager_sel or account_sel):
-        cids = _all_customer_ids(meta)
+        cids = _all_customer_ids(meta, engine)
 
     return {
         "q": sv["q"], "manager": sv["manager"], "account": sv["account"], "type_sel": tuple(sv["type_sel"]) if sv["type_sel"] else tuple(),

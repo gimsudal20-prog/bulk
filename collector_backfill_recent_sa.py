@@ -33,7 +33,9 @@ from sqlalchemy.pool import NullPool
 from device_collector_helpers import (
     ensure_device_tables,
     build_ad_to_campaign_map,
+    build_adgroup_to_campaign_map,
     parse_ad_device_report,
+    parse_criterion_device_reports,
     save_device_stats,
     summarize_stat_res,
 )
@@ -1967,6 +1969,7 @@ def process_account(engine: Engine, customer_id: str, account_name: str, target_
         live_keyword_resolver = make_live_keyword_resolver(customer_id)
 
         ad_to_campaign_map = build_ad_to_campaign_map(engine, customer_id)
+        adgroup_to_campaign_map = build_adgroup_to_campaign_map(engine, customer_id)
 
         current_stage = "fetch_reports"
         result["stage"] = current_stage
@@ -1983,7 +1986,7 @@ def process_account(engine: Engine, customer_id: str, account_name: str, target_
             log(f"   ℹ️ [ {account_name} ] 당일 데이터는 실시간 stats 총합만 수집합니다.")
         else:
             log(f"   ⏳ [ {account_name} ] 리포트 생성 대기 중...")
-            report_types = ["AD"]
+            report_types = ["AD", "CRITERION", "CRITERION_CONVERSION"]
             split_candidate_reports = []
             if split_enabled_for_date(target_date) and shopping_campaign_ids:
                 split_candidate_reports = ["AD_CONVERSION", "SHOPPINGKEYWORD_CONVERSION_DETAIL"]
@@ -1991,11 +1994,14 @@ def process_account(engine: Engine, customer_id: str, account_name: str, target_
                 result["split_attempted"] = True
             dfs = fetch_multiple_stat_reports(customer_id, report_types, target_date)
             result["ad_report_status"] = _report_df_status(dfs.get("AD"))
+            result["criterion_report_status"] = _report_df_status(dfs.get("CRITERION"))
+            result["criterion_conversion_status"] = _report_df_status(dfs.get("CRITERION_CONVERSION"))
             result["ad_conversion_status"] = _report_df_status(dfs.get("AD_CONVERSION")) if "AD_CONVERSION" in report_types else "not_requested"
             result["shopping_keyword_conversion_status"] = _report_df_status(dfs.get("SHOPPINGKEYWORD_CONVERSION_DETAIL")) if "SHOPPINGKEYWORD_CONVERSION_DETAIL" in report_types else "not_requested"
 
-            if dfs.get("AD") is None and all(dfs.get(tp) is None for tp in split_candidate_reports):
-                log(f"   ⚠️ [ {account_name} ] AD / 전환 리포트가 모두 실패 → 실시간 stats 총합으로 대체합니다. (purchase/cart 미분리)")
+            required_fallback_reports = ["AD", "CRITERION", "CRITERION_CONVERSION"] + split_candidate_reports
+            if all(dfs.get(tp) is None for tp in required_fallback_reports):
+                log(f"   ⚠️ [ {account_name} ] AD / 전환 / CRITERION 리포트가 모두 실패 → 실시간 stats 총합으로 대체합니다. (purchase/cart 및 PC/M 미분리)")
                 use_realtime_fallback = True
                 result["used_realtime_fallback"] = True
                 result["realtime_reason"] = "report_fetch_failed"
@@ -2202,13 +2208,53 @@ def process_account(engine: Engine, customer_id: str, account_name: str, target_
                             extra_parts.append(f"{_k}={_v}")
                         extra_msg = f" | {' | '.join(extra_parts)}" if extra_parts else ""
                         log(
-                            f"   ℹ️ [ {account_name} ] AD 리포트에서 PC/M 컬럼을 확인하지 못해 기기 분리 저장은 건너뜁니다. "
+                            f"   ℹ️ [ {account_name} ] AD 리포트에서 PC/M 컬럼을 확인하지 못했습니다. "
+                            f"CRITERION 기기 리포트로 보정 수집을 시도합니다. "
                             f"status={device_meta.get('status')}{extra_msg}"
                         )
+                        criterion_df = dfs.get("CRITERION")
+                        criterion_conv_df = dfs.get("CRITERION_CONVERSION")
+                        if criterion_df is not None and not criterion_df.empty:
+                            criterion_camp_stat, criterion_meta = parse_criterion_device_reports(
+                                criterion_df,
+                                criterion_conv_df,
+                                adgroup_to_campaign=adgroup_to_campaign_map,
+                            )
+                            result["criterion_device_status"] = str(criterion_meta.get("status") or "unknown")
+                            result["criterion_device_rows"] = int(criterion_meta.get("campaign_rows", 0) or 0)
+                            if criterion_meta.get("status") == "ok" and criterion_camp_stat:
+                                device_campaign_cnt = save_device_stats(
+                                    engine, customer_id, target_date, "fact_campaign_device_daily", "campaign_id", criterion_camp_stat,
+                                    data_source="report_device_criterion", source_report="CRITERION"
+                                )
+                                result["device_status"] = "criterion_ok"
+                                log(f"   ✅ [ {account_name} ] CRITERION PC/M 분리 저장 완료: 캠페인({device_campaign_cnt})")
+                            else:
+                                log(f"   ⚠️ [ {account_name} ] CRITERION PC/M 파싱 실패: status={criterion_meta.get('status')}")
+                        else:
+                            result["criterion_device_status"] = "missing"
+                            log(f"   ℹ️ [ {account_name} ] CRITERION 리포트가 없어 PC/M 보정 수집을 건너뜁니다.")
                 else:
                     result["device_status"] = "ad_report_missing"
                     log(f"   ⚠️ [ {account_name} ] AD 리포트 없음 → 소재만 실시간 stats 총합으로 대체합니다.")
                     a_cnt = fetch_stats_fallback(engine, customer_id, target_date, target_ad_ids, "ad_id", "fact_ad_daily", split_map=ad_map)
+                    criterion_df = dfs.get("CRITERION")
+                    criterion_conv_df = dfs.get("CRITERION_CONVERSION")
+                    if criterion_df is not None and not criterion_df.empty:
+                        criterion_camp_stat, criterion_meta = parse_criterion_device_reports(
+                            criterion_df,
+                            criterion_conv_df,
+                            adgroup_to_campaign=adgroup_to_campaign_map,
+                        )
+                        result["criterion_device_status"] = str(criterion_meta.get("status") or "unknown")
+                        result["criterion_device_rows"] = int(criterion_meta.get("campaign_rows", 0) or 0)
+                        if criterion_meta.get("status") == "ok" and criterion_camp_stat:
+                            device_campaign_cnt = save_device_stats(
+                                engine, customer_id, target_date, "fact_campaign_device_daily", "campaign_id", criterion_camp_stat,
+                                data_source="report_device_criterion", source_report="CRITERION"
+                            )
+                            result["device_status"] = "criterion_ok"
+                            log(f"   ✅ [ {account_name} ] AD 리포트 없이 CRITERION PC/M 분리 저장 완료: 캠페인({device_campaign_cnt})")
             else:
                 result["device_status"] = "not_requested"
                 a_cnt = 0

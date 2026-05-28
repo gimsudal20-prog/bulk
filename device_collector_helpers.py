@@ -11,7 +11,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 
-DEVICE_PARSER_VERSION = "pcm_v20260328_final3"
+DEVICE_PARSER_VERSION = "pcm_v20260528_criterion1"
 UNSEGMENTED_DEVICE_NAME = "UNSEGMENTED"
 
 DEVICE_HEADER_CANDIDATES = [
@@ -21,12 +21,18 @@ DEVICE_HEADER_CANDIDATES = [
 ]
 AD_HEADER_CANDIDATES = ["광고id", "소재id", "adid"]
 CAMPAIGN_HEADER_CANDIDATES = ["캠페인id", "campaignid"]
-IMP_HEADER_CANDIDATES = ["노출수", "impressions", "impcnt"]
-CLK_HEADER_CANDIDATES = ["클릭수", "clicks", "clkcnt"]
-COST_HEADER_CANDIDATES = ["총비용", "cost", "salesamt"]
+IMP_HEADER_CANDIDATES = ["노출수", "impression", "impressions", "imp", "impcnt"]
+CLK_HEADER_CANDIDATES = ["클릭수", "click", "clicks", "clk", "clkcnt"]
+COST_HEADER_CANDIDATES = ["총비용", "비용", "광고비", "cost", "salesamt"]
 CONV_HEADER_CANDIDATES = ["전환수", "conversions", "ccnt"]
 SALES_HEADER_CANDIDATES = ["전환매출액", "conversionvalue", "sales", "convamt"]
 RANK_HEADER_CANDIDATES = ["평균노출순위", "averageposition", "avgrnk"]
+CRITERION_HEADER_CANDIDATES = [
+    "criterion id", "criterionid", "criterion_id", "타게팅id", "타겟팅id",
+    "타게팅 id", "타겟팅 id", "criterion",
+]
+CONV_COUNT_HEADER_CANDIDATES = ["전환수", "conversion count", "conversioncount", "conversions", "ccnt"]
+CONV_SALES_HEADER_CANDIDATES = ["전환매출", "전환매출액", "sales by conversion", "salesbyconversion", "conversionvalue", "convamt", "sales"]
 
 DEFAULT_AD_IDX = 5
 DEFAULT_CAMP_IDX = 1
@@ -260,6 +266,21 @@ def build_ad_to_campaign_map(engine: Engine, customer_id: str) -> Dict[str, str]
         with engine.connect() as conn:
             rows = conn.execute(text(sql), {"cid": str(customer_id)}).fetchall()
         return {str(r[0]).strip(): str(r[1]).strip() for r in rows if str(r[0]).strip()}
+    except Exception:
+        return {}
+
+
+def build_adgroup_to_campaign_map(engine: Engine, customer_id: str) -> Dict[str, str]:
+    sql = """
+    SELECT adgroup_id::text AS adgroup_id,
+           COALESCE(campaign_id::text, '') AS campaign_id
+    FROM dim_adgroup
+    WHERE customer_id::text = :cid
+    """
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text(sql), {"cid": str(customer_id)}).fetchall()
+        return {str(r[0]).strip(): str(r[1]).strip() for r in rows if str(r[0]).strip() and str(r[1]).strip()}
     except Exception:
         return {}
 
@@ -591,6 +612,211 @@ def parse_ad_device_report(
         "missing_campaign_rows": missing_campaign_count,
         "header_idx": header_idx,
     }
+
+
+
+def _extract_owner_id_from_criterion_id(v: Any) -> str:
+    raw = str(v or "").strip()
+    if not raw or raw == "-":
+        return ""
+    # CRITERION report criterion id is generally "ownerId~dictionaryCode".
+    # Keep this forgiving because some exports wrap values with quotes or contain extra whitespace.
+    owner = raw.split("~", 1)[0].strip().strip('"').strip("'")
+    return owner
+
+
+def _resolve_campaign_from_owner(owner_id: str, adgroup_to_campaign: Dict[str, str]) -> str:
+    owner_id = str(owner_id or "").strip()
+    if not owner_id:
+        return ""
+    mapped = str((adgroup_to_campaign or {}).get(owner_id) or "").strip()
+    if mapped:
+        return mapped
+    if owner_id.lower().startswith("cmp-"):
+        return owner_id
+    return ""
+
+
+def _parse_criterion_metric_report(
+    df: pd.DataFrame,
+    *,
+    adgroup_to_campaign: Dict[str, str] | None = None,
+    is_conversion: bool = False,
+) -> Tuple[Dict[Tuple[str, str], dict], dict]:
+    if df is None or df.empty:
+        return {}, {"status": "empty"}
+
+    adgroup_to_campaign = adgroup_to_campaign or {}
+    raw_df = df.reset_index(drop=True).copy()
+    header_idx = _detect_header_idx(raw_df)
+    raw_headers: List[str] = []
+
+    if header_idx != -1:
+        raw_headers = _nonempty_headers(raw_df.iloc[header_idx])
+        headers = [_normalize_header(str(x)) for x in raw_df.iloc[header_idx].fillna("")]
+        data_df = raw_df.iloc[header_idx + 1:].reset_index(drop=True)
+        criterion_idx = _get_col_idx(headers, CRITERION_HEADER_CANDIDATES)
+        device_idx = _get_col_idx(headers, DEVICE_HEADER_CANDIDATES)
+        imp_idx = _get_col_idx(headers, IMP_HEADER_CANDIDATES)
+        clk_idx = _get_col_idx(headers, CLK_HEADER_CANDIDATES)
+        cost_idx = _get_col_idx(headers, COST_HEADER_CANDIDATES)
+        conv_idx = _get_col_idx(headers, CONV_COUNT_HEADER_CANDIDATES)
+        sales_idx = _get_col_idx(headers, CONV_SALES_HEADER_CANDIDATES)
+    else:
+        data_df = raw_df
+        criterion_idx = 2 if len(raw_df.columns) > 2 else -1
+        device_idx = 3 if len(raw_df.columns) > 3 else -1
+        imp_idx = 4 if len(raw_df.columns) > 4 else -1
+        clk_idx = 5 if len(raw_df.columns) > 5 else -1
+        cost_idx = 6 if len(raw_df.columns) > 6 else -1
+        conv_idx = 6 if is_conversion and len(raw_df.columns) > 6 else -1
+        sales_idx = 7 if is_conversion and len(raw_df.columns) > 7 else -1
+
+    if criterion_idx == -1 or device_idx == -1:
+        return {}, {
+            "status": "missing_required_columns" if header_idx != -1 else "no_header",
+            "header_idx": header_idx,
+            "criterion_idx": criterion_idx,
+            "device_idx": device_idx,
+            "sample_headers": raw_headers[:16],
+        }
+
+    stats: Dict[Tuple[str, str], dict] = {}
+    scan_rows = reject_short = reject_empty_criterion = reject_empty_device = reject_missing_campaign = reject_zero_metrics = 0
+    preview_rows: List[dict] = []
+    metric_indices = [conv_idx, sales_idx] if is_conversion else [imp_idx, clk_idx, cost_idx]
+    max_idx = max([x for x in [criterion_idx, device_idx, *metric_indices] if x != -1], default=0)
+
+    for row_no, (_, row) in enumerate(data_df.iterrows(), start=1):
+        scan_rows += 1
+        if len(row) <= max_idx:
+            reject_short += 1
+            continue
+
+        raw_criterion = row.iloc[criterion_idx] if len(row) > criterion_idx else ""
+        raw_device = row.iloc[device_idx] if len(row) > device_idx else ""
+        owner_id = _extract_owner_id_from_criterion_id(raw_criterion)
+        if not owner_id:
+            reject_empty_criterion += 1
+            if len(preview_rows) < 3:
+                preview_rows.append({"row_no": row_no, "raw_criterion": str(raw_criterion), "raw_device": str(raw_device), "reason": "empty_criterion"})
+            continue
+
+        device_name = normalize_device_name(raw_device)
+        if not device_name or device_name == UNSEGMENTED_DEVICE_NAME:
+            reject_empty_device += 1
+            if len(preview_rows) < 3:
+                preview_rows.append({"row_no": row_no, "raw_criterion": str(raw_criterion), "raw_device": str(raw_device), "reason": "empty_device"})
+            continue
+
+        campaign_id = _resolve_campaign_from_owner(owner_id, adgroup_to_campaign)
+        if not campaign_id:
+            reject_missing_campaign += 1
+            if len(preview_rows) < 3:
+                preview_rows.append({"row_no": row_no, "raw_criterion": str(raw_criterion), "owner_id": owner_id, "raw_device": str(raw_device), "reason": "missing_campaign"})
+            continue
+
+        if is_conversion:
+            imp = clk = cost = 0
+            conv = _safe_float(row.iloc[conv_idx]) if conv_idx != -1 and len(row) > conv_idx else 0.0
+            sales = int(_safe_float(row.iloc[sales_idx])) if sales_idx != -1 and len(row) > sales_idx else 0
+        else:
+            imp = int(_safe_float(row.iloc[imp_idx])) if imp_idx != -1 and len(row) > imp_idx else 0
+            clk = int(_safe_float(row.iloc[clk_idx])) if clk_idx != -1 and len(row) > clk_idx else 0
+            cost = int(_safe_float(row.iloc[cost_idx])) if cost_idx != -1 and len(row) > cost_idx else 0
+            conv = 0.0
+            sales = 0
+
+        if imp == 0 and clk == 0 and cost == 0 and conv == 0 and sales == 0:
+            reject_zero_metrics += 1
+            continue
+
+        key = (campaign_id, device_name)
+        bucket = stats.setdefault(key, {
+            "imp": 0,
+            "clk": 0,
+            "cost": 0,
+            "conv": 0.0,
+            "sales": 0,
+            "rank_sum": 0.0,
+            "rank_cnt": 0,
+        })
+        bucket["imp"] += imp
+        bucket["clk"] += clk
+        bucket["cost"] += cost
+        bucket["conv"] += conv
+        bucket["sales"] += sales
+
+    meta = {
+        "status": "ok" if stats else "no_rows",
+        "header_idx": header_idx,
+        "criterion_idx": criterion_idx,
+        "device_idx": device_idx,
+        "imp_idx": imp_idx,
+        "clk_idx": clk_idx,
+        "cost_idx": cost_idx,
+        "conv_idx": conv_idx,
+        "sales_idx": sales_idx,
+        "scan_rows": scan_rows,
+        "reject_short": reject_short,
+        "reject_empty_criterion": reject_empty_criterion,
+        "reject_empty_device": reject_empty_device,
+        "reject_missing_campaign": reject_missing_campaign,
+        "reject_zero_metrics": reject_zero_metrics,
+        "campaign_rows": len(stats),
+        "sample_headers": raw_headers[:16],
+        "preview_rows": preview_rows,
+    }
+    return stats, meta
+
+
+def parse_criterion_device_reports(
+    criterion_df: pd.DataFrame,
+    criterion_conversion_df: pd.DataFrame | None = None,
+    *,
+    adgroup_to_campaign: Dict[str, str] | None = None,
+) -> Tuple[Dict[Tuple[str, str], dict], dict]:
+    base_stat, base_meta = _parse_criterion_metric_report(
+        criterion_df,
+        adgroup_to_campaign=adgroup_to_campaign,
+        is_conversion=False,
+    )
+    if base_meta.get("status") != "ok":
+        base_meta["parser"] = DEVICE_PARSER_VERSION
+        base_meta["source_report"] = "CRITERION"
+        return {}, base_meta
+
+    conv_stat: Dict[Tuple[str, str], dict] = {}
+    conv_meta = {"status": "not_requested"}
+    if criterion_conversion_df is not None and not getattr(criterion_conversion_df, "empty", False):
+        conv_stat, conv_meta = _parse_criterion_metric_report(
+            criterion_conversion_df,
+            adgroup_to_campaign=adgroup_to_campaign,
+            is_conversion=True,
+        )
+        for key, value in conv_stat.items():
+            bucket = base_stat.setdefault(key, {
+                "imp": 0,
+                "clk": 0,
+                "cost": 0,
+                "conv": 0.0,
+                "sales": 0,
+                "rank_sum": 0.0,
+                "rank_cnt": 0,
+            })
+            bucket["conv"] += float(value.get("conv", 0.0) or 0.0)
+            bucket["sales"] += int(value.get("sales", 0) or 0)
+
+    meta = dict(base_meta)
+    meta.update({
+        "status": "ok",
+        "parser": DEVICE_PARSER_VERSION,
+        "source_report": "CRITERION",
+        "conversion_status": conv_meta.get("status", "not_requested"),
+        "conversion_rows": len(conv_stat),
+        "campaign_rows": len(base_stat),
+    })
+    return base_stat, meta
 
 
 def save_device_stats(

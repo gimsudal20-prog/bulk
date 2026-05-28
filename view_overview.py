@@ -227,9 +227,11 @@ def _overview_account_maps(meta: pd.DataFrame, engine=None) -> tuple[dict[str, s
         meta_view = meta[["customer_id", "account_name"]].copy()
         meta_view["_cid"] = meta_view["customer_id"].map(_clean_overview_customer_id)
         meta_view["_name"] = meta_view["account_name"].fillna("").astype(str).str.strip()
-        for row in meta_view.itertuples(index=False):
-            if row._cid and row._name:
-                base_map[row._cid] = row._name
+        for _, row in meta_view.iterrows():
+            cid = str(row.get("_cid", "") or "").strip()
+            name = str(row.get("_name", "") or "").strip()
+            if cid and name:
+                base_map[cid] = name
 
     if engine is not None:
         try:

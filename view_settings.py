@@ -24,6 +24,14 @@ NAVER_CUSTOMER_ID_OVERRIDES = {
     "핵이득마켓": "2535578",
 }
 
+NAVER_MANAGER_OVERRIDES = {
+    "핵이득마켓": "승훈",
+}
+
+NAVER_STALE_ACCOUNT_IDS_BY_LABEL = {
+    "핵이득마켓": {"1069491557", "143436265335363", "2761547013"},
+}
+
 
 def _clean_text(value, fallback: str = "") -> str:
     cleaned = str(value or "").strip()
@@ -326,6 +334,46 @@ def _repair_known_naver_overrides(engine) -> None:
             clean_customer_id = _clean_customer_id(customer_id)
             if not clean_customer_id.isdigit():
                 continue
+            stale_ids = sorted(
+                bad_id
+                for bad_id in NAVER_STALE_ACCOUNT_IDS_BY_LABEL.get(account_label, set())
+                if _clean_customer_id(bad_id).isdigit()
+            )
+            stale_params = {f"stale_id_{idx}": stale_id for idx, stale_id in enumerate(stale_ids)}
+            stale_checks = []
+            for idx in range(len(stale_ids)):
+                stale_checks.extend(
+                    [
+                        f"REGEXP_REPLACE(CAST(customer_id AS TEXT), '\\.0+$', '') = :stale_id_{idx}",
+                        f"REGEXP_REPLACE(CAST(account_id AS TEXT), '\\.0+$', '') = :stale_id_{idx}",
+                    ]
+                )
+            stale_id_sql = " OR ".join(stale_checks)
+            delete_match_sql = "LOWER(REPLACE(TRIM(account_label), ' ', '')) LIKE :account_label_pattern"
+            if stale_id_sql:
+                delete_match_sql = f"({delete_match_sql} OR (CAST(account_label AS TEXT) LIKE :account_label_hint AND ({stale_id_sql})))"
+
+            delete_result = conn.execute(
+                text(
+                    f"""
+                    DELETE FROM platform_credentials
+                    WHERE LOWER(platform) = 'naver'
+                      AND {delete_match_sql}
+                      AND NOT (
+                          REGEXP_REPLACE(CAST(customer_id AS TEXT), '\\.0+$', '') = :clean_customer_id
+                          AND REGEXP_REPLACE(CAST(account_id AS TEXT), '\\.0+$', '') = :account_id
+                      )
+                    """
+                ),
+                {
+                    "account_label_pattern": f"%{account_label.replace(' ', '').casefold()}%",
+                    "account_label_hint": "%핵%마켓%",
+                    "clean_customer_id": clean_customer_id,
+                    "account_id": clean_customer_id,
+                    **stale_params,
+                },
+            )
+            changed = changed or (getattr(delete_result, "rowcount", 0) or 0) > 0
             result = conn.execute(
                 text(
                     """
@@ -347,6 +395,10 @@ def _repair_known_naver_overrides(engine) -> None:
             changed = changed or (getattr(result, "rowcount", 0) or 0) > 0
     if changed:
         clear_platform_credentials_cache()
+    for account_label, customer_id in NAVER_CUSTOMER_ID_OVERRIDES.items():
+        manager = NAVER_MANAGER_OVERRIDES.get(account_label, "미배정")
+        if _ensure_naver_connection(engine, account_label, customer_id, manager):
+            clear_platform_credentials_cache()
 
 
 def _repair_missing_naver_connections(engine) -> int:
@@ -527,7 +579,7 @@ def page_settings(engine) -> None:
             "account_id": st.column_config.TextColumn("플랫폼 계정 ID", required=True, help="Meta는 광고계정 ID, Google은 고객 ID", width="medium"),
             "is_active": st.column_config.CheckboxColumn("수집", default=True, width="small"),
         },
-        key="platform_connections_editor_v2",
+        key="platform_connections_editor_v3",
     )
     col_conn_a, col_conn_b = st.columns([1.1, 3])
     with col_conn_a:

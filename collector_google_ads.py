@@ -178,13 +178,13 @@ class GoogleAdsClient:
             headers["login-customer-id"] = self.login_customer_id
         return headers
 
-    def search(self, customer_id: str, query: str, page_size: int = 10000) -> list[dict[str, Any]]:
+    def search(self, customer_id: str, query: str) -> list[dict[str, Any]]:
         cid = _normalize_customer_id(customer_id)
         url = f"{self.base_url}/customers/{cid}/googleAds:search"
         rows: list[dict[str, Any]] = []
         page_token = ""
         while True:
-            body: dict[str, Any] = {"query": query, "pageSize": page_size}
+            body: dict[str, Any] = {"query": query}
             if page_token:
                 body["pageToken"] = page_token
             req = urllib.request.Request(

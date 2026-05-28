@@ -54,9 +54,10 @@ def _credential_customer_id(value):
 
 
 def _naver_customer_id_override(account_label: str) -> str:
-    label_key = _clean_text(account_label).casefold()
+    label_key = _clean_text(account_label).replace(" ", "").casefold()
     for configured_label, customer_id in NAVER_CUSTOMER_ID_OVERRIDES.items():
-        if configured_label.casefold() == label_key:
+        configured_key = configured_label.replace(" ", "").casefold()
+        if configured_key and configured_key in label_key:
             return _clean_customer_id(customer_id)
     return ""
 
@@ -333,11 +334,15 @@ def _repair_known_naver_overrides(engine) -> None:
                            account_id = :account_id,
                            is_active = TRUE,
                            updated_at = NOW()
-                     WHERE LOWER(platform) = 'naver'
-                       AND LOWER(TRIM(account_label)) = LOWER(:account_label)
+                    WHERE LOWER(platform) = 'naver'
+                       AND LOWER(REPLACE(TRIM(account_label), ' ', '')) LIKE :account_label_pattern
                     """
                 ),
-                {"account_label": account_label, "customer_id": int(clean_customer_id), "account_id": clean_customer_id},
+                {
+                    "account_label_pattern": f"%{account_label.replace(' ', '').casefold()}%",
+                    "customer_id": int(clean_customer_id),
+                    "account_id": clean_customer_id,
+                },
             )
             changed = changed or (getattr(result, "rowcount", 0) or 0) > 0
     if changed:

@@ -119,15 +119,15 @@ def main():
         st.session_state["nav_page"] = nav
 
     f = None
-    if nav != "설정 및 연결":
+    if nav == "설정 및 연결":
+        st.session_state["_show_perf_diag"] = False
+    else:
         if not meta_ready:
             st.error("설정 메뉴에서 동기화를 진행해주세요.")
             return
         f = build_filters(meta, get_campaign_type_options_cached(engine), engine)
         st.session_state["_show_perf_diag"] = bool(f.get("show_diagnostics", False))
         reset_perf_events()
-    else:
-        st.session_state["_show_perf_diag"] = False
 
     _render_page_header(nav, latest, f)
 
@@ -140,7 +140,7 @@ def main():
         "쇼핑 검색어 분석",
     }
 
-    if nav in requires_selection_pages and not (f.get("manager") or f.get("account")):
+    if f is not None and nav in requires_selection_pages and not (f.get("manager") or f.get("account")):
         st.info("담당자 또는 광고주(계정) 필터를 먼저 1개 이상 선택하면 데이터가 표시됩니다.")
         st.stop()
 

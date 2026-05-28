@@ -97,6 +97,45 @@ def _dashboard_account_lookup(dash_accounts: pd.DataFrame, account_label: str) -
     return matched.iloc[0].to_dict()
 
 
+def _has_naver_connection(conn_df: pd.DataFrame, customer_id: str) -> bool:
+    naver_customer_id = _clean_customer_id(customer_id)
+    if not naver_customer_id or conn_df is None or conn_df.empty:
+        return False
+    work = conn_df.copy()
+    work["platform"] = work["platform"].fillna("").astype(str).str.lower()
+    work["customer_id_key"] = work["customer_id"].map(_clean_customer_id) if "customer_id" in work.columns else ""
+    work["account_id_key"] = work["account_id"].map(_clean_customer_id) if "account_id" in work.columns else ""
+    return (
+        (work["platform"] == "naver")
+        & ((work["customer_id_key"] == naver_customer_id) | (work["account_id_key"] == naver_customer_id))
+    ).any()
+
+
+def _with_dashboard_naver_rows(conn_df: pd.DataFrame, dash_accounts: pd.DataFrame) -> pd.DataFrame:
+    if dash_accounts is None or dash_accounts.empty:
+        return conn_df
+
+    rows = []
+    for row in dash_accounts.itertuples(index=False):
+        customer_id = _clean_customer_id(row.customer_id)
+        if not customer_id or _has_naver_connection(conn_df, customer_id):
+            continue
+        rows.append(
+            {
+                "id": "",
+                "platform": "naver",
+                "account_label": _clean_text(row.account_name, customer_id),
+                "manager": _clean_manager(row.manager),
+                "customer_id": customer_id,
+                "account_id": customer_id,
+                "is_active": True,
+            }
+        )
+    if not rows:
+        return conn_df
+    return pd.concat([conn_df, pd.DataFrame(rows)], ignore_index=True)
+
+
 def _platform_connections_editor_df(engine) -> pd.DataFrame:
     df = get_platform_credentials(engine)
     cols = ["id", "platform", "account_label", "manager", "customer_id", "account_id", "is_active"]
@@ -119,6 +158,7 @@ def _platform_connections_editor_df(engine) -> pd.DataFrame:
                 out.at[idx, "customer_id"] = _clean_customer_id(dashboard_row.get("customer_id", ""))
     out["account_id"] = out["account_id"].fillna("").astype(str)
     out["is_active"] = out["is_active"].fillna(True).astype(bool)
+    out = _with_dashboard_naver_rows(out, dash_accounts)
     return out.sort_values(["platform", "account_label", "account_id"]).reset_index(drop=True)
 
 
@@ -225,17 +265,8 @@ def _ensure_naver_connection(engine, account_label: str, customer_id: str, manag
         return False
 
     conn_df = get_platform_credentials(engine)
-    if conn_df is not None and not conn_df.empty:
-        work = conn_df.copy()
-        work["platform"] = work["platform"].fillna("").astype(str).str.lower()
-        work["customer_id_key"] = work["customer_id"].map(_clean_customer_id) if "customer_id" in work.columns else ""
-        work["account_id_key"] = work["account_id"].map(_clean_customer_id) if "account_id" in work.columns else ""
-        has_naver = (
-            (work["platform"] == "naver")
-            & ((work["customer_id_key"] == naver_customer_id) | (work["account_id_key"] == naver_customer_id))
-        ).any()
-        if has_naver:
-            return False
+    if _has_naver_connection(conn_df, naver_customer_id):
+        return False
 
     upsert_platform_credential(
         engine,

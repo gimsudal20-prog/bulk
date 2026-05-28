@@ -31,6 +31,11 @@ on:
         required: false
         default: ""
         type: string
+      diagnose_only:
+        description: "수집 대신 Google Ads API 최소 조회 진단만 실행"
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: google-ads-collector
@@ -106,6 +111,7 @@ jobs:
           [[ -n "$account_name" ]] && CMD+=(--account_name "$account_name")
           [[ -n "$customer_id" ]] && CMD+=(--customer_id "$customer_id")
           [[ -n "$manager" ]] && CMD+=(--manager "$manager")
+          [[ "${{ inputs.diagnose_only }}" == "true" ]] && CMD+=(--diagnose-only)
 
           printf '실행 명령:'
           printf ' %q' "${CMD[@]}"

@@ -135,6 +135,27 @@ class GoogleAdsClient:
             raise RuntimeError("Google OAuth access_token 응답이 비어 있습니다.")
         return self._access_token
 
+    def list_accessible_customers(self) -> list[str]:
+        url = f"{self.base_url}/customers:listAccessibleCustomers"
+        req = urllib.request.Request(
+            url,
+            headers=self._headers(),
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            raw = exc.read().decode("utf-8", errors="replace")
+            try:
+                parsed = json.loads(raw)
+                message = parsed.get("error", {}).get("message", raw)
+            except Exception:
+                message = raw
+            raise RuntimeError(f"Google Ads accessible customers error {exc.code}: {message}") from exc
+        names = payload.get("resourceNames") or []
+        return [_normalize_customer_id(name) for name in names if _normalize_customer_id(name)]
+
     def search_stream(self, customer_id: str, query: str) -> list[dict[str, Any]]:
         cid = _normalize_customer_id(customer_id)
         url = f"{self.base_url}/customers/{cid}/googleAds:searchStream"
@@ -517,6 +538,97 @@ def _persist_fact_rows(engine: Engine, table: str, rows: list[dict[str, Any]], c
         replace_fact_range(engine, table, by_date.get(day, []), customer_id, day)
 
 
+def _compact_query(query: str) -> str:
+    return " ".join(line.strip() for line in query.strip().splitlines() if line.strip())
+
+
+def diagnose_google_ads(client: GoogleAdsClient, customer_id: str, start: date, end: date) -> int:
+    customer_id = _normalize_customer_id(customer_id)
+    if not customer_id:
+        raise SystemExit("--diagnose-only requires --customer_id")
+
+    accessible = client.list_accessible_customers()
+    log(f"[Google Ads diagnose] accessible_customers={','.join(accessible) or '(none)'}")
+    if customer_id not in accessible:
+        log(f"[Google Ads diagnose] target_not_in_accessible_customers target={customer_id}")
+
+    queries = [
+        (
+            "customer",
+            """
+            SELECT
+              customer.id,
+              customer.descriptive_name
+            FROM customer
+            LIMIT 1
+            """,
+        ),
+        (
+            "campaign_dim",
+            """
+            SELECT
+              campaign.id,
+              campaign.name,
+              campaign.status
+            FROM campaign
+            LIMIT 10
+            """,
+        ),
+        (
+            "customer_metrics",
+            f"""
+            SELECT
+              segments.date,
+              metrics.impressions,
+              metrics.clicks,
+              metrics.cost_micros
+            FROM customer
+            WHERE segments.date BETWEEN '{start.isoformat()}' AND '{end.isoformat()}'
+            """,
+        ),
+        (
+            "campaign_metrics_base",
+            f"""
+            SELECT
+              segments.date,
+              campaign.id,
+              metrics.impressions,
+              metrics.clicks,
+              metrics.cost_micros
+            FROM campaign
+            WHERE segments.date BETWEEN '{start.isoformat()}' AND '{end.isoformat()}'
+            """,
+        ),
+        (
+            "campaign_metrics_conversions",
+            f"""
+            SELECT
+              segments.date,
+              campaign.id,
+              metrics.impressions,
+              metrics.clicks,
+              metrics.cost_micros,
+              metrics.conversions,
+              metrics.conversions_value
+            FROM campaign
+            WHERE segments.date BETWEEN '{start.isoformat()}' AND '{end.isoformat()}'
+            """,
+        ),
+    ]
+
+    failed = 0
+    for name, query in queries:
+        log(f"[Google Ads diagnose] query_start name={name} gaql={_compact_query(query)}")
+        try:
+            rows = client.search_stream(customer_id, query)
+        except Exception as exc:
+            failed += 1
+            log(f"[Google Ads diagnose] query_fail name={name} error={type(exc).__name__}: {exc}")
+            continue
+        log(f"[Google Ads diagnose] query_ok name={name} rows={len(rows)}")
+    return 1 if failed else 0
+
+
 def collect_account(engine: Engine, client: GoogleAdsClient, account: dict[str, str], start: date, end: date) -> dict[str, Any]:
     customer_id = _normalize_customer_id(account.get("id"))
     if not customer_id:
@@ -666,6 +778,7 @@ def main() -> int:
     parser.add_argument("--manager", default="", help="dashboard manager name for explicit Google Ads account runs")
     parser.add_argument("--login_customer_id", default=os.getenv("GOOGLE_ADS_LOGIN_CUSTOMER_ID", ""), help="optional manager account ID for login-customer-id header")
     parser.add_argument("--api-version", default=os.getenv("GOOGLE_ADS_API_VERSION", DEFAULT_API_VERSION), help="Google Ads API version")
+    parser.add_argument("--diagnose-only", action="store_true", help="run lightweight Google Ads API diagnostics and exit")
     args = parser.parse_args()
 
     if args.date:
@@ -699,6 +812,20 @@ def main() -> int:
     engine = get_engine(db_url)
     ensure_tables(engine)
     _ensure_platform_connections_schema(engine)
+
+    if args.diagnose_only:
+        refresh_token = global_refresh_token
+        if not refresh_token:
+            raise SystemExit("--diagnose-only requires GOOGLE_ADS_REFRESH_TOKEN")
+        client = GoogleAdsClient(
+            developer_token=developer_token,
+            client_id=client_id,
+            client_secret=client_secret,
+            refresh_token=refresh_token,
+            login_customer_id=args.login_customer_id,
+            api_version=args.api_version,
+        )
+        return diagnose_google_ads(client, _clean_text(args.customer_id or os.getenv("GOOGLE_ADS_CUSTOMER_ID")), start, end)
 
     accounts = _load_accounts(args, engine)
     if not accounts:

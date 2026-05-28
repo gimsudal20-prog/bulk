@@ -620,25 +620,32 @@ h1, h2, h3, h4, h5, h6 {
 [data-testid="stSidebar"] [role="radiogroup"] {
   background: transparent;
   padding: 0;
-  gap: 6px;
+  gap: 7px;
   display: flex;
   flex-direction: column;
 }
 [data-testid="stSidebar"] [role="radiogroup"] label {
-  padding: 12px 16px !important;
-  margin-bottom: 2px !important;
-  border-radius: 10px !important;
+  align-items: center !important;
+  min-height: 38px !important;
+  padding: 0 14px !important;
+  margin-bottom: 0 !important;
+  border-radius: 6px !important;
   background: transparent !important;
   border: 1px solid transparent !important;
-  transition: all 0.2s ease;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+[data-testid="stSidebar"] [role="radiogroup"] label > div:first-child {
+  display: none !important;
 }
 [data-testid="stSidebar"] [role="radiogroup"] label:hover { 
   background: var(--nv-surface-2) !important; 
+  border-color: var(--nv-line) !important;
 }
 [data-testid="stSidebar"] [role="radiogroup"] label p {
-  color: var(--nv-muted) !important;
-  font-weight: 600 !important;
+  color: var(--nv-text-soft) !important;
+  font-weight: 800 !important;
   font-size: 14px !important;
+  line-height: 1.2 !important;
 }
 [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {
   background: var(--nv-primary) !important;

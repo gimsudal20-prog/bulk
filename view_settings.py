@@ -219,10 +219,10 @@ def _existing_connection_platform(engine, row_id: int | None) -> str:
     return str(matched.iloc[0].get("platform", "") or "").strip().lower()
 
 
-def _ensure_naver_connection(engine, account_label: str, customer_id: str, manager: str) -> None:
+def _ensure_naver_connection(engine, account_label: str, customer_id: str, manager: str) -> bool:
     naver_customer_id = _clean_customer_id(customer_id)
     if not naver_customer_id or not naver_customer_id.isdigit():
-        return
+        return False
 
     conn_df = get_platform_credentials(engine)
     if conn_df is not None and not conn_df.empty:
@@ -235,7 +235,7 @@ def _ensure_naver_connection(engine, account_label: str, customer_id: str, manag
             & ((work["customer_id_key"] == naver_customer_id) | (work["account_id_key"] == naver_customer_id))
         ).any()
         if has_naver:
-            return
+            return False
 
     upsert_platform_credential(
         engine,
@@ -249,15 +249,20 @@ def _ensure_naver_connection(engine, account_label: str, customer_id: str, manag
             "is_active": True,
         },
     )
+    return True
 
 
 def _repair_missing_naver_connections(engine) -> int:
-    conn_df = get_platform_credentials(engine)
-    if conn_df is None or conn_df.empty:
-        return 0
-
     dash_accounts = _dashboard_accounts_df(engine)
     repaired = 0
+    for row in dash_accounts.itertuples(index=False):
+        if _ensure_naver_connection(engine, row.account_name, row.customer_id, row.manager):
+            repaired += 1
+
+    conn_df = get_platform_credentials(engine)
+    if conn_df is None or conn_df.empty:
+        return repaired
+
     for _, row in conn_df.iterrows():
         platform = str(row.get("platform", "") or "").strip().lower()
         if platform in {"", "naver"}:
@@ -271,13 +276,9 @@ def _repair_missing_naver_connections(engine) -> int:
         if not customer_id:
             continue
 
-        before = get_platform_credentials(engine)
-        before_count = 0 if before is None or before.empty else len(before.index)
         manager = _clean_manager(row.get("manager") or dashboard_row.get("manager", ""))
-        _ensure_naver_connection(engine, account_label, customer_id, manager)
-        after = get_platform_credentials(engine)
-        after_count = 0 if after is None or after.empty else len(after.index)
-        repaired += max(0, after_count - before_count)
+        if _ensure_naver_connection(engine, account_label, customer_id, manager):
+            repaired += 1
 
     return repaired
 

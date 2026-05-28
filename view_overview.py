@@ -141,7 +141,17 @@ def _cached_campaign_bundle(_engine, start_dt, end_dt, cids: tuple, type_sel: tu
 
 @st.cache_data(ttl=43200, max_entries=10, show_spinner=False)
 def _cached_keyword_bundle(_engine, start_dt, end_dt, cids: tuple, type_sel: tuple) -> pd.DataFrame:
+    # 오버뷰 최초 로딩/리포트용 경량 번들입니다.
+    # 화면 상세 표는 아래 _cached_keyword_full_bundle()을 별도로 사용해 정렬 누락을 막습니다.
     try: return query_keyword_bundle(_engine, start_dt, end_dt, cids, type_sel, topn_cost=300)
+    except Exception: return pd.DataFrame()
+
+
+@st.cache_data(ttl=43200, max_entries=6, show_spinner=False)
+def _cached_keyword_full_bundle(_engine, start_dt, end_dt, cids: tuple, type_sel: tuple) -> pd.DataFrame:
+    # st.dataframe의 정렬은 브라우저에 전달된 행 안에서만 동작합니다.
+    # 따라서 키워드 상세/엑셀용 데이터는 광고비 상위 제한을 걸지 않고 전체를 가져옵니다.
+    try: return query_keyword_bundle(_engine, start_dt, end_dt, cids, type_sel, topn_cost=-1)
     except Exception: return pd.DataFrame()
 
 
@@ -1226,7 +1236,7 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
     render_toolbar(
         "세부 성과 표",
         "업체, 유형, 기간, 캠페인, 키워드 단위로 같은 KPI 묶음을 비교합니다.",
-        [{"label": "절대값/증감 전환", "tone": "primary", "icon": "표시 "}, {"label": f"최대 {f.get('top_n_campaign', 200):,}행", "tone": "info", "icon": "행 "}],
+        [{"label": "절대값/증감 전환", "tone": "primary", "icon": "표시 "}, {"label": "표시 행 전체 정렬", "tone": "info", "icon": "정렬 "}],
     )
     show_deltas = st.toggle("증감율 보기", value=False, key="ov_abs_toggle")
 
@@ -1266,9 +1276,20 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
         df_display, df_type_display, camp_disp = _build_overview_campaign_frames(cur_camp, base_camp, meta, engine)
 
     if detail_panel == "키워드 상세 분석":
-        if base_kw is None or base_kw.empty:
-            try: base_kw = _cached_keyword_bundle(engine, b1, b2, cids, type_sel)
-            except Exception: base_kw = pd.DataFrame()
+        # 키워드 상세는 광고비 상위 N개 제한을 쓰지 않습니다.
+        # 제한된 번들을 쓰면 전환수/매출/CPC 등으로 정렬해도 이미 제외된 행은 복구되지 않습니다.
+        try:
+            cur_kw = _cached_keyword_full_bundle(engine, f["start"], f["end"], cids, type_sel)
+            _diag_add(diag, "키워드 번들(현재/전체)", "ok" if cur_kw is not None and not cur_kw.empty else "zero_data", 0 if cur_kw is None else len(cur_kw.index), "query_keyword_bundle", "키워드 상세 전체 행")
+        except Exception as e:
+            cur_kw = pd.DataFrame()
+            _diag_add(diag, "키워드 번들(현재/전체)", "error", 0, "query_keyword_bundle", f"{type(e).__name__}: {e}")
+        try:
+            base_kw = _cached_keyword_full_bundle(engine, b1, b2, cids, type_sel)
+            _diag_add(diag, "키워드 번들(비교/전체)", "ok" if base_kw is not None and not base_kw.empty else "zero_data", 0 if base_kw is None else len(base_kw.index), "query_keyword_bundle", "키워드 상세 비교 전체 행")
+        except Exception as e:
+            base_kw = pd.DataFrame()
+            _diag_add(diag, "키워드 번들(비교/전체)", "error", 0, "query_keyword_bundle", f"{type(e).__name__}: {e}")
         kw_disp = _build_overview_keyword_frames(cur_kw, base_kw)
 
     if detail_panel == "기간별 상세":
@@ -1337,12 +1358,12 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
 
     elif detail_panel == "키워드 상세 분석":
         if not kw_disp.empty:
-            kw_disp_top = kw_disp.head(200)
-            view_cols = ["키워드"] + [c for c in get_funnel_cols(show_deltas) if c in kw_disp_top.columns]
-            disp_kw = kw_disp_top[view_cols].copy()
+            view_cols = ["키워드"] + [c for c in get_funnel_cols(show_deltas) if c in kw_disp.columns]
+            disp_kw = kw_disp[view_cols].copy()
             styled_kw_df = disp_kw.style.format(fmt_dict_standard)
             styled_kw_df = _apply_overview_delta_styles(styled_kw_df, disp_kw)
             _render_overview_sticky_table(styled_kw_df, "키워드", height=460, hide_index=True)
+            st.caption(f"총 {len(disp_kw):,}개 키워드 기준입니다. 컬럼 정렬은 현재 표시된 전체 행을 기준으로 동작합니다.")
         else:
             st.info("조건에 맞는 데이터가 없습니다.")
 
@@ -1360,10 +1381,14 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
         df_display, df_type_display, camp_disp = _build_overview_campaign_frames(cur_camp, base_camp, meta, engine)
 
     if base_kw is None or base_kw.empty:
-        try: base_kw = _cached_keyword_bundle(engine, b1, b2, cids, type_sel)
+        try: base_kw = _cached_keyword_full_bundle(engine, b1, b2, cids, type_sel)
         except Exception: base_kw = pd.DataFrame()
-    if kw_disp.empty:
-        kw_disp = _build_overview_keyword_frames(cur_kw, base_kw)
+    try:
+        cur_kw_export = _cached_keyword_full_bundle(engine, f["start"], f["end"], cids, type_sel)
+    except Exception:
+        cur_kw_export = cur_kw
+    if kw_disp.empty or len(kw_disp.index) <= 300:
+        kw_disp = _build_overview_keyword_frames(cur_kw_export, base_kw)
 
     if base_daily_ts is None or base_daily_ts.empty:
         try: base_daily_ts = _cached_campaign_timeseries(engine, b1, b2, cids, type_sel)

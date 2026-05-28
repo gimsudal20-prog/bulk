@@ -273,7 +273,7 @@ def _render_hour_tab(engine, f: Dict) -> None:
 def _render_age_tab(engine, f: Dict) -> None:
     age = _query_age(engine, f["start"], f["end"], tuple(f.get("selected_customer_ids", [])), tuple(f.get("type_sel", [])))
     if age.empty:
-        st.info("연령대별 데이터가 아직 없습니다. 네이버 API 기준 연령대 breakdown은 쇼핑검색 캠페인 중심으로 수집됩니다.")
+        st.info("연령대별 데이터가 아직 없습니다. 패치 적용 후 해당 날짜를 다시 수집하면 표시됩니다. 단, 계정/캠페인별 API 응답 가능 여부에 따라 빈 값일 수 있습니다.")
         return
 
     summary = age[["imp", "clk", "cost", "conv", "sales"]].sum().to_frame().T
@@ -309,7 +309,7 @@ def page_time_age(meta: pd.DataFrame, engine, f: Dict) -> None:
         """,
         unsafe_allow_html=True,
     )
-    st.caption("시간대는 /stats hh24 breakdown, 연령대는 쇼핑검색 캠페인의 ageRangeNm breakdown 기반으로 표시됩니다.")
+    st.caption("시간대는 /stats hh24 breakdown, 연령대는 /stats ageRangeNm breakdown 기반으로 표시됩니다. 파워링크/쇼핑검색 모두 캠페인 기준으로 수집을 시도합니다.")
 
     if not table_exists(engine, "fact_campaign_hourly_daily") and not table_exists(engine, "fact_campaign_age_daily"):
         st.info("시간대/연령대 수집 테이블이 아직 없습니다. 패치 적용 후 수집기를 한 번 실행하면 자동 생성됩니다.")

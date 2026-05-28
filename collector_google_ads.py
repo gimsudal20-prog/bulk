@@ -106,6 +106,50 @@ class GoogleAdsClient:
         self.timeout = timeout
         self.base_url = f"https://googleads.googleapis.com/{self.api_version}"
         self._access_token = ""
+        self._library_client: Any | None = None
+        self._library_unavailable = False
+        self.transport = _clean_text(os.getenv("GOOGLE_ADS_TRANSPORT")).lower() or "library"
+
+    def _format_library_error(self, exc: Exception) -> str:
+        failure = getattr(exc, "failure", None)
+        errors = getattr(failure, "errors", None)
+        if errors:
+            parts = []
+            for error in errors:
+                code = getattr(error, "error_code", None)
+                message = getattr(error, "message", "")
+                parts.append(f"{code}: {message}".strip())
+            return "; ".join(parts)
+        return str(exc)
+
+    def _get_library_client(self) -> Any | None:
+        if self.transport == "rest" or self._library_unavailable:
+            return None
+        if self._library_client is not None:
+            return self._library_client
+        try:
+            from google.ads.googleads.client import GoogleAdsClient as LibraryGoogleAdsClient
+        except Exception:
+            self._library_unavailable = True
+            return None
+
+        config: dict[str, Any] = {
+            "developer_token": self.developer_token,
+            "client_id": self.client_id,
+            "client_secret": self.client_secret,
+            "refresh_token": self.refresh_token,
+            "use_proto_plus": True,
+        }
+        if self.login_customer_id:
+            config["login_customer_id"] = self.login_customer_id
+        self._library_client = LibraryGoogleAdsClient.load_from_dict(config, version=self.api_version)
+        return self._library_client
+
+    def _message_to_dict(self, value: Any) -> dict[str, Any]:
+        from google.protobuf.json_format import MessageToDict
+
+        proto = getattr(value, "_pb", value)
+        return MessageToDict(proto, preserving_proto_field_name=False)
 
     def access_token(self) -> str:
         if self._access_token:
@@ -136,6 +180,15 @@ class GoogleAdsClient:
         return self._access_token
 
     def list_accessible_customers(self) -> list[str]:
+        library_client = self._get_library_client()
+        if library_client is not None:
+            try:
+                service = library_client.get_service("CustomerService")
+                response = service.list_accessible_customers()
+                return [_normalize_customer_id(name) for name in response.resource_names if _normalize_customer_id(name)]
+            except Exception as exc:
+                raise RuntimeError(f"Google Ads accessible customers error: {self._format_library_error(exc)}") from exc
+
         url = f"{self.base_url}/customers:listAccessibleCustomers"
         req = urllib.request.Request(
             url,
@@ -157,6 +210,18 @@ class GoogleAdsClient:
         return [_normalize_customer_id(name) for name in names if _normalize_customer_id(name)]
 
     def search_stream(self, customer_id: str, query: str) -> list[dict[str, Any]]:
+        library_client = self._get_library_client()
+        if library_client is not None:
+            try:
+                service = library_client.get_service("GoogleAdsService")
+                rows: list[dict[str, Any]] = []
+                stream = service.search_stream(customer_id=_normalize_customer_id(customer_id), query=query)
+                for batch in stream:
+                    rows.extend(self._message_to_dict(row) for row in batch.results)
+                return rows
+            except Exception as exc:
+                raise RuntimeError(f"Google Ads API error: {self._format_library_error(exc)}") from exc
+
         cid = _normalize_customer_id(customer_id)
         url = f"{self.base_url}/customers/{cid}/googleAds:searchStream"
         req = urllib.request.Request(

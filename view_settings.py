@@ -85,6 +85,18 @@ def _resolve_dashboard_customer_id(engine, account_label: str, customer_id: str,
     return _clean_customer_id(account_id)
 
 
+def _dashboard_account_lookup(dash_accounts: pd.DataFrame, account_label: str) -> dict:
+    if dash_accounts is None or dash_accounts.empty:
+        return {}
+    clean_label = _clean_text(account_label).casefold()
+    if not clean_label:
+        return {}
+    matched = dash_accounts[dash_accounts["account_name"].astype(str).str.strip().str.casefold() == clean_label]
+    if matched.empty:
+        return {}
+    return matched.iloc[0].to_dict()
+
+
 def _platform_connections_editor_df(engine) -> pd.DataFrame:
     df = get_platform_credentials(engine)
     cols = ["id", "platform", "account_label", "manager", "customer_id", "account_id", "is_active"]
@@ -99,6 +111,12 @@ def _platform_connections_editor_df(engine) -> pd.DataFrame:
     out["manager"] = out["manager"].fillna("미배정").astype(str).str.strip()
     out.loc[out["manager"].isin(["", "nan", "None", "NaN"]), "manager"] = "미배정"
     out["customer_id"] = out["customer_id"].map(_clean_customer_id)
+    dash_accounts = _dashboard_accounts_df(engine)
+    if not dash_accounts.empty:
+        for idx, row in out[out["customer_id"] == ""].iterrows():
+            dashboard_row = _dashboard_account_lookup(dash_accounts, row.get("account_label", ""))
+            if dashboard_row:
+                out.at[idx, "customer_id"] = _clean_customer_id(dashboard_row.get("customer_id", ""))
     out["account_id"] = out["account_id"].fillna("").astype(str)
     out["is_active"] = out["is_active"].fillna(True).astype(bool)
     return out.sort_values(["platform", "account_label", "account_id"]).reset_index(drop=True)
@@ -233,6 +251,37 @@ def _ensure_naver_connection(engine, account_label: str, customer_id: str, manag
     )
 
 
+def _repair_missing_naver_connections(engine) -> int:
+    conn_df = get_platform_credentials(engine)
+    if conn_df is None or conn_df.empty:
+        return 0
+
+    dash_accounts = _dashboard_accounts_df(engine)
+    repaired = 0
+    for _, row in conn_df.iterrows():
+        platform = str(row.get("platform", "") or "").strip().lower()
+        if platform in {"", "naver"}:
+            continue
+
+        account_label = _clean_text(row.get("account_label", ""))
+        dashboard_row = _dashboard_account_lookup(dash_accounts, account_label)
+        customer_id = _clean_customer_id(row.get("customer_id", ""))
+        if not customer_id and dashboard_row:
+            customer_id = _clean_customer_id(dashboard_row.get("customer_id", ""))
+        if not customer_id:
+            continue
+
+        before = get_platform_credentials(engine)
+        before_count = 0 if before is None or before.empty else len(before.index)
+        manager = _clean_manager(row.get("manager") or dashboard_row.get("manager", ""))
+        _ensure_naver_connection(engine, account_label, customer_id, manager)
+        after = get_platform_credentials(engine)
+        after_count = 0 if after is None or after.empty else len(after.index)
+        repaired += max(0, after_count - before_count)
+
+    return repaired
+
+
 def _save_platform_connections(engine, edited_df: pd.DataFrame) -> int:
     if edited_df is None or edited_df.empty:
         return 0
@@ -290,6 +339,10 @@ def page_settings(engine) -> None:
     # ====================================================
     st.markdown("### 플랫폼 계정 연결")
     st.caption("네이버, 메타, 구글 계정을 대시보드 계정과 연결합니다. 담당자를 저장하면 대시보드 계정 정보에도 함께 반영됩니다.")
+
+    repaired_naver_count = _repair_missing_naver_connections(engine)
+    if repaired_naver_count:
+        st.info(f"누락된 네이버 연동 {repaired_naver_count}건을 자동 복구했습니다.", icon=":material/info:")
 
     conn_df = _platform_connections_editor_df(engine)
     dash_accounts = _dashboard_accounts_df(engine)

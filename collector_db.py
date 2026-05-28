@@ -13,6 +13,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.pool import NullPool, QueuePool
 
 from device_collector_helpers import ensure_device_tables
+from targeting_collector_helpers import ensure_targeting_tables
 
 
 def _log(msg: str) -> None:
@@ -266,6 +267,7 @@ def ensure_tables(engine: Engine):
                     ensure_column(engine, table, "data_source", "TEXT")
 
             ensure_device_tables(engine)
+            ensure_targeting_tables(engine)
             break
         except Exception as e:
             time.sleep(3)

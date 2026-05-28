@@ -38,6 +38,13 @@ from device_collector_helpers import (
     summarize_stat_res,
 )
 
+
+from targeting_collector_helpers import (
+    TARGETING_PARSER_VERSION,
+    collect_campaign_time_age_stats,
+    get_stats_breakdown_range as _get_stats_breakdown_range,
+)
+
 import collector_api as collector_api_mod
 import collector_db as collector_db_mod
 import collector_parsers as collector_parsers_mod
@@ -260,6 +267,9 @@ def _new_account_collect_result(customer_id: str, account_name: str, target_date
         "device_campaign_rows_saved": 0,
         "device_ad_rows_saved": 0,
         "shopping_query_rows_saved": 0,
+        "hour_rows_saved": 0,
+        "age_rows_saved": 0,
+        "time_age_status": "not_requested",
         "device_status": "not_requested",
         "device_missing_campaign_rows": 0,
         "zero_data": False,
@@ -748,6 +758,40 @@ def get_stats_range(customer_id: str, ids: List[str], d1: date) -> List[dict]:
     return collector_api_mod.get_stats_range(customer_id, ids, d1, request_json)
 
 
+def get_stats_breakdown_range(customer_id: str, ids: List[str], d1: date, breakdown: str, *, log_fn=None) -> List[dict]:
+    return _get_stats_breakdown_range(
+        customer_id,
+        ids,
+        d1,
+        breakdown,
+        request_json_fn=request_json,
+        log_fn=log_fn or log,
+    )
+
+
+def collect_time_age_stats(
+    engine: Engine,
+    customer_id: str,
+    target_date: date,
+    *,
+    campaign_ids: List[str],
+    shopping_campaign_ids,
+    campaign_type_map: Dict[str, str] | None = None,
+    shopping_only: bool = False,
+) -> Dict[str, Any]:
+    return collect_campaign_time_age_stats(
+        engine,
+        customer_id,
+        target_date,
+        campaign_ids=campaign_ids,
+        shopping_campaign_ids=shopping_campaign_ids,
+        campaign_type_map=campaign_type_map or {},
+        shopping_only=shopping_only,
+        get_stats_breakdown_range_fn=get_stats_breakdown_range,
+        log_fn=log,
+    )
+
+
 def fetch_stats_fallback(engine: Engine, customer_id: str, target_date: date, ids: List[str], id_key: str, table_name: str, split_map: dict | None = None, scoped_replace: bool = False) -> int:
     return collector_api_mod.fetch_stats_fallback(
         engine,
@@ -1068,6 +1112,7 @@ def process_account(engine: Engine, customer_id: str, account_name: str, target_
         save_device_stats_fn=save_device_stats,
         build_unsegmented_device_stat_from_totals_fn=build_unsegmented_device_stat_from_totals,
         collect_media_fact_fn=collect_media_fact,
+        collect_time_age_stats_fn=collect_time_age_stats,
         resolve_split_payload_fn=_resolve_split_payload,
         save_report_stats_and_breakdowns_fn=_save_report_stats_and_breakdowns,
         is_ad_only_scope_fn=_is_ad_only_scope,

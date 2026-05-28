@@ -21,6 +21,7 @@ PAGE_DESCRIPTIONS = {
     "성과 분석 · 키워드": "키워드와 쇼핑 상품소재의 유입, 비용, 전환 효율을 분석합니다.",
     "성과 분석 · 소재": "광고 소재와 랜딩페이지 단위의 성과를 점검합니다.",
     "쇼핑 검색어 분석": "쇼핑 검색어 기준으로 구매와 전환 기회를 찾습니다.",
+    "시간·연령 분석": "시간대와 연령대별로 지출, 클릭, 전환 효율을 확인합니다.",
     "설정 및 연결": "계정 연결, 담당자 연동, 동기화 도구를 관리합니다.",
 }
 
@@ -31,6 +32,7 @@ NAV_CONFIG = [
     ("성과 분석 · 키워드", "키워드 분석", ":material/key:"),
     ("성과 분석 · 소재", "소재 분석", ":material/ads_click:"),
     ("쇼핑 검색어 분석", "쇼핑 검색어", ":material/manage_search:"),
+    ("시간·연령 분석", "시간·연령", ":material/schedule:"),
     ("설정 및 연결", "설정·연결", ":material/settings:"),
 ]
 
@@ -145,6 +147,7 @@ def main():
         "성과 분석 · 키워드",
         "성과 분석 · 소재",
         "쇼핑 검색어 분석",
+        "시간·연령 분석",
     }
 
     if f is not None and nav in requires_selection_pages and not (f.get("manager") or f.get("account")):
@@ -169,6 +172,9 @@ def main():
     elif nav == "성과 분석 · 소재":
         from view_ad import page_perf_ad
         page_perf_ad(meta, engine, f)
+    elif nav == "시간·연령 분석":
+        from view_time_age import page_time_age
+        page_time_age(meta, engine, f)
     else:
         from view_settings import page_settings
         page_settings(engine)

@@ -911,6 +911,7 @@ def process_account(
     save_device_stats_fn: Callable[..., int],
     build_unsegmented_device_stat_from_totals_fn: Callable[..., Dict[Tuple[str, str], dict]],
     collect_media_fact_fn: Callable[..., Tuple[int, Dict[str, Any]]],
+    collect_time_age_stats_fn: Callable[..., Dict[str, Any]] | None = None,
     resolve_split_payload_fn: Callable[..., Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]], List[Dict[str, Any]], bool]],
     save_report_stats_and_breakdowns_fn: Callable[..., Tuple[int, int, int, int, int, int, Dict[str, Any]]],
     is_ad_only_scope_fn: Callable[[str], bool],
@@ -959,6 +960,7 @@ def process_account(
         shopping_keyword_ids: set[str] = set()
         c_cnt = k_cnt = a_cnt = 0
         device_ad_cnt = device_campaign_cnt = 0
+        time_age_meta: Dict[str, Any] = {}
         media_cnt = 0
         media_meta: Dict[str, Any] = {}
         shop_query_rows: List[Dict[str, Any]] = []
@@ -1113,6 +1115,32 @@ def process_account(
                 device_ad_cnt = 0
                 device_campaign_cnt = 0
                 result["device_status"] = "not_applicable"
+
+            # 시간대/연령대는 STATREPORT가 아니라 /stats breakdown 전용 데이터입니다.
+            # collect_sa가 켜진 경우에만 캠페인 단위로 저장합니다.
+            if collect_sa and callable(collect_time_age_stats_fn) and not is_ad_only_scope_fn(sa_scope):
+                try:
+                    time_age_meta = collect_time_age_stats_fn(
+                        engine,
+                        customer_id,
+                        target_date,
+                        campaign_ids=target_camp_ids,
+                        shopping_campaign_ids=shopping_campaign_ids,
+                        campaign_type_map=campaign_type_map,
+                        shopping_only=shopping_only,
+                    )
+                    result["hour_rows_saved"] = int(time_age_meta.get("hour_rows_saved", 0) or 0)
+                    result["age_rows_saved"] = int(time_age_meta.get("age_rows_saved", 0) or 0)
+                    result["time_age_status"] = "ok"
+                    log_fn(
+                        f"   ✅ [ {account_name} ] 시간대/연령대 분리 저장 완료: "
+                        f"시간대({result['hour_rows_saved']}) | 연령대({result['age_rows_saved']})"
+                    )
+                except Exception as e:
+                    result["time_age_status"] = f"error:{type(e).__name__}"
+                    log_best_effort_failure_fn("시간대/연령대 breakdown 수집", e, ctx=f"customer_id={customer_id}")
+            else:
+                result["time_age_status"] = "not_requested"
             media_cnt = 0
             media_meta = {"status": "disabled", "reason": "media_collection_removed"}
         else:
@@ -1167,6 +1195,32 @@ def process_account(
                     log_fn(f"   ✅ [ {account_name} ] 쇼핑검색어 분리 저장 완료: {len(shop_query_rows)}건")
 
             result["shopping_query_rows_saved"] = int(len(shop_query_rows) if shop_query_rows else 0)
+
+            # 시간대/연령대는 STATREPORT가 아니라 /stats breakdown 전용 데이터입니다.
+            # collect_sa가 켜진 경우에만 캠페인 단위로 저장합니다.
+            if collect_sa and callable(collect_time_age_stats_fn) and not is_ad_only_scope_fn(sa_scope):
+                try:
+                    time_age_meta = collect_time_age_stats_fn(
+                        engine,
+                        customer_id,
+                        target_date,
+                        campaign_ids=target_camp_ids,
+                        shopping_campaign_ids=shopping_campaign_ids,
+                        campaign_type_map=campaign_type_map,
+                        shopping_only=shopping_only,
+                    )
+                    result["hour_rows_saved"] = int(time_age_meta.get("hour_rows_saved", 0) or 0)
+                    result["age_rows_saved"] = int(time_age_meta.get("age_rows_saved", 0) or 0)
+                    result["time_age_status"] = "ok"
+                    log_fn(
+                        f"   ✅ [ {account_name} ] 시간대/연령대 분리 저장 완료: "
+                        f"시간대({result['hour_rows_saved']}) | 연령대({result['age_rows_saved']})"
+                    )
+                except Exception as e:
+                    result["time_age_status"] = f"error:{type(e).__name__}"
+                    log_best_effort_failure_fn("시간대/연령대 breakdown 수집", e, ctx=f"customer_id={customer_id}")
+            else:
+                result["time_age_status"] = "not_requested"
 
             stage = "finalize_result"
             result["stage"] = stage

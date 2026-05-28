@@ -40,6 +40,12 @@ from device_collector_helpers import (
     summarize_stat_res,
 )
 
+from targeting_collector_helpers import (
+    ensure_targeting_tables,
+    collect_campaign_time_age_stats,
+    get_stats_breakdown_range as _get_stats_breakdown_range,
+)
+
 load_dotenv(override=False)
 
 API_KEY = (os.getenv("NAVER_API_KEY") or os.getenv("NAVER_ADS_API_KEY") or "").strip()
@@ -391,6 +397,7 @@ def ensure_tables(engine: Engine):
                 ensure_column(engine, table, "data_source", "TEXT")
 
             ensure_device_tables(engine)
+            ensure_targeting_tables(engine)
             break
         except Exception as e:
             time.sleep(3)
@@ -638,6 +645,49 @@ def get_stats_range(customer_id: str, ids: List[str], d1: date) -> List[dict]:
         results = executor.map(fetch_chunk, chunks)
         for res in results: out.extend(res)
     return out
+
+
+def get_stats_breakdown_range(customer_id: str, ids: List[str], d1: date, breakdown: str, *, log_fn=None) -> List[dict]:
+    return _get_stats_breakdown_range(
+        customer_id,
+        ids,
+        d1,
+        breakdown,
+        request_json_fn=request_json,
+        log_fn=log_fn or log,
+    )
+
+
+def _build_campaign_type_map(engine: Engine, customer_id: str) -> Dict[str, str]:
+    try:
+        with engine.connect() as conn:
+            return {str(r[0]): str(r[1] or '') for r in conn.execute(text(
+                "SELECT campaign_id, campaign_tp FROM dim_campaign WHERE customer_id = :cid"
+            ), {"cid": str(customer_id)})}
+    except Exception:
+        return {}
+
+
+def _collect_time_age_for_backfill(engine: Engine, customer_id: str, account_name: str, target_date: date, target_camp_ids: List[str], shopping_campaign_ids: set[str], campaign_type_map: Dict[str, str], result: Dict[str, Any]):
+    try:
+        meta = collect_campaign_time_age_stats(
+            engine,
+            customer_id,
+            target_date,
+            campaign_ids=target_camp_ids,
+            shopping_campaign_ids=shopping_campaign_ids,
+            campaign_type_map=campaign_type_map,
+            shopping_only=False,
+            get_stats_breakdown_range_fn=get_stats_breakdown_range,
+            log_fn=log,
+        )
+        result["hour_rows_saved"] = int(meta.get("hour_rows_saved", 0) or 0)
+        result["age_rows_saved"] = int(meta.get("age_rows_saved", 0) or 0)
+        result["time_age_status"] = "ok"
+        log(f"   ✅ [ {account_name} ] 시간대/연령대 분리 저장 완료: 시간대({result['hour_rows_saved']}) | 연령대({result['age_rows_saved']})")
+    except Exception as e:
+        result["time_age_status"] = f"error:{type(e).__name__}"
+        _log_backfill_db_failure("시간대/연령대 breakdown 수집", e, ctx=f"customer_id={customer_id}")
 
 
 def fetch_stats_fallback(engine: Engine, customer_id: str, target_date: date, ids: List[str], id_key: str, table_name: str, split_map: dict | None = None) -> int:
@@ -1820,6 +1870,9 @@ def process_account(engine: Engine, customer_id: str, account_name: str, target_
         "device_campaign_rows_saved": 0,
         "device_ad_rows_saved": 0,
         "query_rows_saved": 0,
+        "hour_rows_saved": 0,
+        "age_rows_saved": 0,
+        "time_age_status": "not_requested",
         "stage": "init",
         "error": "",
     }
@@ -1970,6 +2023,7 @@ def process_account(engine: Engine, customer_id: str, account_name: str, target_
 
         ad_to_campaign_map = build_ad_to_campaign_map(engine, customer_id)
         adgroup_to_campaign_map = build_adgroup_to_campaign_map(engine, customer_id)
+        campaign_type_map = _build_campaign_type_map(engine, customer_id)
 
         current_stage = "fetch_reports"
         result["stage"] = current_stage
@@ -2020,6 +2074,7 @@ def process_account(engine: Engine, customer_id: str, account_name: str, target_
             result["ad_rows_saved"] = int(a_cnt or 0)
             result["split_reason"] = "realtime_total_only"
             log(f"   ✅ [ {account_name} ] 실시간 총합 수집 완료: 캠페인({c_cnt}) | 키워드({k_cnt}) | 소재({a_cnt})")
+            _collect_time_age_for_backfill(engine, customer_id, account_name, target_date, target_camp_ids, shopping_campaign_ids, campaign_type_map, result)
         else:
             current_stage = "resolve_split_payload"
             result["stage"] = current_stage
@@ -2271,6 +2326,7 @@ def process_account(engine: Engine, customer_id: str, account_name: str, target_
             result["device_campaign_rows_saved"] = int(device_campaign_cnt or 0)
             result["device_ad_rows_saved"] = int(device_ad_cnt or 0)
             result["query_rows_saved"] = int(len(shop_query_rows) or 0)
+            _collect_time_age_for_backfill(engine, customer_id, account_name, target_date, target_camp_ids, shopping_campaign_ids, campaign_type_map, result)
             result["split_report_ok"] = bool(split_report_ok)
             if not result.get("split_reason") and result.get("split_attempted"):
                 result["split_reason"] = "ok" if split_report_ok else "no_split_rows"

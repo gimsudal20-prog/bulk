@@ -60,6 +60,8 @@ def _ensure_dashboard_indexes(engine) -> None:
         "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dash_fact_ad_ad ON fact_ad_daily (customer_id, ad_id)",
         "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dash_fact_shop_customer_dt ON fact_shopping_query_daily (customer_id, dt)",
         "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dash_fact_shop_campaign ON fact_shopping_query_daily (customer_id, campaign_id)",
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dash_fact_campaign_hourly_customer_dt ON fact_campaign_hourly_daily (customer_id, dt)",
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dash_fact_campaign_age_customer_dt ON fact_campaign_age_daily (customer_id, dt)",
         "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dash_dim_campaign_customer_campaign ON dim_campaign (customer_id, campaign_id)",
         "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dash_dim_adgroup_customer_adgroup ON dim_adgroup (customer_id, adgroup_id)",
         "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dash_dim_keyword_customer_keyword ON dim_keyword (customer_id, keyword_id)",

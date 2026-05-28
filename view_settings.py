@@ -19,6 +19,11 @@ from data import (
 from ui import render_toolbar
 
 
+NAVER_CUSTOMER_ID_OVERRIDES = {
+    "핵이득마켓": "2535578",
+}
+
+
 def _clean_text(value, fallback: str = "") -> str:
     cleaned = str(value or "").strip()
     if cleaned in {"nan", "None", "NaN"}:
@@ -47,6 +52,14 @@ def _credential_customer_id(value):
     return int(customer_id) if customer_id.isdigit() else None
 
 
+def _naver_customer_id_override(account_label: str) -> str:
+    label_key = _clean_text(account_label).casefold()
+    for configured_label, customer_id in NAVER_CUSTOMER_ID_OVERRIDES.items():
+        if configured_label.casefold() == label_key:
+            return _clean_customer_id(customer_id)
+    return ""
+
+
 @st.cache_data(ttl=300, show_spinner=False, max_entries=20)
 def _dashboard_accounts_df(_engine) -> pd.DataFrame:
     try:
@@ -70,6 +83,10 @@ def _dashboard_accounts_df(_engine) -> pd.DataFrame:
 
 
 def _resolve_dashboard_customer_id(engine, account_label: str, customer_id: str, account_id: str) -> str:
+    override_customer_id = _naver_customer_id_override(account_label)
+    if override_customer_id:
+        return override_customer_id
+
     explicit_customer_id = _clean_customer_id(customer_id)
     if explicit_customer_id:
         return explicit_customer_id
@@ -150,6 +167,10 @@ def _platform_connections_editor_df(engine) -> pd.DataFrame:
     out["manager"] = out["manager"].fillna("미배정").astype(str).str.strip()
     out.loc[out["manager"].isin(["", "nan", "None", "NaN"]), "manager"] = "미배정"
     out["customer_id"] = out["customer_id"].map(_clean_customer_id)
+    out["customer_id"] = out.apply(
+        lambda row: _naver_customer_id_override(row.get("account_label", "")) or row["customer_id"],
+        axis=1,
+    )
     dash_accounts = _dashboard_accounts_df(engine)
     if not dash_accounts.empty:
         for idx, row in out[out["customer_id"] == ""].iterrows():
@@ -270,7 +291,7 @@ def _existing_connection_platform(engine, row_id: int | None) -> str:
 
 
 def _ensure_naver_connection(engine, account_label: str, customer_id: str, manager: str) -> bool:
-    naver_customer_id = _clean_customer_id(customer_id)
+    naver_customer_id = _naver_customer_id_override(account_label) or _clean_customer_id(customer_id)
     if not naver_customer_id or not naver_customer_id.isdigit():
         return False
 
@@ -293,7 +314,33 @@ def _ensure_naver_connection(engine, account_label: str, customer_id: str, manag
     return True
 
 
+def _repair_known_naver_overrides(engine) -> None:
+    if not NAVER_CUSTOMER_ID_OVERRIDES:
+        return
+    get_platform_credentials(engine)
+    with engine.begin() as conn:
+        for account_label, customer_id in NAVER_CUSTOMER_ID_OVERRIDES.items():
+            clean_customer_id = _clean_customer_id(customer_id)
+            if not clean_customer_id.isdigit():
+                continue
+            conn.execute(
+                text(
+                    """
+                    UPDATE platform_credentials
+                       SET customer_id = :customer_id,
+                           account_id = :account_id,
+                           is_active = TRUE,
+                           updated_at = NOW()
+                     WHERE LOWER(platform) = 'naver'
+                       AND LOWER(TRIM(account_label)) = LOWER(:account_label)
+                    """
+                ),
+                {"account_label": account_label, "customer_id": int(clean_customer_id), "account_id": clean_customer_id},
+            )
+
+
 def _repair_missing_naver_connections(engine) -> int:
+    _repair_known_naver_overrides(engine)
     dash_accounts = _dashboard_accounts_df(engine)
     repaired = 0
     for row in dash_accounts.itertuples(index=False):

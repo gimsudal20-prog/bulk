@@ -522,7 +522,7 @@ def page_settings(engine) -> None:
             "account_id": st.column_config.TextColumn("플랫폼 계정 ID", required=True, help="Meta는 광고계정 ID, Google은 고객 ID", width="medium"),
             "is_active": st.column_config.CheckboxColumn("수집", default=True, width="small"),
         },
-        key="platform_connections_editor",
+        key="platform_connections_editor_v2",
     )
     col_conn_a, col_conn_b = st.columns([1.1, 3])
     with col_conn_a:

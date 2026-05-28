@@ -393,6 +393,32 @@ def _repair_known_naver_overrides(engine) -> None:
                 },
             )
             changed = changed or (getattr(result, "rowcount", 0) or 0) > 0
+            dedupe_result = conn.execute(
+                text(
+                    """
+                    WITH ranked AS (
+                        SELECT
+                            id,
+                            ROW_NUMBER() OVER (ORDER BY updated_at DESC NULLS LAST, id DESC) AS rn
+                        FROM platform_credentials
+                        WHERE LOWER(platform) = 'naver'
+                          AND LOWER(REPLACE(TRIM(account_label), ' ', '')) LIKE :account_label_pattern
+                          AND REGEXP_REPLACE(CAST(customer_id AS TEXT), '\\.0+$', '') = :clean_customer_id
+                          AND REGEXP_REPLACE(CAST(account_id AS TEXT), '\\.0+$', '') = :account_id
+                    )
+                    DELETE FROM platform_credentials pc
+                    USING ranked
+                    WHERE pc.id = ranked.id
+                      AND ranked.rn > 1
+                    """
+                ),
+                {
+                    "account_label_pattern": f"%{account_label.replace(' ', '').casefold()}%",
+                    "clean_customer_id": clean_customer_id,
+                    "account_id": clean_customer_id,
+                },
+            )
+            changed = changed or (getattr(dedupe_result, "rowcount", 0) or 0) > 0
     if changed:
         clear_platform_credentials_cache()
     for account_label, customer_id in NAVER_CUSTOMER_ID_OVERRIDES.items():

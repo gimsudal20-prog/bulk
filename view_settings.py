@@ -67,6 +67,51 @@ def _credential_customer_id(value):
     return int(customer_id) if customer_id.isdigit() else None
 
 
+def _canonical_platform(value) -> str:
+    platform = str(value or "").strip().lower()
+    if platform in {"facebook", "facebook_ads"}:
+        return "meta"
+    if platform in {"google_ads", "googleads"}:
+        return "google"
+    return platform
+
+
+def _connection_identity(row: pd.Series | dict) -> tuple[str, str]:
+    platform = _canonical_platform(row.get("platform", ""))
+    account_id = _clean_customer_id(row.get("account_id", ""))
+    customer_id = _clean_customer_id(row.get("customer_id", ""))
+    account_label = _account_label_key(row.get("account_label", ""))
+    if platform == "naver":
+        override_customer_id = _naver_customer_id_override(row.get("account_label", ""))
+        if override_customer_id:
+            account_id = override_customer_id
+            customer_id = override_customer_id
+    identity_id = account_id or customer_id or account_label
+    return platform, identity_id
+
+
+def _dedupe_connection_rows(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
+    out = df.copy()
+    for col in ["platform", "account_label", "manager", "customer_id", "account_id"]:
+        if col not in out.columns:
+            out[col] = ""
+    out["platform"] = out["platform"].map(_canonical_platform)
+    out["account_label"] = out["account_label"].map(_clean_text)
+    out["manager"] = out["manager"].map(_clean_manager)
+    out["customer_id"] = out["customer_id"].map(_clean_customer_id)
+    out["account_id"] = out["account_id"].fillna("").astype(str).str.strip()
+    if "is_active" not in out.columns:
+        out["is_active"] = True
+    out["is_active"] = out["is_active"].fillna(True).astype(bool)
+    out["_identity"] = out.apply(_connection_identity, axis=1)
+    out["_has_id"] = out["id"].map(lambda value: 0 if _row_id_value(value) is None else 1) if "id" in out.columns else 0
+    out = out.sort_values(["_identity", "is_active", "_has_id"], ascending=[True, False, False], kind="mergesort")
+    out = out.drop_duplicates("_identity", keep="first")
+    return out.drop(columns=["_identity", "_has_id"], errors="ignore").reset_index(drop=True)
+
+
 def _naver_customer_id_override(account_label: str) -> str:
     label_key = _account_label_key(account_label)
     for configured_label, customer_id in NAVER_CUSTOMER_ID_OVERRIDES.items():
@@ -193,9 +238,10 @@ def _platform_connections_editor_df(engine) -> pd.DataFrame:
             dashboard_row = _dashboard_account_lookup(dash_accounts, row.get("account_label", ""))
             if dashboard_row:
                 out.at[idx, "customer_id"] = _clean_customer_id(dashboard_row.get("customer_id", ""))
-    out["account_id"] = out["account_id"].fillna("").astype(str)
+    out["account_id"] = out["account_id"].fillna("").astype(str).str.strip()
     out["is_active"] = out["is_active"].fillna(True).astype(bool)
     out = _with_dashboard_naver_rows(out, dash_accounts)
+    out = _dedupe_connection_rows(out)
     return out.sort_values(["platform", "account_label", "account_id"]).reset_index(drop=True)
 
 
@@ -432,6 +478,60 @@ def _repair_known_naver_overrides(engine) -> None:
             clear_platform_credentials_cache()
 
 
+def _repair_duplicate_platform_connections(engine) -> int:
+    try:
+        get_platform_credentials(engine)
+    except Exception:
+        return 0
+    with engine.begin() as conn:
+        result = conn.execute(
+            text(
+                """
+                WITH normalized AS (
+                    SELECT
+                        id,
+                        LOWER(TRIM(COALESCE(platform, ''))) AS platform_key,
+                        COALESCE(
+                            NULLIF(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(COALESCE(account_id, '')), '^act_', '', 'i'), '\\.0+$', ''), ''),
+                            NULLIF(REGEXP_REPLACE(CAST(customer_id AS TEXT), '\\.0+$', ''), ''),
+                            LOWER(REGEXP_REPLACE(TRIM(COALESCE(account_label, '')), '\\s+', '', 'g'))
+                        ) AS account_key,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY
+                                LOWER(TRIM(COALESCE(platform, ''))),
+                                COALESCE(
+                                    NULLIF(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(COALESCE(account_id, '')), '^act_', '', 'i'), '\\.0+$', ''), ''),
+                                    NULLIF(REGEXP_REPLACE(CAST(customer_id AS TEXT), '\\.0+$', ''), ''),
+                                    LOWER(REGEXP_REPLACE(TRIM(COALESCE(account_label, '')), '\\s+', '', 'g'))
+                                )
+                            ORDER BY
+                                COALESCE(is_active, TRUE) DESC,
+                                CASE
+                                    WHEN COALESCE(access_token, '') <> ''
+                                      OR COALESCE(refresh_token, '') <> ''
+                                      OR COALESCE(app_id, '') <> ''
+                                      OR COALESCE(app_secret, '') <> ''
+                                    THEN 1 ELSE 0
+                                END DESC,
+                                updated_at DESC NULLS LAST,
+                                id DESC
+                        ) AS rn
+                    FROM platform_credentials
+                )
+                DELETE FROM platform_credentials pc
+                USING normalized n
+                WHERE pc.id = n.id
+                  AND n.rn > 1
+                  AND COALESCE(n.account_key, '') <> ''
+                """
+            )
+        )
+    removed = int(getattr(result, "rowcount", 0) or 0)
+    if removed:
+        clear_platform_credentials_cache()
+    return removed
+
+
 def _repair_missing_naver_connections(engine) -> int:
     _repair_known_naver_overrides(engine)
     dash_accounts = _dashboard_accounts_df(engine)
@@ -522,6 +622,10 @@ def page_settings(engine) -> None:
     st.markdown("### 플랫폼 계정 연결")
     st.caption("네이버, 메타, 구글 계정을 대시보드 계정과 연결합니다. 담당자를 저장하면 대시보드 계정 정보에도 함께 반영됩니다.")
 
+    repaired_duplicate_count = _repair_duplicate_platform_connections(engine)
+    if repaired_duplicate_count:
+        st.info(f"중복된 플랫폼 연동 {repaired_duplicate_count}건을 자동 정리했습니다.", icon=":material/info:")
+
     repaired_naver_count = _repair_missing_naver_connections(engine)
     if repaired_naver_count:
         st.info(f"누락된 네이버 연동 {repaired_naver_count}건을 자동 복구했습니다.", icon=":material/info:")
@@ -532,7 +636,7 @@ def page_settings(engine) -> None:
 
     metric_a, metric_b, metric_c = st.columns(3)
     active_count = int(conn_df["is_active"].sum()) if not conn_df.empty and "is_active" in conn_df.columns else 0
-    linked_count = int((conn_df["customer_id"].astype(str).str.strip() != "").sum()) if not conn_df.empty and "customer_id" in conn_df.columns else 0
+    linked_count = int(conn_df.apply(_connection_identity, axis=1).drop_duplicates().shape[0]) if not conn_df.empty else 0
     manager_count = int(conn_df["manager"].replace("", pd.NA).dropna().nunique()) if not conn_df.empty and "manager" in conn_df.columns else 0
     metric_a.metric("활성 연동", f"{active_count:,}개")
     metric_b.metric("대시보드 계정 연결", f"{linked_count:,}개")

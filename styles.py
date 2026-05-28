@@ -595,26 +595,43 @@ h1, h2, h3, h4, h5, h6 {
   font-weight: 800;
 }
 
+[data-testid="stSidebar"] [data-testid="stButton"] {
+  margin-bottom: 7px !important;
+}
 [data-testid="stSidebar"] [data-testid="stButton"] button {
   justify-content: flex-start !important;
-  min-height: 38px !important;
-  border-radius: 6px !important;
-  font-weight: 800 !important;
+  min-height: 46px !important;
+  padding: 0 14px !important;
+  border-radius: 12px !important;
+  font-size: 14px !important;
+  font-weight: 850 !important;
+  letter-spacing: -0.01em !important;
   box-shadow: none !important;
+  transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.15s ease, color 0.15s ease !important;
+}
+[data-testid="stSidebar"] [data-testid="stButton"] button:hover {
+  transform: translateY(-1px);
+}
+[data-testid="stSidebar"] [data-testid="stButton"] button span {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 9px !important;
 }
 [data-testid="stSidebar"] [data-testid="baseButton-secondary"] {
   color: var(--nv-text-soft) !important;
-  background: transparent !important;
-  border: 1px solid transparent !important;
+  background: var(--nv-bg) !important;
+  border: 1px solid var(--nv-line) !important;
 }
 [data-testid="stSidebar"] [data-testid="baseButton-secondary"]:hover {
+  color: var(--nv-text) !important;
   background: var(--nv-surface-2) !important;
-  border-color: var(--nv-line) !important;
+  border-color: var(--nv-line-strong) !important;
 }
 [data-testid="stSidebar"] [data-testid="baseButton-primary"] {
-  background: var(--nv-primary) !important;
+  background: linear-gradient(135deg, var(--nv-primary), var(--nv-primary-hover)) !important;
   color: #fff !important;
   border: 1px solid var(--nv-primary) !important;
+  box-shadow: 0 8px 18px rgba(7, 71, 217, 0.16) !important;
 }
 
 [data-testid="stSidebar"] [role="radiogroup"] {

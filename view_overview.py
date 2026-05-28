@@ -151,22 +151,177 @@ def _cached_campaign_timeseries(_engine, start_dt, end_dt, cids: tuple, type_sel
     except Exception: return pd.DataFrame()
 
 
-def _attach_account_names(df: pd.DataFrame, meta: pd.DataFrame) -> pd.DataFrame:
+PLATFORM_LABELS = {
+    "naver": "네이버",
+    "meta": "메타",
+    "facebook": "메타",
+    "facebook_ads": "메타",
+    "google": "구글",
+    "google_ads": "구글",
+    "googleads": "구글",
+}
+
+CAMPAIGN_PLATFORM_LABELS = {
+    "WEB_SITE": "네이버",
+    "SHOPPING": "네이버",
+    "POWER_CONTENT": "네이버",
+    "POWER_CONTENTS": "네이버",
+    "BRAND_SEARCH": "네이버",
+    "PLACE": "네이버",
+    "파워링크": "네이버",
+    "쇼핑검색": "네이버",
+    "파워컨텐츠": "네이버",
+    "브랜드검색": "네이버",
+    "플레이스": "네이버",
+    "META": "메타",
+    "메타": "메타",
+    "GOOGLE": "구글",
+    "GOOGLE_ADS": "구글",
+    "구글": "구글",
+}
+
+
+def _clean_overview_customer_id(value) -> str:
+    try:
+        if pd.isna(value):
+            return ""
+    except Exception:
+        pass
+    raw = str(value or "").strip()
+    if not raw or raw.lower() in {"nan", "none", "nat", "<na>"}:
+        return ""
+    if raw.startswith("act_"):
+        raw = raw[4:]
+    if raw.endswith(".0") and raw[:-2].isdigit():
+        raw = raw[:-2]
+    compact = raw.replace("-", "").replace(" ", "")
+    return compact if compact.isdigit() else raw
+
+
+def _platform_label(value) -> str:
+    return PLATFORM_LABELS.get(str(value or "").strip().lower(), "")
+
+
+def _campaign_platform_label(value) -> str:
+    raw = str(value or "").strip()
+    if not raw or raw.lower() in {"nan", "none"}:
+        return ""
+    return CAMPAIGN_PLATFORM_LABELS.get(raw, CAMPAIGN_PLATFORM_LABELS.get(raw.upper(), ""))
+
+
+def _account_platform_display(account_name: str, platform_label: str) -> str:
+    label = str(account_name or "").strip()
+    platform = str(platform_label or "").strip()
+    if not label:
+        return platform
+    if not platform or platform in label:
+        return label
+    return f"{label} · {platform}"
+
+
+def _overview_account_maps(meta: pd.DataFrame, engine=None) -> tuple[dict[str, str], dict[str, str]]:
+    base_map: dict[str, str] = {}
+    platform_map: dict[str, str] = {}
+
+    if meta is not None and not meta.empty and "customer_id" in meta.columns and "account_name" in meta.columns:
+        meta_view = meta[["customer_id", "account_name"]].copy()
+        meta_view["_cid"] = meta_view["customer_id"].map(_clean_overview_customer_id)
+        meta_view["_name"] = meta_view["account_name"].fillna("").astype(str).str.strip()
+        for row in meta_view.itertuples(index=False):
+            if row._cid and row._name:
+                base_map[row._cid] = row._name
+
+    if engine is not None:
+        try:
+            conn_df = get_platform_credentials(engine)
+        except Exception:
+            conn_df = pd.DataFrame()
+        if conn_df is not None and not conn_df.empty:
+            work = conn_df.copy()
+            if "is_active" in work.columns:
+                work = work[work["is_active"].fillna(False).astype(bool)].copy()
+            for _, row in work.iterrows():
+                platform = _platform_label(row.get("platform", ""))
+                account_name = str(row.get("account_label", "") or "").strip()
+                if not account_name:
+                    account_name = base_map.get(_clean_overview_customer_id(row.get("customer_id", "")), "")
+                display_name = _account_platform_display(account_name, platform)
+                if not display_name:
+                    continue
+                account_id = _clean_overview_customer_id(row.get("account_id", ""))
+                customer_id = _clean_overview_customer_id(row.get("customer_id", ""))
+                if platform == "네이버":
+                    for cid in [customer_id, account_id]:
+                        if cid:
+                            platform_map[cid] = display_name
+                else:
+                    # Non-Naver rows usually keep the dashboard customer_id separately and store the real platform ID in account_id.
+                    # Mapping the dashboard ID here can make Naver data show as Meta/Google, so only fall back to customer_id
+                    # when it is not already a known dashboard account.
+                    if account_id:
+                        platform_map[account_id] = display_name
+                    elif customer_id and customer_id not in base_map:
+                        platform_map[customer_id] = display_name
+
+    return base_map, platform_map
+
+
+def _attach_account_names(df: pd.DataFrame, meta: pd.DataFrame, engine=None) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame() if df is None else df
     out = df.copy()
-    if not meta.empty and 'customer_id' in meta.columns and 'account_name' in meta.columns:
-        mapping = dict(zip(meta['customer_id'].astype(str), meta['account_name']))
-        out['account_name'] = out['customer_id'].astype(str).map(mapping).fillna(out['customer_id'].astype(str))
-    else:
-        out['account_name'] = out['customer_id'].astype(str)
+    if "customer_id" not in out.columns:
+        out["account_name"] = ""
+        return out
+
+    base_map, platform_map = _overview_account_maps(meta, engine)
+    type_col = next((col for col in ["campaign_type", "campaign_type_label", "campaign_tp"] if col in out.columns), None)
+
+    def resolve_display(row) -> str:
+        cid = _clean_overview_customer_id(row.get("customer_id", ""))
+        if cid in platform_map:
+            return platform_map[cid]
+        base_name = base_map.get(cid, cid)
+        campaign_platform = _campaign_platform_label(row.get(type_col, "")) if type_col else ""
+        return _account_platform_display(base_name, campaign_platform) if campaign_platform else base_name
+
+    out["account_name"] = out.apply(resolve_display, axis=1)
     return out
 
 
-def _build_overview_campaign_frames(cur_camp: pd.DataFrame, base_camp: pd.DataFrame, meta: pd.DataFrame):
+def _selected_account_title(meta: pd.DataFrame, engine, cids: tuple, cur_camp: pd.DataFrame) -> str:
+    if not cids:
+        return "전체 계정"
+
+    names: list[str] = []
+    try:
+        if cur_camp is not None and not cur_camp.empty:
+            attached = _attach_account_names(cur_camp, meta, engine)
+            if "account_name" in attached.columns:
+                names = [str(x).strip() for x in attached["account_name"].dropna().unique().tolist() if str(x).strip()]
+    except Exception:
+        names = []
+
+    if not names:
+        base_map, platform_map = _overview_account_maps(meta, engine)
+        for cid in cids:
+            cid_key = _clean_overview_customer_id(cid)
+            label = platform_map.get(cid_key) or base_map.get(cid_key) or cid_key
+            if label:
+                names.append(label)
+
+    names = list(dict.fromkeys(names))
+    if not names:
+        return "전체 계정"
+    if len(names) == 1:
+        return names[0]
+    return f"{names[0]} 외 {len(names) - 1}개"
+
+
+def _build_overview_campaign_frames(cur_camp: pd.DataFrame, base_camp: pd.DataFrame, meta: pd.DataFrame, engine=None):
     df_display, df_type_display, camp_disp = pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-    cur_camp = _attach_account_names(cur_camp, meta)
-    base_camp = _attach_account_names(base_camp, meta)
+    cur_camp = _attach_account_names(cur_camp, meta, engine)
+    base_camp = _attach_account_names(base_camp, meta, engine)
     if cur_camp.empty and base_camp.empty:
         return df_display, df_type_display, camp_disp
     df_display = _build_comparison_df(cur_camp, base_camp, 'account_name', '계정명')
@@ -844,11 +999,7 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
         base_daily_ts = pd.DataFrame()
         _diag_add(diag, "일자 추이(비교)", "warn", 0, "query_campaign_timeseries", f"비교 기간 {b1}~{b2} | 기간별 상세 필요 시 지연 조회")
 
-    account_name = "전체 계정"
-    if cids and not meta.empty:
-        acc_names = meta[meta['customer_id'].isin(cids)]['account_name'].dropna().unique()
-        if len(acc_names) == 1: account_name = f"{acc_names[0]}"
-        elif len(acc_names) > 1: account_name = f"{acc_names[0]} 외 {len(acc_names)-1}개"
+    account_name = _selected_account_title(meta, engine, cids, cur_camp)
 
     selected_type_label = _selected_type_label(type_sel)
 
@@ -1110,7 +1261,7 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
         if base_camp is None or base_camp.empty:
             try: base_camp = _cached_campaign_bundle(engine, b1, b2, cids, type_sel)
             except Exception: base_camp = pd.DataFrame()
-        df_display, df_type_display, camp_disp = _build_overview_campaign_frames(cur_camp, base_camp, meta)
+        df_display, df_type_display, camp_disp = _build_overview_campaign_frames(cur_camp, base_camp, meta, engine)
 
     if detail_panel == "키워드 상세 분석":
         if base_kw is None or base_kw.empty:
@@ -1204,7 +1355,7 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
         try: base_camp = _cached_campaign_bundle(engine, b1, b2, cids, type_sel)
         except Exception: base_camp = pd.DataFrame()
     if df_display.empty or camp_disp.empty:
-        df_display, df_type_display, camp_disp = _build_overview_campaign_frames(cur_camp, base_camp, meta)
+        df_display, df_type_display, camp_disp = _build_overview_campaign_frames(cur_camp, base_camp, meta, engine)
 
     if base_kw is None or base_kw.empty:
         try: base_kw = _cached_keyword_bundle(engine, b1, b2, cids, type_sel)

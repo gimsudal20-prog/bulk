@@ -25,13 +25,13 @@ PAGE_DESCRIPTIONS = {
 }
 
 NAV_CONFIG = [
-    ("요약", "대시보드", ":material/dashboard:"),
-    ("예산 및 잔액", "비즈머니", ":material/account_balance_wallet:"),
-    ("성과 분석 · 캠페인", "캠페인", ":material/campaign:"),
-    ("성과 분석 · 키워드", "키워드", ":material/key:"),
-    ("성과 분석 · 소재", "소재", ":material/ads_click:"),
-    ("쇼핑 검색어 분석", "검색어", ":material/manage_search:"),
-    ("설정 및 연결", "설정", ":material/settings:"),
+    ("요약", "대시보드 요약", ":material/dashboard:"),
+    ("예산 및 잔액", "예산·잔액", ":material/account_balance_wallet:"),
+    ("성과 분석 · 캠페인", "캠페인 분석", ":material/campaign:"),
+    ("성과 분석 · 키워드", "키워드 분석", ":material/key:"),
+    ("성과 분석 · 소재", "소재 분석", ":material/ads_click:"),
+    ("쇼핑 검색어 분석", "쇼핑 검색어", ":material/manage_search:"),
+    ("설정 및 연결", "설정·연결", ":material/settings:"),
 ]
 
 NAV_LABELS = {page_key: short_label for page_key, short_label, _icon in NAV_CONFIG}
@@ -109,14 +109,21 @@ def main():
             st.session_state["nav_page"] = nav_items[0]
 
         current_nav = st.session_state.get("nav_page", nav_items[0])
-        nav = st.radio(
-            "Navigation",
-            nav_items,
-            index=nav_items.index(current_nav),
-            format_func=lambda page_key: NAV_LABELS.get(page_key, page_key),
-            label_visibility="collapsed",
-        )
-        st.session_state["nav_page"] = nav
+        for page_key, short_label, icon in NAV_CONFIG:
+            if page_key not in nav_items:
+                continue
+            is_active = page_key == current_nav
+            clicked = st.button(
+                short_label,
+                key=f"nav_btn_{page_key}",
+                icon=icon,
+                type="primary" if is_active else "secondary",
+                use_container_width=True,
+            )
+            if clicked and not is_active:
+                st.session_state["nav_page"] = page_key
+                st.rerun()
+        nav = st.session_state.get("nav_page", nav_items[0])
 
     f = None
     if nav == "설정 및 연결":

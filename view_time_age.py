@@ -155,6 +155,28 @@ def _complete_hourly_frame(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _complete_hourly_by_group(df: pd.DataFrame, group_cols: List[str]) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+    out = df.copy()
+    out["hour_of_day"] = pd.to_numeric(out.get("hour_of_day"), errors="coerce")
+    out = out.dropna(subset=["hour_of_day"])
+    if out.empty:
+        return pd.DataFrame()
+    out["hour_of_day"] = out["hour_of_day"].astype(int).clip(0, 23)
+    for col in ["imp", "clk", "cost", "conv", "sales"]:
+        out[col] = pd.to_numeric(out.get(col, 0), errors="coerce").fillna(0)
+
+    groups = out[group_cols].drop_duplicates()
+    groups["_hour_join"] = 1
+    hours = pd.DataFrame({"hour_of_day": list(range(24)), "_hour_join": 1})
+    base = groups.merge(hours, on="_hour_join", how="inner").drop(columns=["_hour_join"])
+    merged = base.merge(out, on=[*group_cols, "hour_of_day"], how="left")
+    for col in ["imp", "clk", "cost", "conv", "sales"]:
+        merged[col] = pd.to_numeric(merged.get(col, 0), errors="coerce").fillna(0)
+    return merged
+
+
 def _column_config(df: pd.DataFrame) -> dict:
     cfg = {}
     for c in df.columns:
@@ -292,7 +314,12 @@ def _render_hour_tab(engine, f: Dict) -> None:
         if by_camp.empty:
             st.info("캠페인별 상세 데이터가 없습니다.")
         else:
-            by_camp["hour_of_day"] = pd.to_numeric(by_camp["hour_of_day"], errors="coerce").fillna(0).astype(int)
+            by_camp = _complete_hourly_by_group(by_camp, ["campaign_type", "campaign_name"])
+            by_camp["_campaign_cost_total"] = by_camp.groupby(["campaign_type", "campaign_name"])["cost"].transform("sum")
+            by_camp = by_camp.sort_values(
+                ["_campaign_cost_total", "campaign_type", "campaign_name", "hour_of_day"],
+                ascending=[False, True, True, True],
+            ).drop(columns=["_campaign_cost_total"])
             by_camp = by_camp.rename(columns={"hour_of_day": "시간", "campaign_name": "캠페인", "campaign_type": "유형"})
             by_camp["시간"] = by_camp["시간"].map(_hour_label)
             disp2 = _format_display(by_camp, ["유형", "캠페인", "시간"])

@@ -199,7 +199,7 @@ def check_time_age_hour_contract(root: Path) -> list[str]:
             raise RegressionFailure(f'_hour_label({raw!r})={got!r}, 기대값={expected!r}')
 
     view_text = view_path.read_text(encoding='utf-8')
-    required_tokens = ['_complete_hourly_frame(hourly)', 'range(24)', 'map(_hour_label)']
+    required_tokens = ['_complete_hourly_frame(hourly)', '_complete_hourly_by_group(by_camp', 'range(24)', 'map(_hour_label)']
     missing = [tok for tok in required_tokens if tok not in view_text]
     if missing:
         raise RegressionFailure(f'시간대 24시간 표시 토큰 누락: {", ".join(missing)}')

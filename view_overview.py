@@ -278,6 +278,75 @@ def _overview_account_maps(meta: pd.DataFrame, engine=None) -> tuple[dict[str, s
     return base_map, platform_map
 
 
+
+def _ordered_unique_customer_ids(values) -> tuple:
+    seen: set[str] = set()
+    out: list[str] = []
+    for value in values or []:
+        cid = _clean_overview_customer_id(value)
+        if cid and cid not in seen:
+            seen.add(cid)
+            out.append(cid)
+    return tuple(out)
+
+
+def _expand_overview_customer_ids(meta: pd.DataFrame, engine, cids: tuple) -> tuple:
+    """Include linked platform account IDs for an account selected in the global filter.
+
+    Meta/Google rows are stored with the platform ad account ID as customer_id, while the
+    global account filter often starts from the Naver dashboard customer_id.  Without this
+    expansion, selecting a client such as 핵이득마켓 can filter out its linked Meta rows.
+    """
+    selected = list(_ordered_unique_customer_ids(cids))
+    if not selected or engine is None:
+        return tuple(selected)
+
+    try:
+        base_map, _ = _overview_account_maps(meta, engine)
+    except Exception:
+        base_map = {}
+
+    selected_set = set(selected)
+    selected_names = {str(base_map.get(cid, "") or "").strip() for cid in selected_set}
+    selected_names = {name for name in selected_names if name}
+
+    try:
+        conn_df = get_platform_credentials(engine)
+    except Exception:
+        return tuple(selected)
+    if conn_df is None or conn_df.empty:
+        return tuple(selected)
+
+    work = conn_df.copy()
+    if "is_active" in work.columns:
+        try:
+            work = work[work["is_active"].fillna(False).astype(bool)].copy()
+        except Exception:
+            pass
+
+    expanded = list(selected)
+    seen = set(selected)
+
+    for _, row in work.iterrows():
+        dashboard_cid = _clean_overview_customer_id(row.get("customer_id", ""))
+        platform_cid = _clean_overview_customer_id(row.get("account_id", ""))
+        account_label = str(row.get("account_label", "") or "").strip()
+        linked_ids = [cid for cid in [dashboard_cid, platform_cid] if cid]
+        linked_names = {account_label, str(base_map.get(dashboard_cid, "") or "").strip()}
+        linked_names = {name for name in linked_names if name}
+
+        should_link = bool(selected_set.intersection(linked_ids)) or bool(selected_names.intersection(linked_names))
+        if not should_link:
+            continue
+
+        for cid in linked_ids:
+            if cid not in seen:
+                seen.add(cid)
+                expanded.append(cid)
+
+    return tuple(expanded)
+
+
 def _attach_account_names(df: pd.DataFrame, meta: pd.DataFrame, engine=None) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame() if df is None else df
@@ -961,12 +1030,20 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
     _inject_overview_css()
 
     diag: list[dict] = []
-    cids = tuple(f.get("selected_customer_ids", []))
+    raw_cids = tuple(f.get("selected_customer_ids", []))
+    cids = _expand_overview_customer_ids(meta, engine, raw_cids)
     type_sel = tuple(f.get("type_sel", []))
     opts = get_dynamic_cmp_options(f["start"], f["end"])
     cmp_mode = opts[1] if len(opts) > 1 else "이전 같은 기간 대비"
     b1, b2 = period_compare_range(f["start"], f["end"], cmp_mode)
-    _diag_add(diag, "필터", "ok", len(cids), "filters", f"기간={f['start']}~{f['end']} | 비교={cmp_mode} | 유형={', '.join(type_sel) if type_sel else '전체'}")
+    _diag_add(
+        diag,
+        "필터",
+        "ok",
+        len(cids),
+        "filters",
+        f"기간={f['start']}~{f['end']} | 비교={cmp_mode} | 유형={', '.join(type_sel) if type_sel else '전체'} | 원선택={len(raw_cids)} / 확장={len(cids)}",
+    )
 
     with st.spinner("데이터를 집계 중입니다... (최적화 모드)"):
         try:

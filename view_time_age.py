@@ -130,6 +130,53 @@ def _format_display(df: pd.DataFrame, first_cols: List[str]) -> pd.DataFrame:
     return out[cols]
 
 
+def _hour_label(hour: int | float | str) -> str:
+    try:
+        h = int(hour)
+    except Exception:
+        h = 0
+    h = max(0, min(23, h))
+    return f"{h:02d}시~{(h + 1) % 24:02d}시"
+
+
+def _complete_hourly_frame(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+    out = df.copy()
+    out["hour_of_day"] = pd.to_numeric(out.get("hour_of_day"), errors="coerce")
+    out = out.dropna(subset=["hour_of_day"])
+    if out.empty:
+        return pd.DataFrame()
+    out["hour_of_day"] = out["hour_of_day"].astype(int).clip(0, 23)
+    base = pd.DataFrame({"hour_of_day": list(range(24))})
+    out = base.merge(out, on="hour_of_day", how="left")
+    for col in ["imp", "clk", "cost", "conv", "sales"]:
+        out[col] = pd.to_numeric(out.get(col, 0), errors="coerce").fillna(0)
+    return out
+
+
+def _complete_hourly_by_group(df: pd.DataFrame, group_cols: List[str]) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+    out = df.copy()
+    out["hour_of_day"] = pd.to_numeric(out.get("hour_of_day"), errors="coerce")
+    out = out.dropna(subset=["hour_of_day"])
+    if out.empty:
+        return pd.DataFrame()
+    out["hour_of_day"] = out["hour_of_day"].astype(int).clip(0, 23)
+    for col in ["imp", "clk", "cost", "conv", "sales"]:
+        out[col] = pd.to_numeric(out.get(col, 0), errors="coerce").fillna(0)
+
+    groups = out[group_cols].drop_duplicates()
+    groups["_hour_join"] = 1
+    hours = pd.DataFrame({"hour_of_day": list(range(24)), "_hour_join": 1})
+    base = groups.merge(hours, on="_hour_join", how="inner").drop(columns=["_hour_join"])
+    merged = base.merge(out, on=[*group_cols, "hour_of_day"], how="left")
+    for col in ["imp", "clk", "cost", "conv", "sales"]:
+        merged[col] = pd.to_numeric(merged.get(col, 0), errors="coerce").fillna(0)
+    return merged
+
+
 def _column_config(df: pd.DataFrame) -> dict:
     cfg = {}
     for c in df.columns:
@@ -243,19 +290,23 @@ def _render_hour_tab(engine, f: Dict) -> None:
     if hourly.empty:
         st.info("시간대별 데이터가 아직 없습니다. 패치 적용 후 해당 날짜를 다시 수집하면 표시됩니다.")
         return
+    hourly = _complete_hourly_frame(hourly)
+    if hourly.empty:
+        st.info("시간대별 데이터가 아직 없습니다. 패치 적용 후 해당 날짜를 다시 수집하면 표시됩니다.")
+        return
 
     summary = hourly[["imp", "clk", "cost", "conv", "sales"]].sum().to_frame().T
     _kpi_row(summary)
 
     chart = _add_calc_cols(hourly).copy()
-    chart["시간대"] = chart["hour_of_day"].astype(int).map(lambda x: f"{x:02d}시")
+    chart["시간대"] = chart["hour_of_day"].astype(int).map(_hour_label)
     chart = chart.sort_values("hour_of_day")
     st.markdown("#### 시간대별 광고비")
     st.bar_chart(chart.set_index("시간대")[["cost"]], height=260)
 
     st.markdown("#### 시간대별 상세")
     disp = _format_display(chart.rename(columns={"hour_of_day": "시간"}), ["시간"])
-    disp["시간"] = disp["시간"].astype(int).map(lambda x: f"{x:02d}시")
+    disp["시간"] = disp["시간"].astype(int).map(_hour_label)
     st.dataframe(disp, width="stretch", hide_index=True, column_config=_column_config(disp))
 
     with st.expander("캠페인별 시간대 상세", expanded=False):
@@ -263,9 +314,14 @@ def _render_hour_tab(engine, f: Dict) -> None:
         if by_camp.empty:
             st.info("캠페인별 상세 데이터가 없습니다.")
         else:
-            by_camp["hour_of_day"] = pd.to_numeric(by_camp["hour_of_day"], errors="coerce").fillna(0).astype(int)
+            by_camp = _complete_hourly_by_group(by_camp, ["campaign_type", "campaign_name"])
+            by_camp["_campaign_cost_total"] = by_camp.groupby(["campaign_type", "campaign_name"])["cost"].transform("sum")
+            by_camp = by_camp.sort_values(
+                ["_campaign_cost_total", "campaign_type", "campaign_name", "hour_of_day"],
+                ascending=[False, True, True, True],
+            ).drop(columns=["_campaign_cost_total"])
             by_camp = by_camp.rename(columns={"hour_of_day": "시간", "campaign_name": "캠페인", "campaign_type": "유형"})
-            by_camp["시간"] = by_camp["시간"].map(lambda x: f"{x:02d}시")
+            by_camp["시간"] = by_camp["시간"].map(_hour_label)
             disp2 = _format_display(by_camp, ["유형", "캠페인", "시간"])
             st.dataframe(disp2, width="stretch", hide_index=True, column_config=_column_config(disp2))
 

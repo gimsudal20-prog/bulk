@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from datetime import date
 from typing import Any, Callable, Dict, Iterable, List, Tuple
@@ -150,11 +151,21 @@ def normalize_hour_value(v: Any) -> int | None:
     raw = str(v or "").strip()
     if not raw:
         return None
-    digits = "".join(ch for ch in raw if ch.isdigit())
+
+    if raw.isdigit():
+        digits = raw
+    else:
+        matches = re.findall(r"\d{1,2}", raw)
+        if matches:
+            digits = matches[0]
+        else:
+            digits = "".join(ch for ch in raw if ch.isdigit())
+            if len(digits) >= 2:
+                digits = digits[:2]
     if not digits:
         return None
     try:
-        hour = int(digits[-2:] if len(digits) >= 2 else digits)
+        hour = int(digits[:2] if len(digits) >= 2 else digits)
     except Exception:
         return None
     if 0 <= hour <= 23:

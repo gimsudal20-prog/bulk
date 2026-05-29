@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import argparse
 import ast
+import re
 import sys
 from pathlib import Path
+from typing import Any
 
 
 class RegressionFailure(Exception):
@@ -146,6 +148,65 @@ def check_sa_scope_contract(root: Path) -> list[str]:
     return msgs
 
 
+def _load_function_from_source(path: Path, function_name: str, namespace: dict) -> object:
+    tree = _read_ast(path)
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == function_name:
+            mod = ast.Module(body=[node], type_ignores=[])
+            ast.fix_missing_locations(mod)
+            exec(compile(mod, str(path), 'exec'), namespace)
+            return namespace[function_name]
+    raise RegressionFailure(f'{path.name} 에 {function_name} 함수가 없습니다')
+
+
+def check_time_age_hour_contract(root: Path) -> list[str]:
+    targeting_path = root / 'targeting_collector_helpers.py'
+    view_path = root / 'view_time_age.py'
+    if not targeting_path.exists() or not view_path.exists():
+        raise RegressionFailure('시간대 점검 대상 파일이 없습니다')
+
+    normalize_hour_value = _load_function_from_source(
+        targeting_path,
+        'normalize_hour_value',
+        {'re': re, 'Any': Any},
+    )
+    hour_cases = {
+        '0': 0,
+        '00': 0,
+        '1': 1,
+        '01': 1,
+        '00시~01시': 0,
+        '01시~02시': 1,
+        '23시~00시': 23,
+        '08:00~09:00': 8,
+        '': None,
+        '24시~01시': None,
+    }
+    for raw, expected in hour_cases.items():
+        got = normalize_hour_value(raw)
+        if got != expected:
+            raise RegressionFailure(f'normalize_hour_value({raw!r})={got!r}, 기대값={expected!r}')
+
+    hour_label = _load_function_from_source(view_path, '_hour_label', {})
+    label_cases = {
+        0: '00시~01시',
+        8: '08시~09시',
+        23: '23시~00시',
+    }
+    for raw, expected in label_cases.items():
+        got = hour_label(raw)
+        if got != expected:
+            raise RegressionFailure(f'_hour_label({raw!r})={got!r}, 기대값={expected!r}')
+
+    view_text = view_path.read_text(encoding='utf-8')
+    required_tokens = ['_complete_hourly_frame(hourly)', '_complete_hourly_by_group(by_camp', 'range(24)', 'map(_hour_label)']
+    missing = [tok for tok in required_tokens if tok not in view_text]
+    if missing:
+        raise RegressionFailure(f'시간대 24시간 표시 토큰 누락: {", ".join(missing)}')
+
+    return ['ok | 시간대 범위 파싱/라벨/24시간 표시 계약 유지']
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description='Run minimal regression checks.')
     parser.add_argument('--repo', default='.', help='repository root path')
@@ -162,6 +223,7 @@ def main() -> int:
         check_backfill_parser_contract,
         check_backfill_stage_logging,
         check_sa_scope_contract,
+        check_time_age_hour_contract,
     ]
     for fn in checks:
         try:

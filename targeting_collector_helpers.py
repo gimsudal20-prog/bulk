@@ -306,7 +306,7 @@ def get_stats_breakdown_range(
 
     def fetch(chunk: List[str]) -> Tuple[bool, List[dict], str]:
         params = {
-            "ids": ",".join(chunk),
+            "ids": json.dumps(chunk, separators=(",", ":")),
             "fields": fields,
             "timeRange": time_range,
             "breakdown": breakdown,
@@ -436,15 +436,11 @@ def collect_campaign_time_age_stats(
     hour_rows, hour_meta = _build_rows_from_breakdown(hour_raw, customer_id, target_date, "hh24")
     hour_saved = _replace_campaign_hourly_rows(engine, customer_id, target_date, hour_rows, scoped_ids=hour_ids)
 
-    # 연령대 데이터는 과거 쇼핑검색 중심으로 안내된 문서가 있었지만,
-    # 실제 운영/타게팅 리포트 흐름에서는 파워링크 캠페인도 ageRangeNm 조회가 가능한 계정이 있습니다.
+    # ageRangeNm breakdown은 쇼핑 캠페인 보고서에서만 지원되므로 쇼핑 캠페인으로 제한합니다.
     # 캠페인 유형이 섞인 ids 요청은 일부 계정에서 실패할 수 있어 유형별 bucket 단위로 먼저 요청하고,
     # 실패 시 get_stats_breakdown_range 내부에서 단건 재시도합니다.
-    if shopping_only:
-        shopping_set = {str(x).strip() for x in (shopping_campaign_ids or []) if str(x or "").strip()}
-        age_ids = [x for x in all_campaign_ids if x in shopping_set]
-    else:
-        age_ids = all_campaign_ids
+    shopping_set = {str(x).strip() for x in (shopping_campaign_ids or []) if str(x or "").strip()}
+    age_ids = [x for x in all_campaign_ids if x in shopping_set]
 
     age_buckets: Dict[str, List[str]] = {}
     for cid in age_ids:

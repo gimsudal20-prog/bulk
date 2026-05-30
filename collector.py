@@ -657,7 +657,26 @@ def parse_base_report(df: pd.DataFrame, report_tp: str, conv_map: dict | None = 
 
 
 def build_campaign_type_map(engine: Engine, customer_id: str) -> Dict[str, str]:
-    return {}
+    try:
+        with engine.connect() as conn:
+            return {
+                str(row[0]).strip(): str(row[1] or "").strip()
+                for row in conn.execute(
+                    text(
+                        """
+                        SELECT campaign_id, COALESCE(campaign_tp, '')
+                        FROM dim_campaign
+                        WHERE customer_id = :cid
+                          AND campaign_id IS NOT NULL
+                        """
+                    ),
+                    {"cid": str(customer_id)},
+                )
+                if str(row[0] or "").strip()
+            }
+    except Exception as e:
+        _log_best_effort_failure("campaign type map 로드", e, ctx=f"customer_id={customer_id}")
+        return {}
 
 
 def collect_media_fact(engine: Engine, customer_id: str, target_date: date, ad_report_df: pd.DataFrame | None, ad_to_campaign_map: Dict[str, str], campaign_type_map: Dict[str, str], camp_device_stat: Dict[Tuple[str, str], Dict[str, Any]] | None = None, allowed_campaign_ids: set[str] | None = None, scoped_campaign_types: List[str] | None = None) -> Tuple[int, Dict[str, Any]]:

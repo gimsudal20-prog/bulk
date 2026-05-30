@@ -690,6 +690,7 @@ def _refresh_live_target_ids_minimal(
     target_camp_ids: List[str] = []
     target_kw_ids: List[str] = []
     target_ad_ids: List[str] = []
+    campaign_type_map: Dict[str, str] = {}
     shopping_campaign_ids: set[str] = set()
     shopping_adgroup_ids: set[str] = set()
     shopping_keyword_ids: set[str] = set()
@@ -699,6 +700,7 @@ def _refresh_live_target_ids_minimal(
         cid = str(c.get("nccCampaignId") or "").strip()
         if not cid:
             continue
+        campaign_type_map[cid] = str(c.get("campaignTp", "") or "")
         is_shopping = is_shopping_campaign_obj_fn(c)
         if shopping_only and not is_shopping:
             continue
@@ -736,6 +738,7 @@ def _refresh_live_target_ids_minimal(
         "target_kw_ids": sorted(set(target_kw_ids)),
         "target_ad_ids": sorted(set(target_ad_ids)),
         "ad_to_campaign_map": ad_to_campaign_map,
+        "campaign_type_map": campaign_type_map,
         "shopping_campaign_ids": shopping_campaign_ids,
         "shopping_adgroup_ids": shopping_adgroup_ids,
         "shopping_keyword_ids": shopping_keyword_ids,
@@ -965,6 +968,7 @@ def process_account(
         media_meta: Dict[str, Any] = {}
         shop_query_rows: List[Dict[str, Any]] = []
         split_report_ok = False
+        live_campaign_type_map: Dict[str, str] = {}
         if shopping_only:
             log_fn(f"   🛍️ [ {account_name} ] 쇼핑검색 전용 수집 모드")
 
@@ -1027,6 +1031,7 @@ def process_account(
                 shopping_adgroup_ids = live_bundle["shopping_adgroup_ids"]
                 shopping_keyword_ids = live_bundle["shopping_keyword_ids"]
                 live_ad_to_campaign_map = live_bundle.get("ad_to_campaign_map", {})
+                live_campaign_type_map = live_bundle.get("campaign_type_map", {})
                 new_counts = (len(target_camp_ids), len(target_kw_ids), len(target_ad_ids))
                 result["campaign_targets"] = new_counts[0]
                 result["keyword_targets"] = new_counts[1]
@@ -1064,6 +1069,8 @@ def process_account(
             ad_to_campaign_map.update(live_ad_to_campaign_map)
         adgroup_to_campaign_map = build_adgroup_to_campaign_map_fn(engine, customer_id) if callable(build_adgroup_to_campaign_map_fn) else {}
         campaign_type_map = build_campaign_type_map_fn(engine, customer_id)
+        if live_campaign_type_map:
+            campaign_type_map.update(live_campaign_type_map)
 
         stage = "fetch_reports"
         result["stage"] = stage

@@ -146,6 +146,28 @@ def check_sa_scope_contract(root: Path) -> list[str]:
     return msgs
 
 
+def check_targeting_breakdown_contract(root: Path) -> list[str]:
+    targeting_path = root / 'targeting_collector_helpers.py'
+    collector_path = root / 'collector.py'
+    runner_path = root / 'collector_runner.py'
+    if not targeting_path.exists() or not collector_path.exists() or not runner_path.exists():
+        raise RegressionFailure('targeting/collector 핵심 파일이 없습니다')
+
+    targeting_text = targeting_path.read_text(encoding='utf-8')
+    collector_text = collector_path.read_text(encoding='utf-8')
+    runner_text = runner_path.read_text(encoding='utf-8')
+    required = {
+        'targeting ids JSON 배열 파라미터': 'json.dumps(chunk, separators=(",", ":"))' in targeting_text,
+        '연령대는 쇼핑 캠페인만 요청': 'age_ids = [x for x in all_campaign_ids if x in shopping_set]' in targeting_text,
+        '캠페인 타입 맵 DB 로드': 'SELECT campaign_id, COALESCE(campaign_tp' in collector_text,
+        'live 캠페인 타입 맵 병합': 'live_campaign_type_map' in runner_text and 'campaign_type_map.update(live_campaign_type_map)' in runner_text,
+    }
+    missing = [name for name, ok in required.items() if not ok]
+    if missing:
+        raise RegressionFailure(f'targeting breakdown 계약 누락: {", ".join(missing)}')
+    return ['ok | 시간대/연령대 breakdown 수집 계약 유지']
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description='Run minimal regression checks.')
     parser.add_argument('--repo', default='.', help='repository root path')
@@ -162,6 +184,7 @@ def main() -> int:
         check_backfill_parser_contract,
         check_backfill_stage_logging,
         check_sa_scope_contract,
+        check_targeting_breakdown_contract,
     ]
     for fn in checks:
         try:

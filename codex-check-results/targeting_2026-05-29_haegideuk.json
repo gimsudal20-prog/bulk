@@ -8,23 +8,23 @@
       "target_date": "2026-05-29",
       "hour_ids": 63,
       "hour_rows_saved": 1512,
-      "hour_raw_rows": 0,
+      "hour_raw_rows": 651,
       "hour_meta": {
-        "raw_rows": 0,
-        "parsed_rows": 0,
+        "raw_rows": 651,
+        "parsed_rows": 29,
         "missing_id": 0,
-        "missing_breakdown": 0,
+        "missing_breakdown": 622,
         "bad_hour": 0,
         "zero_metric": 0
       },
       "age_ids": 33,
       "age_rows_saved": 198,
-      "age_raw_rows": 0,
+      "age_raw_rows": 14,
       "age_meta": {
-        "raw_rows": 0,
+        "raw_rows": 14,
         "parsed_rows": 0,
         "missing_id": 0,
-        "missing_breakdown": 0,
+        "missing_breakdown": 14,
         "bad_hour": 0,
         "zero_metric": 0
       },
@@ -40,11 +40,11 @@
         "age_expected_rows": 198,
         "age_missing_count": 0,
         "age_missing_sample": [],
-        "ok": false,
-        "hour_raw_rows_ok": false,
-        "age_raw_rows_ok": false
+        "ok": true,
+        "hour_raw_rows_ok": true,
+        "age_raw_rows_ok": true
       }
     }
   ],
-  "ok": false
+  "ok": true
 }

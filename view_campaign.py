@@ -799,7 +799,7 @@ def _render_campaign_summary_tab(view: pd.DataFrame, engine, f: Dict, diag: list
     if sel_camp_main != "전체":
         disp_main = disp_main[disp_main["캠페인"] == sel_camp_main]
 
-    base_cols = ["매체", "업체명", "담당자", "캠페인유형", "캠페인"]
+    base_cols = ["업체명", "담당자", "캠페인유형", "캠페인"]
     if "평균순위" in disp_main.columns:
         base_cols.append("평균순위")
     all_metrics_cols, roas_col, sales_col = _summary_metric_config(has_pre_patch_cur)
@@ -885,9 +885,9 @@ def _render_campaign_group_tab(meta: pd.DataFrame, engine, f: Dict, cids: tuple,
     rank_grp = _keyword_rank_by_keys(detail_bundle_grp, grp_cols)
     if not rank_grp.empty:
         grp = grp.merge(rank_grp, on=grp_cols, how="left")
-    grp = _perf_common_merge_meta(grp, meta, engine)
+    grp = _perf_common_merge_meta(grp, meta)
     grouped = grp.rename(columns={
-        "account_name": "업체명", "manager": "담당자", "platform": "매체", "campaign_type_label": "캠페인유형", "campaign_name": "캠페인", "adgroup_name": "광고그룹",
+        "account_name": "업체명", "manager": "담당자", "campaign_type_label": "캠페인유형", "campaign_name": "캠페인", "adgroup_name": "광고그룹",
         "imp": "노출", "clk": "클릭", "cost": "광고비", "cart_conv": "장바구니수", "cart_sales": "장바구니 매출액",
         "wishlist_conv": "위시리스트수", "wishlist_sales": "위시리스트 매출액", "conv": "구매완료수", "sales": "구매완료 매출",
     }).copy()
@@ -914,7 +914,7 @@ def _render_campaign_group_tab(meta: pd.DataFrame, engine, f: Dict, cids: tuple,
     if show_deltas_grp and show_mode == "integrated_only":
         st.warning("⚠️ 비교 기간에 3월 11일 이전(네이버 퍼널 분리 패치 전) 데이터가 포함되어 '통합 전환' 기준으로 표시합니다.")
     metrics_cols_grp = _group_mode_columns(show_deltas_grp, show_mode)
-    base_cols_grp = ["매체", "업체명", "담당자", "캠페인유형", "캠페인", "광고그룹"]
+    base_cols_grp = ["업체명", "담당자", "캠페인유형", "캠페인", "광고그룹"]
     if "avg_rank" in grouped.columns or "평균순위" in grouped.columns:
         base_cols_grp.append("평균순위")
         if show_deltas_grp:
@@ -962,7 +962,7 @@ def _render_campaign_compare_tab(view: pd.DataFrame, engine, f: Dict, cids: tupl
     if show_mode == "integrated_only":
         st.warning("⚠️ 비교 기간에 3월 11일 이전(네이버 퍼널 분리 패치 전) 데이터가 포함되어 '통합 전환' 기준으로 표시합니다.")
     metrics_cols_cmp = _compare_mode_columns(show_deltas, show_mode)
-    base_cols_cmp = ["매체", "업체명", "담당자", "캠페인유형", "캠페인"]
+    base_cols_cmp = ["업체명", "담당자", "캠페인유형", "캠페인"]
     if "avg_rank" in view_cmp.columns or "평균순위" in view_cmp.columns:
         base_cols_cmp.append("평균순위")
         if show_deltas:
@@ -1016,7 +1016,7 @@ def page_perf_campaign(meta: pd.DataFrame, engine, f: Dict) -> None:
     render_toolbar(
         "캠페인 운영 테이블",
         "캠페인을 선택하면 하위 키워드와 소재 성과까지 같은 화면에서 이어서 확인합니다.",
-        [{"label": f"{f['start']} ~ {f['end']}", "tone": "primary"}, {"label": f"Top {int(f.get('top_n_campaign', 200)):,}", "tone": "info"}],
+        [{"label": f"{f['start']} ~ {f['end']}", "tone": "primary"}, {"label": f.get("media_label", "전체 매체"), "tone": "success"}, {"label": f"Top {int(f.get('top_n_campaign', 200)):,}", "tone": "info"}],
     )
     cids = tuple(f.get("selected_customer_ids", []))
     type_sel = tuple(f.get("type_sel", []))
@@ -1037,10 +1037,10 @@ def page_perf_campaign(meta: pd.DataFrame, engine, f: Dict) -> None:
             if bundle is None or bundle.empty:
                 _render_diag_panel(diag, enabled=bool(f.get("show_diagnostics", False)))
                 return
-            df = _perf_common_merge_meta(bundle, meta, engine)
+            df = _perf_common_merge_meta(bundle, meta)
             _diag_add(diag, '메타병합', 'ok' if not df.empty else 'zero_data', len(df.index), 'meta_merge', 'campaign bundle + account meta')
             view = df.rename(columns={
-                "account_name": "업체명", "manager": "담당자", "platform": "매체", "campaign_type": "캠페인유형", "campaign_name": "캠페인",
+                "account_name": "업체명", "manager": "담당자", "campaign_type": "캠페인유형", "campaign_name": "캠페인",
                 "imp": "노출", "clk": "클릭", "cost": "광고비", "cart_conv": "장바구니수", "cart_sales": "장바구니 매출액",
                 "wishlist_conv": "위시리스트수", "wishlist_sales": "위시리스트 매출액", "conv": "구매완료수", "sales": "구매완료 매출",
             }).copy()

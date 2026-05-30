@@ -83,15 +83,51 @@ def safe_numeric_col(df: pd.DataFrame, col: str, *, default: float = 0.0) -> pd.
 # 🧩 UI Components
 # ==========================================
 
-def render_empty_state(message: str = "조회된 데이터가 없습니다.", height: int = 300) -> None:
-    safe_msg = html.escape(message)
+def render_empty_state(message: str = "조회된 데이터가 없습니다.", height: int = 300, detail: str | None = None) -> None:
+    safe_msg = html.escape(str(message))
+    safe_detail = html.escape(str(detail or "조건을 변경하거나 동기화를 확인해주세요."))
     empty_html = f"""
-    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: {height}px; width: 100%; background-color: {THEME['bg']}; border: 1px dashed {THEME['line']}; border-radius: 12px; color: {THEME['muted']}; text-align: center;">
-        <div style="font-size: 14px; font-weight: 600;">{safe_msg}</div>
-        <div style="font-size: 12px; margin-top: 4px; opacity: 0.7;">조건을 변경하거나 동기화를 확인해주세요.</div>
+    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: {height}px; width: 100%; background-color: {THEME['bg']}; border: 1px dashed {THEME['line']}; border-radius: 12px; color: {THEME['muted']}; text-align: center; padding: 18px;">
+        <div style="font-size: 14px; font-weight: 750; color:{THEME['text']};">{safe_msg}</div>
+        <div style="font-size: 12px; margin-top: 5px; opacity: 0.75; line-height:1.5;">{safe_detail}</div>
     </div>
     """
     st.markdown(empty_html, unsafe_allow_html=True)
+
+
+def render_inline_notice(title: str, body: str) -> None:
+    safe_title = html.escape(str(title))
+    safe_body = html.escape(str(body))
+    st.markdown(
+        f"<div class='nv-inline-notice'><div class='nv-inline-notice-title'>{safe_title}</div><div class='nv-inline-notice-body'>{safe_body}</div></div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _media_class(label: str) -> str:
+    txt = str(label or "").strip().lower()
+    if txt in {"네이버", "naver", "naver ads"}:
+        return "naver"
+    if txt in {"메타", "meta", "facebook", "instagram"}:
+        return "meta"
+    if txt in {"구글", "google", "google ads"}:
+        return "google"
+    return "all"
+
+
+def media_badge_html(label: str) -> str:
+    safe_label = html.escape(str(label or "전체 매체"))
+    return f"<span class='nv-media-badge {_media_class(label)}'>{safe_label}</span>"
+
+
+def render_scope_bar(items: list[str], media_labels: list[str] | tuple[str, ...] | None = None) -> None:
+    media_labels = list(media_labels or [])
+    media_html = "".join(media_badge_html(x) for x in media_labels) if media_labels else media_badge_html("전체 매체")
+    item_html = "".join(f"<span class='nv-meta-chip'>{html.escape(str(x))}</span>" for x in (items or []) if str(x).strip())
+    st.markdown(
+        f"<div class='nv-scope-bar'><div class='nv-scope-left'>{media_html}</div><div class='nv-scope-right'>{item_html}</div></div>",
+        unsafe_allow_html=True,
+    )
 
 
 def render_hero(latest_dates: dict | None, build_tag: str, dashboard_title: str = "마케팅 통합 대시보드") -> None:
@@ -200,6 +236,28 @@ def render_toolbar(title: str, subtitle: str = "", chips: list[dict] | None = No
     )
 
 
+
+def _prioritize_display_columns(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
+    priority = [
+        "매체", "platform", "광고주", "업체명", "account_name", "담당자", "manager",
+        "캠페인", "캠페인명", "campaign_name", "광고그룹", "광고그룹명", "adgroup_name",
+        "키워드", "검색어", "상품명", "소재명", "항목명",
+        "광고비", "cost", "노출수", "노출", "클릭수", "클릭", "CTR", "클릭률(%)", "CPC",
+        "전환", "전환수", "총 전환수", "구매완료수", "구매완료", "구매완료 매출",
+        "총 전환매출", "ROAS", "ROAS(%)", "구매완료 ROAS(%)", "통합 ROAS(%)",
+    ]
+    seen = []
+    for col in priority:
+        if col in df.columns and col not in seen:
+            seen.append(col)
+    if not seen:
+        return df
+    rest = [c for c in df.columns if c not in seen]
+    return df[seen + rest]
+
+
 def ui_metric_or_stmetric(title: str, value: str, desc: str = "", key: str = ""):
     safe_title = html.escape(str(title))
     safe_value = html.escape(str(value))
@@ -226,6 +284,10 @@ def render_big_table(df, key: str, height: int = 400) -> None:
     if check_df.empty:
         render_empty_state("조회된 데이터가 없습니다.", height)
         return
+
+    if not is_styler:
+        check_df = _prioritize_display_columns(check_df)
+        df = check_df
 
     if len(check_df) > 1000:
         try:

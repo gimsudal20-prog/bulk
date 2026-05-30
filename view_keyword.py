@@ -842,7 +842,11 @@ def page_perf_keyword(meta: pd.DataFrame, engine, f: Dict) -> None:
     render_toolbar(
         "키워드/소재 성과",
         "파워링크는 키워드 단위, 쇼핑검색은 일반 상품소재 단위 성과를 보여줍니다.",
-        [{"label": f"{f['start']} ~ {f['end']}", "tone": "primary"}, {"label": "전체 행 정렬", "tone": "info"}],
+        [
+            {"label": f"{f['start']} ~ {f['end']}", "tone": "primary"},
+            {"label": f.get("media_label", "전체 매체"), "tone": "success"},
+            {"label": "전체 행 정렬", "tone": "info"},
+        ],
     )
     cids = tuple(f.get("selected_customer_ids", []))
     type_sel = tuple(f.get("type_sel", []))
@@ -892,6 +896,8 @@ def page_perf_keyword(meta: pd.DataFrame, engine, f: Dict) -> None:
         )
 
     view = compute_keyword_view(kw_bundle, ad_bundle, meta, _engine=engine)
+    if view is None:
+        view = pd.DataFrame()
     if _includes_shopping_type(type_sel):
         shop_terms = _cached_keyword_shopping_terms(engine, f["start"], f["end"], cids)
         shop_view = _build_shopping_terms_keyword_view(shop_terms, meta, _engine=engine)
@@ -901,20 +907,33 @@ def page_perf_keyword(meta: pd.DataFrame, engine, f: Dict) -> None:
         item_col = "키워드" if "키워드" in view.columns else ("항목명" if "항목명" in view.columns else view.columns[0])
         total_cost = float(safe_numeric_col(view, "광고비").sum())
         total_clk = float(safe_numeric_col(view, "클릭").sum())
-        total_conv_col = "전환" if "전환" in view.columns else "구매완료수"
-        total_sales_col = "전환매출" if "전환매출" in view.columns else "구매완료 매출"
-        total_conv = float(safe_numeric_col(view, total_conv_col).sum())
-        total_sales = float(safe_numeric_col(view, total_sales_col).sum())
+        total_conv = float(safe_numeric_col(view, "전환").sum()) if "전환" in view.columns else 0.0
+        total_sales = float(safe_numeric_col(view, "전환매출").sum()) if "전환매출" in view.columns else 0.0
+        purchase_conv = float(safe_numeric_col(view, "구매완료수").sum()) if "구매완료수" in view.columns else 0.0
+        purchase_sales = float(safe_numeric_col(view, "구매완료 매출").sum()) if "구매완료 매출" in view.columns else 0.0
+        if total_conv <= 0 and purchase_conv > 0:
+            total_conv = purchase_conv
+        if total_sales <= 0 and purchase_sales > 0:
+            total_sales = purchase_sales
         total_roas = (total_sales / total_cost * 100.0) if total_cost > 0 else 0.0
         total_cpc = (total_cost / total_clk) if total_clk > 0 else 0.0
-        render_kpi_strip([
+        kpi_items = [
             {"label": "분석 항목", "value": f"{view[item_col].nunique():,}개", "sub": "현재 필터", "tone": "neu"},
             {"label": "광고비", "value": format_currency(total_cost), "sub": "집행 합계", "tone": "neu"},
             {"label": "클릭", "value": f"{total_clk:,.0f}", "sub": "유입 합계", "tone": "neu"},
             {"label": "CPC", "value": format_currency(total_cpc), "sub": "평균 비용", "tone": "neu"},
-            {"label": "전환", "value": f"{total_conv:,.0f}", "sub": "전환 합계", "tone": "neu"},
-            {"label": "ROAS", "value": f"{total_roas:,.1f}%", "sub": "수익성", "tone": "neu"},
-        ])
+            {"label": "총 전환", "value": f"{total_conv:,.0f}", "sub": "전체 전환", "tone": "neu"},
+        ]
+        if "구매완료수" in view.columns:
+            kpi_items.append({"label": "구매완료", "value": f"{purchase_conv:,.0f}", "sub": "구매 기준", "tone": "neu", "accent": "green"})
+        kpi_items.append({"label": "ROAS", "value": f"{total_roas:,.1f}%", "sub": "수익성", "tone": "neu"})
+        render_kpi_strip(kpi_items)
+    else:
+        render_empty_state(
+            "키워드 성과 데이터가 없습니다.",
+            height=220,
+            detail="현재 매체/계정/기간 조건에서 조회된 키워드 또는 쇼핑 소재 데이터가 없습니다.",
+        )
 
     if selected_tab == "종합 성과":
         render_keyword_main(view, top_n)

@@ -9,7 +9,7 @@ import streamlit as st
 import streamlit_compat  # noqa: F401
 
 from data import *
-from ui import render_hero
+from ui import render_hero, media_badge_html
 from page_helpers import BUILD_TAG, build_filters
 from perf_utils import render_perf_panel, reset_perf_events
 
@@ -42,14 +42,19 @@ NAV_LABELS = {page_key: short_label for page_key, short_label, _icon in NAV_CONF
 def _render_page_header(nav: str, latest: dict | None, f: dict | None = None) -> None:
     subtitle = PAGE_DESCRIPTIONS.get(nav, "")
     chips = []
+    media_html = media_badge_html("전체 매체")
+    scope_label = "전체 계정"
     if f:
+        media_sel = list(f.get("media_sel") or [])
+        media_html = "".join(media_badge_html(x) for x in media_sel) if media_sel else media_badge_html("전체 매체")
+        scope_label = str(f.get("scope_label") or "전체 계정")
         chips.append(("primary", f"{f.get('start')} ~ {f.get('end')}"))
         if f.get("type_sel"):
             chips.append(("info", ", ".join(map(str, f.get("type_sel", [])))))
         else:
             chips.append(("info", "전체 유형"))
         selected_count = len(f.get("selected_customer_ids", []) or [])
-        chips.append(("success" if selected_count else "warning", f"{selected_count:,}개 계정"))
+        chips.append(("success" if selected_count else "warning", f"조회 ID {selected_count:,}개"))
     elif latest:
         cd = latest.get("campaign")
         chips.append(("primary", f"최근 수집 {str(cd)[:10] if cd else '대기 중'}"))
@@ -71,8 +76,13 @@ def _render_page_header(nav: str, latest: dict | None, f: dict | None = None) ->
                 </div>
             </div>
             <div class='nv-filter-bar'>
-                <div class='nv-filter-search'>제목, 채널, 상태로 필터하기</div>
-                <div class='nv-page-meta'>{chip_html}</div>
+                <div class='nv-scope-bar'>
+                    <div class='nv-scope-left'>
+                        <span class='nv-scope-label'>현재 조회</span>{media_html}
+                        <span class='nv-meta-chip'>{escape(scope_label)}</span>
+                    </div>
+                    <div class='nv-page-meta'>{chip_html}</div>
+                </div>
             </div>
         </div>
         """,

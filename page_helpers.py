@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import re
+import html
 import textwrap
 import numpy as np
 import pandas as pd
@@ -508,14 +509,17 @@ def build_filters(meta: pd.DataFrame, type_opts: List[str], engine=None) -> Dict
             selected_scope = f"계정 {len(account_sel):,}개 선택"
         elif manager_sel:
             selected_scope = f"담당자 {len(manager_sel):,}명 선택"
+        media_badges = "".join(media_badge_html(x) for x in media_sel) if media_sel else media_badge_html("전체 매체")
+        scope_sub = f"{d1} ~ {d2}"
         if media_sel:
-            selected_scope = f"{selected_scope} · 매체 {len(media_sel):,}개"
+            scope_sub = f"{scope_sub} · {', '.join(map(str, media_sel))}"
         st.markdown(
-            f"<div style='display:flex; flex-direction:column; gap:6px; padding:10px 12px; border:1px solid var(--nv-line); border-radius:10px; background:var(--nv-bg); margin-top:12px;'>"
-            f"<div style='font-size:11px; color:var(--nv-muted); font-weight:800;'>현재 범위</div>"
-            f"<div style='font-size:13px; color:var(--nv-text); font-weight:800;'>{selected_scope}</div>"
-            f"<div style='font-size:12px; color:var(--nv-muted);'>{d1} ~ {d2}</div>"
-            f"</div>",
+            "<div class='nv-compact-scope-card'>"
+            "<div class='scope-title'>현재 조회 범위</div>"
+            f"<div>{media_badges}</div>"
+            f"<div class='scope-main'>{html.escape(selected_scope)}</div>"
+            f"<div class='scope-sub'>{html.escape(scope_sub)}</div>"
+            "</div>",
             unsafe_allow_html=True,
         )
 
@@ -556,8 +560,18 @@ def build_filters(meta: pd.DataFrame, type_opts: List[str], engine=None) -> Dict
     raw_type_sel = tuple(sv["type_sel"]) if sv["type_sel"] else tuple()
     effective_type_sel = _derive_effective_campaign_types(raw_type_sel, sv.get("media_sel", []))
 
+    media_tuple = tuple(sv.get("media_sel", [])) if sv.get("media_sel") else tuple()
+    media_label = ", ".join(media_tuple) if media_tuple else "전체 매체"
+    if sv.get("account"):
+        scope_label = f"계정 {len(sv.get('account') or []):,}개 선택"
+    elif sv.get("manager"):
+        scope_label = f"담당자 {len(sv.get('manager') or []):,}명 선택"
+    else:
+        scope_label = "전체 계정"
+
     return {
-        "q": sv["q"], "manager": sv["manager"], "account": sv["account"], "media_sel": tuple(sv.get("media_sel", [])) if sv.get("media_sel") else tuple(),
+        "q": sv["q"], "manager": sv["manager"], "account": sv["account"], "media_sel": media_tuple,
+        "media_label": media_label, "scope_label": scope_label,
         "type_sel": effective_type_sel, "raw_type_sel": raw_type_sel,
         "start": d1, "end": d2, "period_mode": period_mode, "customer_ids": cids, "selected_customer_ids": cids,
         "top_n_keyword": int(sv.get("top_n_keyword", 300)), "top_n_ad": int(sv.get("top_n_ad", 200)), "top_n_campaign": int(sv.get("top_n_campaign", 200)),

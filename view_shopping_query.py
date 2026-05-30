@@ -179,7 +179,7 @@ def page_perf_shopping_query(meta: pd.DataFrame, engine, f: Dict) -> None:
     render_toolbar(
         "쇼핑 검색어 분석",
         "실제 검색어 기준으로 구매, 장바구니, 총 전환 퍼널 성과를 확인합니다.",
-        [{"label": f"{f['start']} ~ {f['end']}", "tone": "primary"}, {"label": "검색어 퍼널", "tone": "info"}],
+        [{"label": f"{f['start']} ~ {f['end']}", "tone": "primary"}, {"label": f.get("media_label", "전체 매체"), "tone": "success"}, {"label": "검색어 퍼널", "tone": "info"}],
     )
 
     cids = tuple(f.get("selected_customer_ids", []))

@@ -28,10 +28,6 @@ def _prepare_biz_view(bundle: pd.DataFrame) -> pd.DataFrame:
     if bundle is None or bundle.empty:
         return pd.DataFrame()
     biz_view = bundle.copy()
-    if "platform" not in biz_view.columns:
-        biz_view["platform"] = "네이버"
-    else:
-        biz_view["platform"] = biz_view["platform"].fillna("네이버").replace("", "네이버")
     balance = safe_numeric_col(biz_view, "bizmoney_balance")
     avg_cost = safe_numeric_col(biz_view, "avg_cost")
     biz_view["days_cover"] = np.where(avg_cost > 0, balance / avg_cost, np.nan)
@@ -45,10 +41,6 @@ def _prepare_alert_view(bundle: pd.DataFrame) -> pd.DataFrame:
     if bundle is None or bundle.empty:
         return pd.DataFrame()
     alert_view = bundle.copy()
-    if "platform" not in alert_view.columns:
-        alert_view["platform"] = "네이버"
-    else:
-        alert_view["platform"] = alert_view["platform"].fillna("네이버").replace("", "네이버")
     balance = safe_numeric_col(alert_view, "bizmoney_balance")
     avg_cost = safe_numeric_col(alert_view, "avg_cost")
     alert_view["days_cover"] = np.where(avg_cost > 0, balance / avg_cost, np.nan)
@@ -130,11 +122,10 @@ def _build_alert_display(alert_view: pd.DataFrame) -> pd.DataFrame:
     df["비즈머니 잔액"] = balance
     avg_days_label = f"최근 {TOPUP_AVG_DAYS}일 평균소진"
     df[avg_days_label] = avg_cost
-    df["매체"] = df.get("platform", "네이버").fillna("네이버").replace("", "네이버") if isinstance(df.get("platform", "네이버"), pd.Series) else "네이버"
     df["담당자"] = df.get("manager", "미배정").fillna("미배정").replace("", "미배정")
     df["업체명"] = df.get("account_name", df.get("customer_id", "-")).fillna("-").replace("", "-")
     df = df.sort_values(["_risk_rank", "_sort_days", "업체명"], ascending=[True, True, True]).reset_index(drop=True)
-    return df[["매체", "업체명", "소진 위험", "담당자", "비즈머니 잔액", avg_days_label, "잔여일수", "예상 소진일", "계산 기준일"]]
+    return df[["업체명", "소진 위험", "담당자", "비즈머니 잔액", avg_days_label, "잔여일수", "예상 소진일", "계산 기준일"]]
 
 
 WEEKDAY_LABELS = [("월", 0), ("화", 1), ("수", 2), ("목", 3), ("금", 4), ("토", 5), ("일", 6)]
@@ -279,11 +270,11 @@ def _build_budget_editor_view(
 ) -> pd.DataFrame:
     if biz_view is None or biz_view.empty:
         return pd.DataFrame()
-    for col in ["customer_id", "account_name", "manager", "platform", "monthly_budget", "prev_month_cost", "current_month_cost", "operating_weekdays"]:
+    for col in ["customer_id", "account_name", "manager", "monthly_budget", "prev_month_cost", "current_month_cost", "operating_weekdays"]:
         if col not in biz_view.columns:
-            biz_view[col] = "네이버" if col == "platform" else ("" if col in {"customer_id", "account_name", "manager"} else 0)
+            biz_view[col] = "" if col in {"customer_id", "account_name", "manager"} else 0
     budget_view = biz_view[[
-        "customer_id", "account_name", "manager", "platform", "monthly_budget", "prev_month_cost", "current_month_cost", "operating_weekdays"
+        "customer_id", "account_name", "manager", "monthly_budget", "prev_month_cost", "current_month_cost", "operating_weekdays"
     ]].copy()
     budget_view["monthly_budget_val"] = safe_numeric_col(budget_view, "monthly_budget").astype(int)
     budget_view["prev_month_cost_val"] = safe_numeric_col(budget_view, "prev_month_cost").astype(int)
@@ -357,17 +348,16 @@ def render_operating_weekday_editor(budget_view: pd.DataFrame, engine):
 
     with st.expander("업체별 운영 요일 설정", expanded=False):
         st.caption("각 업체의 실제 광고 운영 요일을 체크해두면 현재 일평균, 권장 일평균, 권장 소진 페이스가 업체별로 다시 계산됩니다.")
-        weekday_df = budget_view[["customer_id", "account_name", "manager", "platform", "operating_weekdays"]].drop_duplicates("customer_id").copy()
+        weekday_df = budget_view[["customer_id", "account_name", "manager", "operating_weekdays"]].drop_duplicates("customer_id").copy()
         weekday_df["operating_weekdays"] = weekday_df["operating_weekdays"].apply(_normalize_weekday_csv)
         weekday_df["업체명"] = weekday_df["account_name"].fillna("").replace("", "-")
-        weekday_df["매체"] = weekday_df["platform"].fillna("네이버").replace("", "네이버")
         weekday_df["담당자"] = weekday_df["manager"].fillna("미배정").replace("", "미배정")
 
         for label, weekday_idx in WEEKDAY_LABELS:
             weekday_df[label] = weekday_df["operating_weekdays"].apply(lambda value, idx=weekday_idx: idx in _parse_operating_weekdays(value))
 
         original_map = dict(zip(weekday_df["customer_id"].astype(str), weekday_df["operating_weekdays"]))
-        editor_input = weekday_df[["customer_id", "매체", "업체명", "담당자"] + [label for label, _ in WEEKDAY_LABELS]]
+        editor_input = weekday_df[["customer_id", "업체명", "담당자"] + [label for label, _ in WEEKDAY_LABELS]]
         editor_height = min(420, max(180, 72 + len(editor_input.index) * 36))
 
         edited_weekdays = st.data_editor(
@@ -378,7 +368,6 @@ def render_operating_weekday_editor(budget_view: pd.DataFrame, engine):
             height=editor_height,
             column_config={
                 "customer_id": None,
-                "매체": st.column_config.TextColumn("매체", disabled=True, width="small"),
                 "업체명": st.column_config.TextColumn("업체명", disabled=True, pinned=True),
                 "담당자": st.column_config.TextColumn("담당자", disabled=True, width="small"),
                 **{
@@ -428,7 +417,7 @@ def render_budget_editor(
         if col not in budget_view.columns:
             budget_view[col] = 0 if col.endswith("_val") else "-"
     editor_df = budget_view[[
-        "customer_id", "account_name", "manager", "platform", "operating_label", "operating_days_label",
+        "customer_id", "account_name", "manager", "operating_label", "operating_days_label",
         "monthly_budget_val", "prev_month_cost_val", "current_month_cost_val",
         "current_daily_avg_val", "recommended_daily_avg_val", "usage_pct", "상태"
     ]].copy()
@@ -442,7 +431,6 @@ def render_budget_editor(
     editor_df = editor_df.rename(columns={
         "account_name": "업체명", 
         "manager": "담당자", 
-        "platform": "매체", 
         "operating_label": "운영 요일",
         "operating_days_label": "운영일 기준",
         "usage_pct": "집행률(%)"
@@ -451,7 +439,7 @@ def render_budget_editor(
     ordered_cols = [
         "customer_id", "monthly_budget_val", "prev_month_cost_val", "current_month_cost_val",
         "current_daily_avg_val", "recommended_daily_avg_val",
-        "매체", "업체명", "담당자", "운영 요일", "운영일 기준", "월 예산", f"{end_dt.month}월 사용액",
+        "업체명", "담당자", "운영 요일", "운영일 기준", "월 예산", f"{end_dt.month}월 사용액",
         "현재 일평균 소진액", "일 평균 권장 소진액", f"{prev_m_num}월 사용액", "집행률(%)", "상태"
     ]
     editor_df = editor_df[ordered_cols]
@@ -569,7 +557,6 @@ def render_alert_table(alert_view: pd.DataFrame):
 
     # 다른 뷰와 동일하게 Styler 객체를 전달하고, 첫 번째 주요 컬럼("업체명")을 pinned 처리
     cfg = {
-        "매체": st.column_config.TextColumn("매체", width="small"),
         "업체명": st.column_config.TextColumn("업체명", pinned=True, width="medium"),
         "소진 위험": st.column_config.TextColumn("소진 위험", width="small"),
         "담당자": st.column_config.TextColumn("담당자"),
@@ -613,14 +600,23 @@ def render_budget_kpis(biz_view: pd.DataFrame, end_dt: date):
 
 def page_budget(meta: pd.DataFrame, engine, f: Dict) -> None:
     st.markdown("<div class='nv-sec-title'>예산 관리</div>", unsafe_allow_html=True)
+
+    media_sel = set(f.get("media_sel") or [])
+    if media_sel and "네이버" not in media_sel:
+        render_empty_state(
+            "예산/비즈머니는 네이버 검색광고 전용입니다.",
+            height=220,
+            detail=f"현재 선택된 매체는 {', '.join(sorted(media_sel))}입니다. 네이버를 선택하면 월 예산과 비즈머니 잔액을 확인할 수 있습니다.",
+        )
+        st.stop()
+    if media_sel and len(media_sel) > 1:
+        render_inline_notice("예산 화면은 네이버 데이터만 표시", "메타/구글이 함께 선택되어 있어도 월 예산과 비즈머니는 네이버 검색광고 계정 기준으로만 계산됩니다.")
+    else:
+        render_inline_notice("조회 기준", "월 예산과 비즈머니는 설정 > 플랫폼 연동에서 네이버로 연결된 계정만 표시합니다.")
     
     selected_view = st.radio("보기", ["월 예산 현황", "비즈머니 관리"], horizontal=True, label_visibility="collapsed", key="budget_view_mode")
 
     cids = tuple(f.get("selected_customer_ids", []) or [])
-    media_sel = tuple(f.get("media_sel", []) or [])
-    if media_sel and "네이버" not in media_sel:
-        st.info("비즈머니와 월 예산 현황은 네이버 계정 기준 데이터입니다. 매체 필터에서 네이버를 포함해 주세요.")
-        return
     yesterday = date.today() - timedelta(days=1)
     fallback_end_dt = f.get("end") or yesterday
     end_dt = _resolve_budget_reference_date(engine, fallback_end_dt)

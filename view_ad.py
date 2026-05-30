@@ -347,7 +347,7 @@ def page_perf_ad(meta: pd.DataFrame, engine, f: Dict) -> None:
     render_toolbar(
         "광고 소재 및 랜딩페이지 분석",
         "소재 유형, 캠페인, 랜딩 URL을 기준으로 성과와 비교 데이터를 점검합니다.",
-        [{"label": f"{f['start']} ~ {f['end']}", "tone": "primary"}, {"label": f"Top {int(f.get('top_n_ad', 100)):,}", "tone": "info"}],
+        [{"label": f"{f['start']} ~ {f['end']}", "tone": "primary"}, {"label": f.get("media_label", "전체 매체"), "tone": "success"}, {"label": f"Top {int(f.get('top_n_ad', 100)):,}", "tone": "info"}],
     )
 
     cids = tuple(f.get("selected_customer_ids", []))

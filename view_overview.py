@@ -11,7 +11,7 @@ from typing import Dict
 from datetime import date
 
 from data import *
-from ui import render_echarts_dual_axis, render_kpi_strip, render_ops_cards, render_toolbar, safe_numeric_col, safe_numeric_series
+from ui import render_echarts_dual_axis, render_kpi_strip, render_ops_cards, render_toolbar, render_inline_notice, safe_numeric_col, safe_numeric_series
 from page_helpers import get_dynamic_cmp_options, period_compare_range
 
 
@@ -1233,6 +1233,8 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
 
     if is_mixed_period:
         st.info("안내: 3월 11일 이전 및 이후 데이터가 혼재되어 있어, 상단 성과 지표와 추이 그래프는 '총 전환' 기준으로 표시됩니다.")
+    elif purchase_view and can_use_purchase_toggle and _overview_type_allows_shopping(type_sel):
+        render_inline_notice("구매완료 기준", "오버뷰의 구매완료수는 쇼핑 검색어 상세의 purchase_conv 기준으로만 표시합니다. 상세 분리 데이터가 없으면 총 전환수를 구매완료로 대체하지 않습니다.")
     elif is_legacy_only:
         st.info("안내: 3월 11일 이전 데이터 조회 시, 상단 성과 지표와 추이 그래프는 '총 전환' 기준으로 표시됩니다.")
 

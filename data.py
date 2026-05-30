@@ -243,26 +243,57 @@ def _build_in_filter(column_sql: str, values, param_prefix: str) -> tuple[str, d
         params[key] = value
     return f"AND {column_sql} IN ({', '.join(placeholders)})", params
 
-def _build_campaign_type_filter(column_name: str, type_sel: tuple, param_prefix: str = "campaign_type") -> tuple[str, dict]:
+_CAMPAIGN_TYPE_ALIASES = {
+    "파워링크": ["WEB_SITE", "파워링크"],
+    "WEB_SITE": ["WEB_SITE", "파워링크"],
+    "쇼핑검색": ["SHOPPING", "쇼핑검색"],
+    "SHOPPING": ["SHOPPING", "쇼핑검색"],
+    "파워컨텐츠": ["POWER_CONTENT", "POWER_CONTENTS", "파워컨텐츠"],
+    "POWER_CONTENT": ["POWER_CONTENT", "POWER_CONTENTS", "파워컨텐츠"],
+    "POWER_CONTENTS": ["POWER_CONTENT", "POWER_CONTENTS", "파워컨텐츠"],
+    "브랜드검색": ["BRAND_SEARCH", "브랜드검색"],
+    "BRAND_SEARCH": ["BRAND_SEARCH", "브랜드검색"],
+    "플레이스": ["PLACE", "플레이스"],
+    "PLACE": ["PLACE", "플레이스"],
+    "네이버": ["WEB_SITE", "SHOPPING", "POWER_CONTENT", "POWER_CONTENTS", "BRAND_SEARCH", "PLACE", "파워링크", "쇼핑검색", "파워컨텐츠", "브랜드검색", "플레이스"],
+    "NAVER": ["WEB_SITE", "SHOPPING", "POWER_CONTENT", "POWER_CONTENTS", "BRAND_SEARCH", "PLACE", "파워링크", "쇼핑검색", "파워컨텐츠", "브랜드검색", "플레이스"],
+    "메타": ["META", "메타", "Meta", "FACEBOOK", "FACEBOOK_ADS", "facebook", "facebook_ads", "INSTAGRAM", "instagram"],
+    "META": ["META", "메타", "Meta", "FACEBOOK", "FACEBOOK_ADS", "facebook", "facebook_ads", "INSTAGRAM", "instagram"],
+    "FACEBOOK": ["META", "메타", "FACEBOOK", "FACEBOOK_ADS", "facebook", "facebook_ads"],
+    "FACEBOOK_ADS": ["META", "메타", "FACEBOOK", "FACEBOOK_ADS", "facebook", "facebook_ads"],
+    "구글": ["GOOGLE", "GOOGLE_ADS", "구글", "Google Ads", "PERFORMANCE_MAX", "PMAX", "P_MAX"],
+    "GOOGLE": ["GOOGLE", "GOOGLE_ADS", "구글", "Google Ads", "PERFORMANCE_MAX", "PMAX", "P_MAX"],
+    "GOOGLE_ADS": ["GOOGLE", "GOOGLE_ADS", "구글", "Google Ads", "PERFORMANCE_MAX", "PMAX", "P_MAX"],
+    "PERFORMANCE_MAX": ["GOOGLE", "GOOGLE_ADS", "구글", "Google Ads", "PERFORMANCE_MAX", "PMAX", "P_MAX"],
+    "PMAX": ["GOOGLE", "GOOGLE_ADS", "구글", "Google Ads", "PERFORMANCE_MAX", "PMAX", "P_MAX"],
+}
+
+_NAVER_CAMPAIGN_TYPE_FILTER_VALUES = _CAMPAIGN_TYPE_ALIASES["네이버"]
+
+
+def _expand_campaign_type_filter_values(type_sel: tuple | list) -> list[str]:
     normalized_types = _normalize_filter_values(type_sel)
-    if not normalized_types:
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in normalized_types:
+        key = str(raw or "").strip()
+        if not key:
+            continue
+        aliases = _CAMPAIGN_TYPE_ALIASES.get(key) or _CAMPAIGN_TYPE_ALIASES.get(key.upper()) or [key]
+        for value in aliases:
+            value = str(value or "").strip()
+            if value and value not in seen:
+                seen.add(value)
+                out.append(value)
+    return out
+
+
+def _build_campaign_type_filter(column_name: str, type_sel: tuple, param_prefix: str = "campaign_type") -> tuple[str, dict]:
+    db_types = _expand_campaign_type_filter_values(type_sel)
+    if not db_types:
         return "", {}
 
     safe_column = _validate_sql_identifier(column_name, "column name")
-    rev_map = {
-        "파워링크": "WEB_SITE",
-        "쇼핑검색": "SHOPPING",
-        "파워컨텐츠": "POWER_CONTENTS",
-        "브랜드검색": "BRAND_SEARCH",
-        "플레이스": "PLACE",
-        "메타": "메타",
-        "META": "메타",
-        "구글": "구글",
-        "GOOGLE": "구글",
-        "GOOGLE_ADS": "구글",
-        "Google Ads": "구글",
-    }
-    db_types = [rev_map.get(t, t) for t in normalized_types]
     where_sql, params = _build_in_filter(f"c.{safe_column}", db_types, param_prefix)
     return where_sql, params
 
@@ -587,14 +618,24 @@ def get_campaign_type_options(dim_campaign: pd.DataFrame) -> list:
     if col_name not in dim_campaign.columns:
         return ["파워링크", "쇼핑검색"]
 
-    mapping = {"WEB_SITE": "파워링크", "SHOPPING": "쇼핑검색", "POWER_CONTENT": "파워컨텐츠", "POWER_CONTENTS": "파워컨텐츠", "BRAND_SEARCH": "브랜드검색", "PLACE": "플레이스", "META": "메타", "메타": "메타", "GOOGLE": "구글", "GOOGLE_ADS": "구글", "구글": "구글"}
+    mapping = {
+        "WEB_SITE": "파워링크", "SHOPPING": "쇼핑검색", "POWER_CONTENT": "파워컨텐츠", "POWER_CONTENTS": "파워컨텐츠",
+        "BRAND_SEARCH": "브랜드검색", "PLACE": "플레이스",
+        "META": "메타", "FACEBOOK": "메타", "FACEBOOK_ADS": "메타", "INSTAGRAM": "메타", "메타": "메타",
+        "GOOGLE": "구글", "GOOGLE_ADS": "구글", "PERFORMANCE_MAX": "구글", "PMAX": "구글", "P_MAX": "구글", "구글": "구글",
+    }
     raw_opts = [str(x) for x in dim_campaign[col_name].dropna().unique() if str(x).strip()]
     opts = list(set([mapping.get(x.upper(), mapping.get(x, x)) for x in raw_opts]))
     return sorted(opts) if opts else ["파워링크", "쇼핑검색"]
 
 def _map_campaign_types(df: pd.DataFrame, col_name: str) -> pd.DataFrame:
     if not df.empty and col_name in df.columns:
-        mapping = {"WEB_SITE": "파워링크", "SHOPPING": "쇼핑검색", "POWER_CONTENT": "파워컨텐츠", "POWER_CONTENTS": "파워컨텐츠", "BRAND_SEARCH": "브랜드검색", "PLACE": "플레이스", "META": "메타", "메타": "메타", "GOOGLE": "구글", "GOOGLE_ADS": "구글", "구글": "구글"}
+        mapping = {
+            "WEB_SITE": "파워링크", "SHOPPING": "쇼핑검색", "POWER_CONTENT": "파워컨텐츠", "POWER_CONTENTS": "파워컨텐츠",
+            "BRAND_SEARCH": "브랜드검색", "PLACE": "플레이스",
+            "META": "메타", "FACEBOOK": "메타", "FACEBOOK_ADS": "메타", "INSTAGRAM": "메타", "메타": "메타",
+            "GOOGLE": "구글", "GOOGLE_ADS": "구글", "PERFORMANCE_MAX": "구글", "PMAX": "구글", "P_MAX": "구글", "구글": "구글",
+        }
         df[col_name] = df[col_name].apply(lambda x: mapping.get(str(x).upper(), mapping.get(str(x), x)) if pd.notna(x) else x)
     return df
 
@@ -930,9 +971,9 @@ def _infer_platform_label_from_campaign_type(value) -> str:
     if not raw:
         return ""
     key = raw.upper()
-    if key in {"META", "메타"}:
+    if key in {"META", "메타", "FACEBOOK", "FACEBOOK_ADS", "INSTAGRAM"}:
         return "메타"
-    if key in {"GOOGLE", "GOOGLE_ADS", "구글"}:
+    if key in {"GOOGLE", "GOOGLE_ADS", "구글", "PERFORMANCE_MAX", "PMAX", "P_MAX"}:
         return "구글"
     if key in {"WEB_SITE", "SHOPPING", "POWER_CONTENT", "POWER_CONTENTS", "BRAND_SEARCH", "PLACE", "파워링크", "쇼핑검색", "파워컨텐츠", "브랜드검색", "플레이스"}:
         return "네이버"
@@ -992,16 +1033,41 @@ def _read_budget_campaign_metrics(_engine, avg_d1: date, avg_d2: date, month_d1:
     outer_d1 = min(avg_d1, month_d1, prev_month_d1)
     outer_d2 = max(avg_d2, month_d2, prev_month_d2)
 
+    def _naver_budget_scope_sql(table_name: str, alias: str = "f") -> tuple[str, str, dict]:
+        """Budget/Bizmoney pages are Naver-only; never let Meta/Google campaign cost leak in."""
+        try:
+            table_cols = get_table_columns(_engine, table_name)
+        except Exception:
+            table_cols = []
+        naver_where, naver_params = _build_in_filter(f"c.__campaign_type_col__", _NAVER_CAMPAIGN_TYPE_FILTER_VALUES, f"{table_name}_naver_type")
+
+        if table_name == "overview_campaign_daily_cache" and "campaign_type" in table_cols:
+            direct_where, direct_params = _build_in_filter(f"{alias}.campaign_type", _NAVER_CAMPAIGN_TYPE_FILTER_VALUES, f"{table_name}_naver_type")
+            return "", direct_where, direct_params
+
+        if "campaign_id" in table_cols and table_exists(_engine, "dim_campaign"):
+            dim_cols = get_table_columns(_engine, "dim_campaign")
+            cp_col = "campaign_tp" if "campaign_tp" in dim_cols else ("campaign_type_label" if "campaign_type_label" in dim_cols else "campaign_type")
+            if cp_col in dim_cols:
+                join_sql = f"JOIN dim_campaign c ON {alias}.campaign_id = c.campaign_id AND {alias}.customer_id = c.customer_id"
+                type_where, type_params = _build_in_filter(f"c.{cp_col}", _NAVER_CAMPAIGN_TYPE_FILTER_VALUES, f"{table_name}_naver_type")
+                return join_sql, type_where, type_params
+
+        # If no campaign type source exists, keep legacy behavior rather than dropping all budget rows.
+        return "", "", {}
+
     def _run_budget_metric_query(table_name: str, sales_expr: str) -> pd.DataFrame:
+        join_sql, naver_where_sql, naver_params = _naver_budget_scope_sql(table_name, alias="f")
         sql = f"""
-            SELECT customer_id,
-                   SUM(CASE WHEN dt BETWEEN :avg_d1 AND :avg_d2 THEN cost ELSE 0 END)/:avg_days as avg_cost,
-                   SUM(CASE WHEN dt BETWEEN :month_d1 AND :month_d2 THEN cost ELSE 0 END) as current_month_cost,
-                   SUM(CASE WHEN dt BETWEEN :month_d1 AND :month_d2 THEN {sales_expr} ELSE 0 END) as current_month_sales,
-                   SUM(CASE WHEN dt BETWEEN :prev_month_d1 AND :prev_month_d2 THEN cost ELSE 0 END) as prev_month_cost
-            FROM {table_name}
-            WHERE dt BETWEEN :outer_d1 AND :outer_d2 {where_cid}
-            GROUP BY customer_id
+            SELECT CAST(f.customer_id AS TEXT) AS customer_id,
+                   SUM(CASE WHEN f.dt BETWEEN :avg_d1 AND :avg_d2 THEN f.cost ELSE 0 END)/:avg_days as avg_cost,
+                   SUM(CASE WHEN f.dt BETWEEN :month_d1 AND :month_d2 THEN f.cost ELSE 0 END) as current_month_cost,
+                   SUM(CASE WHEN f.dt BETWEEN :month_d1 AND :month_d2 THEN {sales_expr} ELSE 0 END) as current_month_sales,
+                   SUM(CASE WHEN f.dt BETWEEN :prev_month_d1 AND :prev_month_d2 THEN f.cost ELSE 0 END) as prev_month_cost
+            FROM {table_name} f
+            {join_sql}
+            WHERE f.dt BETWEEN :outer_d1 AND :outer_d2 {where_cid.replace('customer_id', 'f.customer_id')} {naver_where_sql}
+            GROUP BY CAST(f.customer_id AS TEXT)
         """
         return sql_read(
             _engine,
@@ -1017,6 +1083,7 @@ def _read_budget_campaign_metrics(_engine, avg_d1: date, avg_d2: date, month_d1:
                 "outer_d2": str(outer_d2),
                 "avg_days": max(int(avg_days), 1),
                 **cid_params,
+                **naver_params,
             },
         )
 
@@ -1025,7 +1092,7 @@ def _read_budget_campaign_metrics(_engine, avg_d1: date, avg_d2: date, month_d1:
     cache_is_fresh = False
 
     if table_exists(_engine, "fact_campaign_daily"):
-        fact_df = _run_budget_metric_query("fact_campaign_daily", "COALESCE(sales, 0)")
+        fact_df = _run_budget_metric_query("fact_campaign_daily", "COALESCE(f.sales, 0)")
 
     if table_exists(_engine, "overview_campaign_daily_cache"):
         latest_cache_df = sql_read(_engine, "SELECT MAX(dt) as dt FROM overview_campaign_daily_cache")
@@ -1035,7 +1102,7 @@ def _read_budget_campaign_metrics(_engine, avg_d1: date, avg_d2: date, month_d1:
                 cache_is_fresh = pd.to_datetime(latest_cache_dt).date() >= outer_d2
             except Exception:
                 cache_is_fresh = False
-        cache_df = _run_budget_metric_query("overview_campaign_daily_cache", "COALESCE(tot_sales, sales, 0)")
+        cache_df = _run_budget_metric_query("overview_campaign_daily_cache", "COALESCE(f.tot_sales, f.sales, 0)")
 
     if fact_df.empty and cache_df.empty:
         return pd.DataFrame()

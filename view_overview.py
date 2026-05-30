@@ -132,6 +132,83 @@ def _selected_type_label(type_sel: tuple) -> str:
     if len(type_sel) == 1: return type_sel[0]
     return ", ".join(type_sel)
 
+def _overview_type_allows_shopping(type_sel: tuple) -> bool:
+    if not type_sel:
+        return True
+    labels = {str(x or "").strip().upper() for x in type_sel}
+    return bool(labels.intersection({"쇼핑검색", "SHOPPING", "네이버", "NAVER"}))
+
+
+def _overview_is_shopping_series(series: pd.Series) -> pd.Series:
+    if series is None:
+        return pd.Series(dtype=bool)
+    return series.astype(str).str.strip().str.upper().isin({"SHOPPING", "쇼핑검색"})
+
+
+def _zero_overview_shopping_conversions(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame() if df is None else df
+    out = df.copy()
+    type_col = next((c for c in ["campaign_type_label", "campaign_type", "campaign_tp"] if c in out.columns), None)
+    if not type_col:
+        return out
+    mask = _overview_is_shopping_series(out[type_col])
+    if not mask.any():
+        return out
+    for col in ["conv", "sales", "tot_conv", "tot_sales", "cart_conv", "cart_sales", "wishlist_conv", "wishlist_sales"]:
+        if col in out.columns:
+            out.loc[mask, col] = 0
+    return out
+
+
+def _shopping_terms_to_overview_keyword_bundle(shop_terms: pd.DataFrame) -> pd.DataFrame:
+    if shop_terms is None or shop_terms.empty:
+        return pd.DataFrame()
+    out = shop_terms.copy()
+    if "query_text" not in out.columns:
+        return pd.DataFrame()
+    out["keyword"] = out["query_text"].fillna("").astype(str).str.strip()
+    out = out[out["keyword"] != ""].copy()
+    if out.empty:
+        return pd.DataFrame()
+    out["campaign_type_label"] = "쇼핑검색"
+    out["campaign_type"] = "쇼핑검색"
+    for col in ["imp", "clk", "cost"]:
+        out[col] = 0
+    purchase_conv = pd.to_numeric(out.get("purchase_conv"), errors="coerce").fillna(0)
+    purchase_sales = pd.to_numeric(out.get("purchase_sales"), errors="coerce").fillna(0)
+    total_conv = pd.to_numeric(out.get("total_conv"), errors="coerce").fillna(0)
+    total_sales = pd.to_numeric(out.get("total_sales"), errors="coerce").fillna(0)
+    out["conv"] = purchase_conv
+    out["sales"] = purchase_sales
+    out["tot_conv"] = total_conv.where(total_conv > 0, purchase_conv)
+    out["tot_sales"] = total_sales.where(total_sales > 0, purchase_sales)
+    keep = [
+        "customer_id", "campaign_name", "adgroup_name", "keyword", "campaign_type_label", "campaign_type",
+        "imp", "clk", "cost", "conv", "sales", "tot_conv", "tot_sales",
+        "cart_conv", "cart_sales", "wishlist_conv", "wishlist_sales",
+    ]
+    return out[[c for c in keep if c in out.columns]].copy()
+
+
+def _merge_overview_keyword_bundle_with_shopping_terms(_engine, start_dt, end_dt, cids: tuple, type_sel: tuple, kw_bundle: pd.DataFrame) -> pd.DataFrame:
+    if not _overview_type_allows_shopping(type_sel):
+        return pd.DataFrame() if kw_bundle is None else kw_bundle
+    try:
+        shop_terms = query_shopping_search_terms(_engine, start_dt, end_dt, cids)
+    except Exception:
+        shop_terms = pd.DataFrame()
+    shop_bundle = _shopping_terms_to_overview_keyword_bundle(shop_terms)
+    if shop_bundle.empty:
+        return pd.DataFrame() if kw_bundle is None else kw_bundle
+    base = _zero_overview_shopping_conversions(kw_bundle)
+    parts = []
+    if base is not None and not base.empty:
+        parts.append(base)
+    parts.append(shop_bundle)
+    return pd.concat(parts, ignore_index=True, sort=False)
+
+
 
 @st.cache_data(ttl=43200, max_entries=10, show_spinner=False)
 def _cached_campaign_bundle(_engine, start_dt, end_dt, cids: tuple, type_sel: tuple) -> pd.DataFrame:
@@ -143,16 +220,22 @@ def _cached_campaign_bundle(_engine, start_dt, end_dt, cids: tuple, type_sel: tu
 def _cached_keyword_bundle(_engine, start_dt, end_dt, cids: tuple, type_sel: tuple) -> pd.DataFrame:
     # 오버뷰 최초 로딩/리포트용 경량 번들입니다.
     # 화면 상세 표는 아래 _cached_keyword_full_bundle()을 별도로 사용해 정렬 누락을 막습니다.
-    try: return query_keyword_bundle(_engine, start_dt, end_dt, cids, type_sel, topn_cost=300)
-    except Exception: return pd.DataFrame()
+    try:
+        bundle = query_keyword_bundle(_engine, start_dt, end_dt, cids, type_sel, topn_cost=300)
+        return _merge_overview_keyword_bundle_with_shopping_terms(_engine, start_dt, end_dt, cids, type_sel, bundle)
+    except Exception:
+        return pd.DataFrame()
 
 
 @st.cache_data(ttl=43200, max_entries=6, show_spinner=False)
 def _cached_keyword_full_bundle(_engine, start_dt, end_dt, cids: tuple, type_sel: tuple) -> pd.DataFrame:
     # st.dataframe의 정렬은 브라우저에 전달된 행 안에서만 동작합니다.
     # 따라서 키워드 상세/엑셀용 데이터는 광고비 상위 제한을 걸지 않고 전체를 가져옵니다.
-    try: return query_keyword_bundle(_engine, start_dt, end_dt, cids, type_sel, topn_cost=-1)
-    except Exception: return pd.DataFrame()
+    try:
+        bundle = query_keyword_bundle(_engine, start_dt, end_dt, cids, type_sel, topn_cost=-1)
+        return _merge_overview_keyword_bundle_with_shopping_terms(_engine, start_dt, end_dt, cids, type_sel, bundle)
+    except Exception:
+        return pd.DataFrame()
 
 
 @st.cache_data(ttl=43200, max_entries=10, show_spinner=False)
@@ -164,11 +247,16 @@ def _cached_campaign_timeseries(_engine, start_dt, end_dt, cids: tuple, type_sel
 PLATFORM_LABELS = {
     "naver": "네이버",
     "meta": "메타",
+    "meta_ads": "메타",
     "facebook": "메타",
     "facebook_ads": "메타",
+    "instagram": "메타",
     "google": "구글",
     "google_ads": "구글",
     "googleads": "구글",
+    "performance_max": "구글",
+    "pmax": "구글",
+    "p_max": "구글",
 }
 
 CAMPAIGN_PLATFORM_LABELS = {
@@ -184,9 +272,15 @@ CAMPAIGN_PLATFORM_LABELS = {
     "브랜드검색": "네이버",
     "플레이스": "네이버",
     "META": "메타",
+    "FACEBOOK": "메타",
+    "FACEBOOK_ADS": "메타",
+    "INSTAGRAM": "메타",
     "메타": "메타",
     "GOOGLE": "구글",
     "GOOGLE_ADS": "구글",
+    "PERFORMANCE_MAX": "구글",
+    "PMAX": "구글",
+    "P_MAX": "구글",
     "구글": "구글",
 }
 

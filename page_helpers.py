@@ -39,13 +39,16 @@ _PLATFORM_LABEL_MAP = {
     "search_ad": "네이버",
     "gfa": "네이버",
     "meta": "메타",
+    "meta_ads": "메타",
     "facebook": "메타",
     "facebook_ads": "메타",
     "instagram": "메타",
     "google": "구글",
     "google_ads": "구글",
     "googlead": "구글",
+    "performance_max": "구글",
     "pmax": "구글",
+    "p_max": "구글",
 }
 _CAMPAIGN_PLATFORM_LABELS = {
     "WEB_SITE": "네이버",
@@ -60,9 +63,15 @@ _CAMPAIGN_PLATFORM_LABELS = {
     "브랜드검색": "네이버",
     "플레이스": "네이버",
     "META": "메타",
+    "FACEBOOK": "메타",
+    "FACEBOOK_ADS": "메타",
+    "INSTAGRAM": "메타",
     "메타": "메타",
     "GOOGLE": "구글",
     "GOOGLE_ADS": "구글",
+    "PERFORMANCE_MAX": "구글",
+    "PMAX": "구글",
+    "P_MAX": "구글",
     "구글": "구글",
 }
 
@@ -79,6 +88,51 @@ def _campaign_type_platform_label(value) -> str:
     if not raw:
         return ""
     return _CAMPAIGN_PLATFORM_LABELS.get(raw.upper(), _CAMPAIGN_PLATFORM_LABELS.get(raw, _normalize_media_label(raw)))
+
+
+def _campaign_type_options_for_media(type_options: list[str], media_sel: list | tuple | None) -> list[str]:
+    """Limit campaign type choices to the selected media so stale type filters cannot leak rows."""
+    media_labels = {_normalize_media_label(x) for x in (media_sel or []) if _normalize_media_label(x)}
+    if not media_labels:
+        return list(type_options or [])
+    filtered = []
+    for opt in type_options or []:
+        media = _campaign_type_platform_label(opt)
+        if media in media_labels and opt not in filtered:
+            filtered.append(opt)
+    return filtered
+
+
+def _derive_effective_campaign_types(type_sel: list | tuple | None, media_sel: list | tuple | None) -> tuple:
+    """Turn the media selector into a hard campaign-type guard for SQL queries.
+
+    Same dashboard customer_id can contain Naver, Meta, and Google rows in fact tables.
+    Customer ID filtering alone is therefore not enough when media is selected.
+    """
+    selected_types = [str(x).strip() for x in (type_sel or []) if str(x).strip()]
+    media_labels = [_normalize_media_label(x) for x in (media_sel or []) if _normalize_media_label(x)]
+    if not media_labels:
+        return tuple(selected_types)
+
+    media_to_types = {
+        "네이버": ["파워링크", "쇼핑검색", "파워컨텐츠", "브랜드검색", "플레이스"],
+        "메타": ["메타"],
+        "구글": ["구글"],
+    }
+    allowed = []
+    for media in media_labels:
+        for typ in media_to_types.get(media, []):
+            if typ not in allowed:
+                allowed.append(typ)
+
+    if selected_types:
+        selected_media = {_campaign_type_platform_label(x) for x in selected_types}
+        selected_types = [x for x in selected_types if _campaign_type_platform_label(x) in set(media_labels)]
+        # If the previous UI state held a stale type from another media, ignore it and use the media guard.
+        if selected_types:
+            return tuple(selected_types)
+    return tuple(allowed)
+
 
 
 def _normalize_customer_id_value_for_page(value) -> str:
@@ -438,7 +492,11 @@ def build_filters(meta: pd.DataFrame, type_opts: List[str], engine=None) -> Dict
         
         with st.expander("상세 설정 (검색, 표시 제한)", expanded=False):
             q = st.text_input("텍스트 검색", sv.get("q", ""), key="f_q", placeholder="키워드/캠페인명 입력")
-            type_sel = ui_multiselect(st, "광고 유형", type_opts, default=sv.get("type_sel", []), key="f_type_sel", placeholder="전체 광고 유형")
+            type_opts_for_media = _campaign_type_options_for_media(type_opts, media_sel)
+            if "f_type_sel" in st.session_state:
+                st.session_state["f_type_sel"] = [x for x in (st.session_state.get("f_type_sel") or []) if x in type_opts_for_media]
+            prev_type_default = [x for x in (sv.get("type_sel", []) or []) if x in type_opts_for_media]
+            type_sel = ui_multiselect(st, "광고 유형", type_opts_for_media, default=prev_type_default, key="f_type_sel", placeholder="전체 광고 유형")
             
             st.markdown("<div style='margin-top:12px; margin-bottom:4px; font-size:12px; font-weight:500; color:var(--nv-muted);'>표시 데이터 수 제한</div>", unsafe_allow_html=True)
             top_n_campaign = st.number_input("캠페인 한도", min_value=10, max_value=2000, value=int(sv.get("top_n_campaign", 200)), step=50, key="f_top_n_campaign")
@@ -464,8 +522,12 @@ def build_filters(meta: pd.DataFrame, type_opts: List[str], engine=None) -> Dict
     if not cids and not (manager_sel or account_sel or media_sel):
         cids = _all_customer_ids(meta, engine)
 
+    raw_type_sel = tuple(sv["type_sel"]) if sv["type_sel"] else tuple()
+    effective_type_sel = _derive_effective_campaign_types(raw_type_sel, sv.get("media_sel", []))
+
     return {
-        "q": sv["q"], "manager": sv["manager"], "account": sv["account"], "media_sel": tuple(sv.get("media_sel", [])) if sv.get("media_sel") else tuple(), "type_sel": tuple(sv["type_sel"]) if sv["type_sel"] else tuple(),
+        "q": sv["q"], "manager": sv["manager"], "account": sv["account"], "media_sel": tuple(sv.get("media_sel", [])) if sv.get("media_sel") else tuple(),
+        "type_sel": effective_type_sel, "raw_type_sel": raw_type_sel,
         "start": d1, "end": d2, "period_mode": period_mode, "customer_ids": cids, "selected_customer_ids": cids,
         "top_n_keyword": int(sv.get("top_n_keyword", 300)), "top_n_ad": int(sv.get("top_n_ad", 200)), "top_n_campaign": int(sv.get("top_n_campaign", 200)),
         "show_diagnostics": bool(sv.get("show_diagnostics", False)),

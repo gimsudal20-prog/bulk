@@ -23,13 +23,15 @@
         }
       },
       "age_ids": 33,
+      "age_entity_source": "ad",
+      "age_entity_ids": 755,
       "age_rows_saved": 264,
-      "age_raw_rows": 120,
+      "age_raw_rows": 242,
       "age_meta": {
-        "raw_rows": 120,
+        "raw_rows": 242,
         "parsed_rows": 0,
         "missing_id": 0,
-        "missing_breakdown": 120,
+        "missing_breakdown": 242,
         "bad_hour": 0,
         "zero_metric": 0,
         "samples": {
@@ -41,7 +43,7 @@
               "clkCnt": 1,
               "impCnt": 190,
               "salesAmt": 330,
-              "source_id": "grp-a001-02-000000064398111"
+              "source_id": "nad-a001-02-000000494263471"
             },
             {
               "ccnt": 0,
@@ -50,7 +52,7 @@
               "clkCnt": 0,
               "impCnt": 190,
               "salesAmt": 0,
-              "source_id": "grp-a001-02-000000064423020"
+              "source_id": "nad-a001-02-000000494263494"
             },
             {
               "ccnt": 0,
@@ -59,7 +61,7 @@
               "clkCnt": 0,
               "impCnt": 16,
               "salesAmt": 0,
-              "source_id": "grp-a001-02-000000064710327"
+              "source_id": "nad-a001-02-000000497898271"
             }
           ],
           "bad_hour": [],

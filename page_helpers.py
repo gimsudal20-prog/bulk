@@ -139,13 +139,16 @@ def _normalize_customer_id_value_for_page(value) -> str:
     """Return a clean customer_id string for UI joins and filters.
 
     Handles values read as 3469289.0 from Excel/DB and safely drops blank/NaN
-    values so pandas never tries to cast NaN directly to int64.
+    values so pandas never tries to cast NaN directly to int64.  Meta account IDs
+    may be saved as act_123..., and Google IDs may contain dashes, so normalize
+    those before deciding whether the value is a usable numeric fact-table ID.
     """
     if pd.isna(value):
         return ""
     value_str = str(value).strip()
     if not value_str or value_str.lower() in {"nan", "none", "nat", "<na>"}:
         return ""
+    value_str = re.sub(r"^act_", "", value_str, flags=re.IGNORECASE).strip()
     if re.fullmatch(r"\d+\.0+", value_str):
         return value_str.split(".", 1)[0]
     if re.fullmatch(r"\d+(?:\.\d+)?[eE]\+\d+", value_str):
@@ -175,6 +178,21 @@ def _customer_id_int_series_for_page(series: pd.Series) -> pd.Series:
         return pd.Series(dtype="int64")
     return numeric.astype("int64")
 
+def _active_platform_connection_labels(_engine) -> set[str]:
+    if _engine is None:
+        return set()
+    try:
+        conn_df = get_platform_credentials(_engine)
+    except Exception:
+        return set()
+    if conn_df is None or conn_df.empty or "account_label" not in conn_df.columns:
+        return set()
+    work = conn_df.copy()
+    if "is_active" in work.columns:
+        work = work[work["is_active"].fillna(False).astype(bool)].copy()
+    return {str(x).strip() for x in work["account_label"].dropna().tolist() if str(x).strip()}
+
+
 def _platform_scope_rows(_engine) -> pd.DataFrame:
     cols = ["customer_id", "account_name", "manager", "platform"]
     if _engine is None:
@@ -197,17 +215,22 @@ def _platform_scope_rows(_engine) -> pd.DataFrame:
         manager = str(row.get("manager", "") or "").strip()
         platform = _normalize_media_label(row.get("platform", "")) or "네이버"
 
-        # 외부 매체는 account_id가 실제 fact 테이블 customer_id로 들어가는 경우가 많다.
-        # customer_id까지 같이 넣으면 네이버 계정 ID와 섞여 조회되므로, account_id를 우선한다.
-        id_cols = ["customer_id", "account_id"] if platform == "네이버" else ["account_id", "customer_id"]
+        # 설정의 연동 정보가 매체 구분의 기준이다.
+        # 외부 매체에서 account_id가 비어 있거나 act_ 정규화 후에도 숫자가 아니면
+        # customer_id(대시보드/네이버 ID)로 되돌아가지 않는다. 그 fallback 때문에
+        # 메타/구글 계정이 네이버 customer_id로 섞여 조회되는 문제가 발생했다.
+        if platform == "네이버":
+            id_cols = ["customer_id", "account_id"]
+        else:
+            id_cols = ["account_id"]
+
         added = False
         for id_col in id_cols:
             customer_id = _normalize_customer_id_value_for_page(row.get(id_col, ""))
             if customer_id and customer_id.isdigit():
                 rows.append({"customer_id": customer_id, "account_name": account_name, "manager": manager, "platform": platform})
                 added = True
-                if platform != "네이버":
-                    break
+                break
         if not added:
             continue
     if not rows:
@@ -226,6 +249,14 @@ def _scope_df(meta: pd.DataFrame, _engine=None) -> pd.DataFrame:
         base["platform"] = base["platform"].apply(lambda x: _normalize_media_label(x) or "네이버")
     base = base[["customer_id", "account_name", "manager", "platform"]].copy()
     linked = _platform_scope_rows(_engine)
+
+    # 설정 > 플랫폼 연동에 등록된 계정은 연동 테이블을 매체 구분의 source of truth로 사용한다.
+    # 기존 dim_customer fallback은 모든 계정을 네이버로 보게 만들어 메타/구글 전용 계정까지
+    # 예산/오버뷰에서 네이버로 살아나는 원인이었다.
+    linked_names = _active_platform_connection_labels(_engine)
+    if linked_names and "account_name" in base.columns:
+        base = base[~base["account_name"].astype(str).str.strip().isin(linked_names)].copy()
+
     combined = pd.concat([base, linked], ignore_index=True)
     if combined.empty:
         return combined

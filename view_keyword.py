@@ -176,14 +176,22 @@ def _prefer_total_conversion_for_keyword(df: pd.DataFrame) -> pd.DataFrame:
 
     base_conv = pd.to_numeric(out["conv"], errors="coerce") if "conv" in out.columns else pd.Series(0, index=out.index)
     base_sales = pd.to_numeric(out["sales"], errors="coerce") if "sales" in out.columns else pd.Series(0, index=out.index)
+
+    type_col = next((c for c in ["campaign_type_label", "campaign_type", "campaign_tp", "캠페인유형"] if c in out.columns), None)
+    shopping_mask = _is_shopping_campaign_type(out[type_col]) if type_col else pd.Series(False, index=out.index)
+
     if "purchase_conv" not in out.columns:
-        out["purchase_conv"] = base_conv.fillna(0)
+        # 쇼핑검색 keyword/ad fact의 conv는 구매완료가 아니라 총 전환으로 들어오는 경우가 있어
+        # 구매완료 컬럼으로 그대로 복사하지 않는다. 구매완료는 검색어 상세 split 데이터로만 채운다.
+        out["purchase_conv"] = base_conv.where(~shopping_mask, 0).fillna(0)
     else:
-        out["purchase_conv"] = pd.to_numeric(out["purchase_conv"], errors="coerce").fillna(base_conv).fillna(0)
+        out["purchase_conv"] = pd.to_numeric(out["purchase_conv"], errors="coerce")
+        out["purchase_conv"] = out["purchase_conv"].where(~(shopping_mask & out["purchase_conv"].isna()), 0).fillna(base_conv.where(~shopping_mask, 0)).fillna(0)
     if "purchase_sales" not in out.columns:
-        out["purchase_sales"] = base_sales.fillna(0)
+        out["purchase_sales"] = base_sales.where(~shopping_mask, 0).fillna(0)
     else:
-        out["purchase_sales"] = pd.to_numeric(out["purchase_sales"], errors="coerce").fillna(base_sales).fillna(0)
+        out["purchase_sales"] = pd.to_numeric(out["purchase_sales"], errors="coerce")
+        out["purchase_sales"] = out["purchase_sales"].where(~(shopping_mask & out["purchase_sales"].isna()), 0).fillna(base_sales.where(~shopping_mask, 0)).fillna(0)
 
     if "tot_conv" in out.columns:
         total_conv = pd.to_numeric(out["tot_conv"], errors="coerce")
@@ -478,7 +486,7 @@ def _residualize_shopping_fact_conversions(base: pd.DataFrame, detail: pd.DataFr
     return out
 
 
-def _zero_shopping_fact_conversions(df: pd.DataFrame) -> pd.DataFrame:
+def _zero_shopping_fact_conversions(df: pd.DataFrame, *, zero_totals: bool = True) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame() if df is None else df
     out = df.copy()
@@ -486,7 +494,10 @@ def _zero_shopping_fact_conversions(df: pd.DataFrame) -> pd.DataFrame:
     if not type_col:
         return out
     shopping_mask = _is_shopping_campaign_type(out[type_col])
-    for col in ["전환", "구매완료", "전환매출", "구매완료 매출", "conv", "purchase_conv", "sales", "purchase_sales", "tot_conv", "tot_sales"]:
+    clear_cols = ["구매완료", "구매완료 매출", "purchase_conv", "purchase_sales"]
+    if zero_totals:
+        clear_cols.extend(["전환", "전환매출", "conv", "sales", "tot_conv", "tot_sales"])
+    for col in clear_cols:
         if col in out.columns:
             out.loc[shopping_mask, col] = 0
     return out
@@ -494,14 +505,14 @@ def _zero_shopping_fact_conversions(df: pd.DataFrame) -> pd.DataFrame:
 
 def _merge_keyword_view_with_shopping_terms(view: pd.DataFrame, shop_view: pd.DataFrame) -> pd.DataFrame:
     if shop_view is None or shop_view.empty:
-        return view
+        return _zero_shopping_fact_conversions(view, zero_totals=False)
     if view is None or view.empty:
         return shop_view
     base = view.copy()
     if "구분" not in base.columns:
         base["구분"] = "키워드/소재"
     residual_rows = _build_shopping_unmapped_conversion_rows(base, shop_view)
-    base = _zero_shopping_fact_conversions(base)
+    base = _zero_shopping_fact_conversions(base, zero_totals=True)
     parts = [base, shop_view]
     if residual_rows is not None and not residual_rows.empty:
         parts.append(residual_rows)

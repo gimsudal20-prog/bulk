@@ -145,7 +145,7 @@ def _overview_is_shopping_series(series: pd.Series) -> pd.Series:
     return series.astype(str).str.strip().str.upper().isin({"SHOPPING", "쇼핑검색"})
 
 
-def _zero_overview_shopping_conversions(df: pd.DataFrame) -> pd.DataFrame:
+def _zero_overview_shopping_conversions(df: pd.DataFrame, *, zero_totals: bool = True) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame() if df is None else df
     out = df.copy()
@@ -155,7 +155,14 @@ def _zero_overview_shopping_conversions(df: pd.DataFrame) -> pd.DataFrame:
     mask = _overview_is_shopping_series(out[type_col])
     if not mask.any():
         return out
-    for col in ["conv", "sales", "tot_conv", "tot_sales", "cart_conv", "cart_sales", "wishlist_conv", "wishlist_sales"]:
+
+    # 쇼핑검색의 fact_keyword_daily conv는 구매완료가 아니라 총 전환으로 들어오는 경우가 있다.
+    # 검색어 상세 분리 데이터가 없을 때도 구매완료수=총 전환수로 보이지 않도록
+    # 구매완료 계열은 항상 0 처리하고, 검색어 상세가 있을 때만 total/cart/wish도 대체한다.
+    clear_cols = ["conv", "sales"]
+    if zero_totals:
+        clear_cols.extend(["tot_conv", "tot_sales", "cart_conv", "cart_sales", "wishlist_conv", "wishlist_sales"])
+    for col in clear_cols:
         if col in out.columns:
             out.loc[mask, col] = 0
     return out
@@ -199,9 +206,15 @@ def _merge_overview_keyword_bundle_with_shopping_terms(_engine, start_dt, end_dt
     except Exception:
         shop_terms = pd.DataFrame()
     shop_bundle = _shopping_terms_to_overview_keyword_bundle(shop_terms)
+
+    # Always remove shopping purchase values from keyword fact fallback.
+    # If split search-term data exists, it becomes the authoritative purchase/total source.
+    # If it does not exist, keep only total conversion fallback and show purchase as 0 rather
+    # than repeating total conversion as purchase completion.
+    base = _zero_overview_shopping_conversions(kw_bundle, zero_totals=not shop_bundle.empty)
     if shop_bundle.empty:
-        return pd.DataFrame() if kw_bundle is None else kw_bundle
-    base = _zero_overview_shopping_conversions(kw_bundle)
+        return pd.DataFrame() if base is None else base
+
     parts = []
     if base is not None and not base.empty:
         parts.append(base)

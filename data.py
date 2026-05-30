@@ -393,16 +393,20 @@ def _is_operating_weekdays_column(c_clean: str) -> bool:
 
 
 def _normalize_customer_id_value(value) -> str:
-    """Normalize customer_id read from Excel/DB so joins do not fall back to raw IDs.
+    """Normalize customer_id/account_id read from Excel/DB.
 
     accounts.xlsx often stores custom IDs as numeric cells, which pandas can read as
-    1234567.0 when the sheet has blank rows. Keep IDs as clean strings everywhere.
+    1234567.0 when the sheet has blank rows. Meta account IDs may also be saved as
+    act_123... and Google IDs may contain dashes, so clean those shapes up before
+    joining against fact-table customer_id values.
     """
     if pd.isna(value):
         return ""
     value_str = str(value).strip()
     if not value_str or value_str.lower() in {"nan", "none", "nat"}:
         return ""
+
+    value_str = re.sub(r"^act_", "", value_str, flags=re.IGNORECASE).strip()
 
     # Common Excel/pandas numeric representation: 3469289.0 -> 3469289
     if re.fullmatch(r"\d+\.0+", value_str):
@@ -416,6 +420,10 @@ def _normalize_customer_id_value(value) -> str:
                 return str(int(as_float))
         except Exception:
             pass
+
+    compact = value_str.replace("-", "").replace(" ", "")
+    if compact.isdigit():
+        return compact
 
     return value_str
 
@@ -1005,6 +1013,102 @@ def _merge_customer_metric_frame(base_df: pd.DataFrame, metric_df: pd.DataFrame)
     return base_df.merge(metric_df, on="customer_id", how="left")
 
 
+def _account_label_key(value) -> str:
+    return re.sub(r"\s+", "", str(value or "").strip()).casefold()
+
+
+def _first_nonblank(*values) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text and text.lower() not in {"nan", "none", "nat", "<na>"}:
+            return text
+    return ""
+
+
+def _budget_naver_scope_df(_engine) -> pd.DataFrame:
+    """Return the account rows budget/Bizmoney should use.
+
+    Platform connections are the authoritative media mapping.  dim_customer remains
+    a fallback only for accounts that do not have any active platform connection.
+    This prevents external Meta/Google-only accounts from being displayed as Naver
+    just because they exist in dim_customer.
+    """
+    meta = get_meta(_engine)
+    if meta is None:
+        meta = pd.DataFrame()
+    meta = meta.copy()
+    for col in ["customer_id", "account_name", "manager", "monthly_budget", "operating_weekdays"]:
+        if col not in meta.columns:
+            meta[col] = "" if col not in {"monthly_budget"} else 0
+    if not meta.empty:
+        meta["customer_id"] = _normalize_customer_id_series(meta["customer_id"])
+        meta["account_name"] = meta["account_name"].fillna("").astype(str).str.strip()
+        meta["manager"] = meta["manager"].fillna("미배정").astype(str).str.strip()
+        meta["monthly_budget"] = pd.to_numeric(meta["monthly_budget"], errors="coerce").fillna(0)
+        meta["operating_weekdays"] = meta["operating_weekdays"].apply(normalize_operating_weekdays)
+
+    try:
+        conn_df = get_platform_credentials(_engine)
+    except Exception:
+        conn_df = pd.DataFrame()
+
+    if conn_df is None or conn_df.empty:
+        out = meta.copy()
+        if "platform" not in out.columns:
+            out["platform"] = "네이버"
+        return out
+
+    conn = conn_df.copy()
+    if "is_active" in conn.columns:
+        conn = conn[conn["is_active"].fillna(False).astype(bool)].copy()
+    for col in ["platform", "account_label", "manager", "customer_id", "account_id"]:
+        if col not in conn.columns:
+            conn[col] = ""
+    conn["platform_norm"] = conn["platform"].fillna("").astype(str).str.strip().str.lower()
+    conn_names = {_account_label_key(x) for x in conn["account_label"].dropna().tolist() if _account_label_key(x)}
+
+    meta_by_cid = {}
+    meta_by_name = {}
+    if not meta.empty:
+        meta_by_cid = {str(row.get("customer_id", "")).strip(): row for _, row in meta.iterrows() if str(row.get("customer_id", "")).strip()}
+        meta_by_name = {_account_label_key(row.get("account_name", "")): row for _, row in meta.iterrows() if _account_label_key(row.get("account_name", ""))}
+
+    rows = []
+    naver_conn = conn[conn["platform_norm"].isin(["naver", "naver_ads", "naver_search", "searchad", "search_ad", "gfa"])].copy()
+    for _, row in naver_conn.iterrows():
+        cid = _normalize_customer_id_value(_first_nonblank(row.get("customer_id"), row.get("account_id")))
+        if not cid or not str(cid).isdigit():
+            continue
+        label = _first_nonblank(row.get("account_label"), cid)
+        meta_row = meta_by_cid.get(cid) or meta_by_name.get(_account_label_key(label))
+        rows.append({
+            "customer_id": cid,
+            "account_name": label,
+            "manager": _first_nonblank(row.get("manager"), None if meta_row is None else meta_row.get("manager"), "미배정"),
+            "monthly_budget": 0 if meta_row is None else pd.to_numeric(meta_row.get("monthly_budget", 0), errors="coerce"),
+            "operating_weekdays": normalize_operating_weekdays(None if meta_row is None else meta_row.get("operating_weekdays", DEFAULT_OPERATING_WEEKDAYS)),
+            "platform": "네이버",
+        })
+
+    # Only accounts with no active platform connection keep the legacy Naver fallback.
+    if not meta.empty and conn_names:
+        fallback = meta[~meta["account_name"].map(_account_label_key).isin(conn_names)].copy()
+    else:
+        fallback = meta.copy()
+    if not fallback.empty:
+        fallback["platform"] = "네이버"
+        rows.extend(fallback[["customer_id", "account_name", "manager", "monthly_budget", "operating_weekdays", "platform"]].to_dict("records"))
+
+    if not rows:
+        return pd.DataFrame(columns=["customer_id", "account_name", "manager", "monthly_budget", "operating_weekdays", "platform"])
+    out = pd.DataFrame(rows)
+    out["customer_id"] = _normalize_customer_id_series(out["customer_id"])
+    out = out[(out["customer_id"].astype(str).str.strip() != "") & (out["account_name"].astype(str).str.strip() != "")].copy()
+    out["monthly_budget"] = pd.to_numeric(out["monthly_budget"], errors="coerce").fillna(0)
+    out["operating_weekdays"] = out["operating_weekdays"].apply(normalize_operating_weekdays)
+    return out.drop_duplicates(subset=["customer_id", "account_name"], keep="last").reset_index(drop=True)
+
+
 def _fill_numeric_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
     for col in columns:
         if col not in df.columns:
@@ -1137,14 +1241,16 @@ def _compute_total_ratio_metrics(row: dict) -> dict:
 
 @st.cache_data(ttl=300, max_entries=30, show_spinner=False)
 def query_budget_bundle(_engine, cids: tuple, yesterday: date, avg_d1: date, avg_d2: date, month_d1: date, month_d2: date, prev_month_d1: date, prev_month_d2: date, avg_days: int) -> pd.DataFrame:
-    meta = get_meta(_engine)
-    if meta.empty:
+    # Budget/Bizmoney is a Naver-only page.  Use settings > platform connections
+    # first so Meta/Google-linked accounts do not appear as Naver fallback rows.
+    df = _budget_naver_scope_df(_engine)
+    if df.empty:
         return pd.DataFrame()
 
     cids_tuple = _normalize_filter_values(cids)
     where_cid, cid_params = _build_in_filter("CAST(customer_id AS TEXT)", cids_tuple, "budget_cid")
 
-    df = meta.copy()
+    df = df.copy()
     df["customer_id"] = _normalize_customer_id_series(df["customer_id"])
     if cids_tuple:
         df = df[df["customer_id"].isin(cids_tuple)]
@@ -1519,27 +1625,56 @@ def query_shopping_search_terms(_engine, d1: date, d2: date, cids: tuple) -> pd.
     cids_tuple = _normalize_filter_values(cids)
     where_cid, cid_params = _build_in_filter("f.customer_id", cids_tuple, "shopping_terms_cid")
 
+    sq_cols = set(get_table_columns(_engine, "fact_shopping_query_daily"))
+
+    def _sum_metric(col: str, alias: str) -> str:
+        if col in sq_cols:
+            return f"SUM(COALESCE(f.{col}, 0)) as {alias}"
+        return f"0 as {alias}"
+
+    def _sum_expr(col: str) -> str:
+        return f"SUM(COALESCE(f.{col}, 0))" if col in sq_cols else "0"
+
+    split_select_sql = "BOOL_OR(COALESCE(f.split_available, FALSE)) as split_available" if "split_available" in sq_cols else "FALSE as split_available"
+
+    type_where_sql = ""
+    type_params = {}
+    if table_exists(_engine, "dim_campaign"):
+        dim_cols = get_table_columns(_engine, "dim_campaign")
+        cp_col = "campaign_tp" if "campaign_tp" in dim_cols else ("campaign_type_label" if "campaign_type_label" in dim_cols else "campaign_type")
+        if cp_col in dim_cols:
+            raw_type_where, type_params = _build_in_filter(f"c.{cp_col}", _CAMPAIGN_TYPE_ALIASES["쇼핑검색"], "shopping_terms_type")
+            if raw_type_where:
+                # fact_shopping_query_daily is already a shopping-source table.
+                # Keep rows even when dim_campaign is missing/stale, while still excluding
+                # non-shopping rows when the campaign type is available.
+                type_where_sql = raw_type_where.replace("AND ", f"AND (c.{cp_col} IS NULL OR ", 1) + ")"
+
     sql = f"""
         SELECT
             f.customer_id, c.campaign_name, a.adgroup_name, f.query_text,
-            SUM(f.total_conv) as total_conv,
-            SUM(f.total_sales) as total_sales,
-            SUM(f.purchase_conv) as purchase_conv,
-            SUM(f.purchase_sales) as purchase_sales,
-            SUM(f.cart_conv) as cart_conv,
-            SUM(f.cart_sales) as cart_sales,
-            SUM(f.wishlist_conv) as wishlist_conv,
-            SUM(f.wishlist_sales) as wishlist_sales
+            {_sum_metric("total_conv", "total_conv")},
+            {_sum_metric("total_sales", "total_sales")},
+            {_sum_metric("purchase_conv", "purchase_conv")},
+            {_sum_metric("purchase_sales", "purchase_sales")},
+            {_sum_metric("cart_conv", "cart_conv")},
+            {_sum_metric("cart_sales", "cart_sales")},
+            {_sum_metric("wishlist_conv", "wishlist_conv")},
+            {_sum_metric("wishlist_sales", "wishlist_sales")},
+            {split_select_sql}
         FROM fact_shopping_query_daily f
         LEFT JOIN dim_campaign c ON f.campaign_id = c.campaign_id AND f.customer_id = c.customer_id
         LEFT JOIN dim_adgroup a ON f.adgroup_id = a.adgroup_id AND f.customer_id = a.customer_id
-        WHERE f.dt BETWEEN :d1 AND :d2 {where_cid}
+        WHERE f.dt BETWEEN :d1 AND :d2 {where_cid} {type_where_sql}
         GROUP BY f.customer_id, c.campaign_name, a.adgroup_name, f.query_text
-        -- ✨ 성과가 있는 검색어 우선 정렬 및 로드 수 제한 최적화
-        HAVING SUM(f.total_sales) > 0 OR SUM(f.total_conv) > 0
-        ORDER BY SUM(f.purchase_sales) DESC, SUM(f.total_sales) DESC
+        -- 성과가 있는 검색어 우선 정렬 및 로드 수 제한 최적화
+        HAVING {_sum_expr("total_sales")} > 0
+            OR {_sum_expr("total_conv")} > 0
+            OR {_sum_expr("purchase_sales")} > 0
+            OR {_sum_expr("purchase_conv")} > 0
+        ORDER BY {_sum_expr("purchase_conv")} DESC, {_sum_expr("purchase_sales")} DESC, {_sum_expr("total_conv")} DESC
         LIMIT 5000
     """
-    df = sql_read(_engine, sql, {"d1": str(d1), "d2": str(d2), **cid_params})
+    df = sql_read(_engine, sql, {"d1": str(d1), "d2": str(d2), **cid_params, **type_params})
     return df
 

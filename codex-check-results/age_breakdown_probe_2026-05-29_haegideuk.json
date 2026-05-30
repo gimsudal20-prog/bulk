@@ -1,0 +1,221 @@
+{
+  "customer_id": "2535578",
+  "target_date": "2026-05-29",
+  "campaign_count": 61,
+  "shopping_campaign_count": 33,
+  "target_campaign": "cmp-a001-02-000000010655475",
+  "target_adgroup": "grp-a001-02-000000067488029",
+  "target_ad": "nad-a001-02-000000527385447",
+  "target_campaign_meta": [
+    {
+      "nccCampaignId": "cmp-a001-02-000000010655475",
+      "name": "DA_국 탕 찌개_PC",
+      "campaignTp": "SHOPPING",
+      "status": "ELIGIBLE"
+    }
+  ],
+  "responses": [
+    {
+      "name": "campaign_ids_age",
+      "status": 200,
+      "params": {
+        "ids": "cmp-a001-02-000000010655475",
+        "timeRange": "{\"since\":\"2026-05-29\",\"until\":\"2026-05-29\"}",
+        "breakdown": "ageRangeNm"
+      },
+      "top_level_type": "dict",
+      "top_level_keys": [
+        "data",
+        "compTm",
+        "cycleBaseTm"
+      ],
+      "raw_preview": "{\"data\": [{\"ccnt\": 5, \"convAmt\": 39300, \"id\": \"cmp-a001-02-000000010655475\", \"clkCnt\": 19, \"impCnt\": 5289, \"salesAmt\": 10041}], \"compTm\": \"202605301243\", \"cycleBaseTm\": \"202605301200\"}",
+      "flattened_rows": 1,
+      "flattened_sample": [
+        {
+          "ccnt": 5,
+          "convAmt": 39300,
+          "id": "cmp-a001-02-000000010655475",
+          "clkCnt": 19,
+          "impCnt": 5289,
+          "salesAmt": 10041
+        }
+      ]
+    },
+    {
+      "name": "campaign_id_age",
+      "status": 200,
+      "params": {
+        "id": "cmp-a001-02-000000010655475",
+        "timeRange": "{\"since\":\"2026-05-29\",\"until\":\"2026-05-29\"}",
+        "breakdown": "ageRangeNm"
+      },
+      "top_level_type": "dict",
+      "top_level_keys": [
+        "summary",
+        "data",
+        "compTm",
+        "cycleBaseTm"
+      ],
+      "raw_preview": "{\"summary\": {\"dateStart\": \"2026-05-29\", \"dateEnd\": \"2026-05-29\"}, \"data\": [{\"convAmt\": 39300, \"clkCnt\": 19, \"dateStart\": \"2026-05-29\", \"ccnt\": 5, \"dateEnd\": \"2026-05-29\", \"impCnt\": 5289, \"salesAmt\": 10041}], \"compTm\": \"202605301243\", \"cycleBaseTm\": \"202605301200\"}",
+      "flattened_rows": 0,
+      "flattened_sample": []
+    },
+    {
+      "name": "campaign_ids_age_allDays",
+      "status": 200,
+      "params": {
+        "ids": "cmp-a001-02-000000010655475",
+        "timeRange": "{\"since\":\"2026-05-29\",\"until\":\"2026-05-29\"}",
+        "timeIncrement": "allDays",
+        "breakdown": "ageRangeNm"
+      },
+      "top_level_type": "dict",
+      "top_level_keys": [
+        "data",
+        "compTm",
+        "cycleBaseTm"
+      ],
+      "raw_preview": "{\"data\": [{\"ccnt\": 5, \"convAmt\": 39300, \"id\": \"cmp-a001-02-000000010655475\", \"clkCnt\": 19, \"impCnt\": 5289, \"salesAmt\": 10041}], \"compTm\": \"202605301243\", \"cycleBaseTm\": \"202605301200\"}",
+      "flattened_rows": 1,
+      "flattened_sample": [
+        {
+          "ccnt": 5,
+          "convAmt": 39300,
+          "id": "cmp-a001-02-000000010655475",
+          "clkCnt": 19,
+          "impCnt": 5289,
+          "salesAmt": 10041
+        }
+      ]
+    },
+    {
+      "name": "campaign_ids_age_daily",
+      "status": 200,
+      "params": {
+        "ids": "cmp-a001-02-000000010655475",
+        "timeRange": "{\"since\":\"2026-05-29\",\"until\":\"2026-05-29\"}",
+        "timeIncrement": "daily",
+        "breakdown": "ageRangeNm"
+      },
+      "top_level_type": "dict",
+      "top_level_keys": [
+        "data",
+        "compTm",
+        "cycleBaseTm"
+      ],
+      "raw_preview": "{\"data\": [{\"ccnt\": 5, \"convAmt\": 39300, \"id\": \"cmp-a001-02-000000010655475\", \"clkCnt\": 19, \"impCnt\": 5289, \"salesAmt\": 10041}], \"compTm\": \"202605301243\", \"cycleBaseTm\": \"202605301200\"}",
+      "flattened_rows": 1,
+      "flattened_sample": [
+        {
+          "ccnt": 5,
+          "convAmt": 39300,
+          "id": "cmp-a001-02-000000010655475",
+          "clkCnt": 19,
+          "impCnt": 5289,
+          "salesAmt": 10041
+        }
+      ]
+    },
+    {
+      "name": "campaign_ids_gender",
+      "status": 200,
+      "params": {
+        "ids": "cmp-a001-02-000000010655475",
+        "timeRange": "{\"since\":\"2026-05-29\",\"until\":\"2026-05-29\"}",
+        "breakdown": "genderNm"
+      },
+      "top_level_type": "dict",
+      "top_level_keys": [
+        "data",
+        "compTm",
+        "cycleBaseTm"
+      ],
+      "raw_preview": "{\"data\": [{\"ccnt\": 5, \"convAmt\": 39300, \"id\": \"cmp-a001-02-000000010655475\", \"clkCnt\": 19, \"impCnt\": 5289, \"salesAmt\": 10041}], \"compTm\": \"202605301243\", \"cycleBaseTm\": \"202605301200\"}",
+      "flattened_rows": 1,
+      "flattened_sample": [
+        {
+          "ccnt": 5,
+          "convAmt": 39300,
+          "id": "cmp-a001-02-000000010655475",
+          "clkCnt": 19,
+          "impCnt": 5289,
+          "salesAmt": 10041
+        }
+      ]
+    },
+    {
+      "name": "adgroup_ids_age",
+      "status": 200,
+      "params": {
+        "ids": "grp-a001-02-000000067488029",
+        "timeRange": "{\"since\":\"2026-05-29\",\"until\":\"2026-05-29\"}",
+        "breakdown": "ageRangeNm"
+      },
+      "top_level_type": "dict",
+      "top_level_keys": [
+        "data",
+        "compTm",
+        "cycleBaseTm"
+      ],
+      "raw_preview": "{\"data\": [{\"ccnt\": 0, \"convAmt\": 0, \"id\": \"grp-a001-02-000000067488029\", \"clkCnt\": 0, \"impCnt\": 237, \"salesAmt\": 0}], \"compTm\": \"202605301243\", \"cycleBaseTm\": \"202605301200\"}",
+      "flattened_rows": 1,
+      "flattened_sample": [
+        {
+          "ccnt": 0,
+          "convAmt": 0,
+          "id": "grp-a001-02-000000067488029",
+          "clkCnt": 0,
+          "impCnt": 237,
+          "salesAmt": 0
+        }
+      ]
+    },
+    {
+      "name": "adgroup_id_age",
+      "status": 200,
+      "params": {
+        "id": "grp-a001-02-000000067488029",
+        "timeRange": "{\"since\":\"2026-05-29\",\"until\":\"2026-05-29\"}",
+        "breakdown": "ageRangeNm"
+      },
+      "top_level_type": "dict",
+      "top_level_keys": [
+        "summary",
+        "data",
+        "compTm",
+        "cycleBaseTm"
+      ],
+      "raw_preview": "{\"summary\": {\"dateStart\": \"2026-05-29\", \"dateEnd\": \"2026-05-29\"}, \"data\": [{\"convAmt\": 0, \"clkCnt\": 0, \"dateStart\": \"2026-05-29\", \"ccnt\": 0, \"dateEnd\": \"2026-05-29\", \"impCnt\": 237, \"salesAmt\": 0}], \"compTm\": \"202605301243\", \"cycleBaseTm\": \"202605301200\"}",
+      "flattened_rows": 0,
+      "flattened_sample": []
+    },
+    {
+      "name": "ad_ids_age",
+      "status": 200,
+      "params": {
+        "ids": "nad-a001-02-000000527385447",
+        "timeRange": "{\"since\":\"2026-05-29\",\"until\":\"2026-05-29\"}",
+        "breakdown": "ageRangeNm"
+      },
+      "top_level_type": "dict",
+      "top_level_keys": [
+        "data",
+        "compTm",
+        "cycleBaseTm"
+      ],
+      "raw_preview": "{\"data\": [{\"ccnt\": 0, \"convAmt\": 0, \"id\": \"nad-a001-02-000000527385447\", \"clkCnt\": 0, \"impCnt\": 9, \"salesAmt\": 0}], \"compTm\": \"202605301243\", \"cycleBaseTm\": \"202605301200\"}",
+      "flattened_rows": 1,
+      "flattened_sample": [
+        {
+          "ccnt": 0,
+          "convAmt": 0,
+          "id": "nad-a001-02-000000527385447",
+          "clkCnt": 0,
+          "impCnt": 9,
+          "salesAmt": 0
+        }
+      ]
+    }
+  ]
+}

@@ -15,7 +15,7 @@ from sqlalchemy.engine import Engine
 TARGETING_PARSER_VERSION = "targeting_v20260530_dense_breakdown1"
 
 FIELDS = ["impCnt", "clkCnt", "salesAmt", "ccnt", "convAmt"]
-AGE_BUCKETS = ["10대", "20대", "30대", "40대", "50대", "60대이상"]
+AGE_BUCKETS = ["18세 이하", "20대~30대", "30대~40대", "40대~50대", "50대~60대", "60세 이상", "알 수 없음", "해당 없음"]
 METRIC_ALIASES = {
     "imp": ["impCnt", "impressions", "impression", "imp", "노출수"],
     "clk": ["clkCnt", "clicks", "click", "clk", "클릭수"],
@@ -174,20 +174,33 @@ def normalize_hour_value(v: Any) -> int | None:
 def normalize_age_range(v: Any) -> str:
     raw = str(v or "").strip()
     if not raw or raw in {"-", "None", "nan", "NaN"}:
-        return "미분류"
+        return "알 수 없음"
     compact = raw.replace(" ", "")
     aliases = {
-        "10": "10대",
-        "20": "20대",
-        "30": "30대",
-        "40": "40대",
-        "50": "50대",
-        "60": "60대이상",
-        "60대": "60대이상",
-        "60세이상": "60대이상",
-        "60이상": "60대이상",
-        "OVER_60": "60대이상",
-        "UNKNOWN": "미분류",
+        "18세이하": "18세 이하",
+        "18이하": "18세 이하",
+        "20대~30대": "20대~30대",
+        "20대-30대": "20대~30대",
+        "20~30대": "20대~30대",
+        "30대~40대": "30대~40대",
+        "30대-40대": "30대~40대",
+        "30~40대": "30대~40대",
+        "40대~50대": "40대~50대",
+        "40대-50대": "40대~50대",
+        "40~50대": "40대~50대",
+        "50대~60대": "50대~60대",
+        "50대-60대": "50대~60대",
+        "50~60대": "50대~60대",
+        "60세이상": "60세 이상",
+        "60대이상": "60세 이상",
+        "60이상": "60세 이상",
+        "OVER_60": "60세 이상",
+        "UNKNOWN": "알 수 없음",
+        "알수없음": "알 수 없음",
+        "기타": "알 수 없음",
+        "N/A": "해당 없음",
+        "NA": "해당 없음",
+        "해당없음": "해당 없음",
     }
     return aliases.get(compact.upper(), aliases.get(compact, compact))
 
@@ -421,10 +434,13 @@ def _build_rows_from_breakdown(raw_rows: List[dict], customer_id: str, target_da
             continue
         bd_value = _extract_breakdown_value(row, breakdown)
         if not bd_value:
-            rejected["missing_breakdown"] += 1
-            if len(samples["missing_breakdown"]) < 3:
-                samples["missing_breakdown"].append({k: row.get(k) for k in list(row.keys())[:12]})
-            continue
+            if breakdown == "ageRangeNm":
+                bd_value = "알 수 없음"
+            else:
+                rejected["missing_breakdown"] += 1
+                if len(samples["missing_breakdown"]) < 3:
+                    samples["missing_breakdown"].append({k: row.get(k) for k in list(row.keys())[:12]})
+                continue
         if breakdown == "hh24":
             bucket_value = normalize_hour_value(bd_value)
             if bucket_value is None:

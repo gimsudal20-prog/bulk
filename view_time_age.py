@@ -267,7 +267,7 @@ def _render_static_bar_chart(df: pd.DataFrame, label_col: str, value_col: str, *
     work[value_col] = pd.to_numeric(work[value_col], errors="coerce").fillna(0)
     work[label_col] = work[label_col].astype(str)
     chart_data = work.rename(columns={value_col: value_label}).set_index(label_col)
-    st.bar_chart(chart_data, height=320, use_container_width=True)
+    st.bar_chart(chart_data, height=320)
 
 
 def _filter_campaign_and_group(

@@ -23,42 +23,17 @@
         }
       },
       "age_ids": 33,
-      "age_rows_saved": 198,
+      "age_rows_saved": 264,
       "age_raw_rows": 14,
       "age_meta": {
         "raw_rows": 14,
-        "parsed_rows": 0,
+        "parsed_rows": 14,
         "missing_id": 0,
-        "missing_breakdown": 14,
+        "missing_breakdown": 0,
         "bad_hour": 0,
         "zero_metric": 0,
         "samples": {
-          "missing_breakdown": [
-            {
-              "ccnt": 0,
-              "convAmt": 0,
-              "id": "cmp-a001-02-000000010429274",
-              "clkCnt": 1,
-              "impCnt": 427,
-              "salesAmt": 330
-            },
-            {
-              "ccnt": 5,
-              "convAmt": 39300,
-              "id": "cmp-a001-02-000000010655475",
-              "clkCnt": 19,
-              "impCnt": 5289,
-              "salesAmt": 10041
-            },
-            {
-              "ccnt": 2,
-              "convAmt": 39600,
-              "id": "cmp-a001-02-000000010655548",
-              "clkCnt": 7,
-              "impCnt": 1884,
-              "salesAmt": 3060
-            }
-          ],
+          "missing_breakdown": [],
           "bad_hour": [],
           "zero_metric": []
         }
@@ -71,8 +46,8 @@
         "hourly_expected_rows": 1512,
         "hourly_missing_count": 0,
         "hourly_missing_sample": [],
-        "age_rows": 198,
-        "age_expected_rows": 198,
+        "age_rows": 264,
+        "age_expected_rows": 264,
         "age_missing_count": 0,
         "age_missing_sample": [],
         "ok": true,

@@ -683,6 +683,8 @@ h1, h2, h3, h4, h5, h6 {
 [data-testid="stSidebar"] [data-testid="stMarkdownContainer"]:has(.sidebar-section-title),
 [data-testid="stSidebar"] [data-testid="stMarkdownContainer"]:has(.sidebar-section-label) {
   overflow: visible;
+  min-height: 34px !important;
+  margin-bottom: 3px !important;
 }
 
 .sidebar-brand-card {

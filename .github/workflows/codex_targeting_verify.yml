@@ -36,25 +36,88 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Verify targeting collection
+      - name: Probe age breakdown variants
         shell: bash
         run: |
-          set +e
-          mkdir -p codex-check-results
-          python collector_time_age.py \
-            --date 2026-05-29 \
-            --account_name "핵이득마켓" \
-            --workers 1 \
-            --sync_campaigns \
-            --verify \
-            --require_age \
-            --report_path codex-check-results/targeting_verify_2026-05-29_haegideuk.json
-          code=$?
           set -e
-          printf '{"exit_code":%s}\n' "$code" > codex-check-results/targeting_verify_2026-05-29_haegideuk_status.json
+          mkdir -p codex-check-results
+          python - <<'PY'
+          import json
+          from datetime import date
+          from pathlib import Path
+
+          import collector
+          from targeting_collector_helpers import _flatten_stat_rows
+
+          customer_id = "2535578"
+          target_date = date(2026, 5, 29)
+          d_str = target_date.strftime("%Y-%m-%d")
+          fields = json.dumps(["impCnt", "clkCnt", "salesAmt", "ccnt", "convAmt"], separators=(",", ":"))
+          time_range = json.dumps({"since": d_str, "until": d_str}, separators=(",", ":"))
+
+          campaigns = collector.list_campaigns(customer_id) or []
+          shopping = [
+              c for c in campaigns
+              if "shopping" in str(c.get("campaignTp") or "").lower()
+          ]
+          target_campaign = "cmp-a001-02-000000010655475"
+          if not any(str(c.get("nccCampaignId")) == target_campaign for c in shopping):
+              target_campaign = str((shopping[0] if shopping else campaigns[0]).get("nccCampaignId"))
+
+          adgroups = collector.list_adgroups(customer_id, target_campaign) or []
+          target_adgroup = str((adgroups[0] if adgroups else {}).get("nccAdgroupId") or "")
+          ads = collector.list_ads(customer_id, target_adgroup) if target_adgroup else []
+          target_ad = str((ads[0] if ads else {}).get("nccAdId") or "")
+
+          requests = [
+              ("campaign_ids_age", {"ids": target_campaign, "fields": fields, "timeRange": time_range, "breakdown": "ageRangeNm"}),
+              ("campaign_id_age", {"id": target_campaign, "fields": fields, "timeRange": time_range, "breakdown": "ageRangeNm"}),
+              ("campaign_ids_age_allDays", {"ids": target_campaign, "fields": fields, "timeRange": time_range, "timeIncrement": "allDays", "breakdown": "ageRangeNm"}),
+              ("campaign_ids_age_daily", {"ids": target_campaign, "fields": fields, "timeRange": time_range, "timeIncrement": "daily", "breakdown": "ageRangeNm"}),
+              ("campaign_ids_gender", {"ids": target_campaign, "fields": fields, "timeRange": time_range, "breakdown": "genderNm"}),
+          ]
+          if target_adgroup:
+              requests.append(("adgroup_ids_age", {"ids": target_adgroup, "fields": fields, "timeRange": time_range, "breakdown": "ageRangeNm"}))
+              requests.append(("adgroup_id_age", {"id": target_adgroup, "fields": fields, "timeRange": time_range, "breakdown": "ageRangeNm"}))
+          if target_ad:
+              requests.append(("ad_ids_age", {"ids": target_ad, "fields": fields, "timeRange": time_range, "breakdown": "ageRangeNm"}))
+
+          results = {
+              "customer_id": customer_id,
+              "target_date": str(target_date),
+              "campaign_count": len(campaigns),
+              "shopping_campaign_count": len(shopping),
+              "target_campaign": target_campaign,
+              "target_adgroup": target_adgroup,
+              "target_ad": target_ad,
+              "target_campaign_meta": [
+                  {k: c.get(k) for k in ["nccCampaignId", "name", "campaignTp", "status"]}
+                  for c in campaigns if str(c.get("nccCampaignId")) == target_campaign
+              ],
+              "responses": [],
+          }
+
+          for name, params in requests:
+              status, data = collector.request_json("GET", "/stats", customer_id, params=params, raise_error=False)
+              rows = _flatten_stat_rows(data)
+              results["responses"].append({
+                  "name": name,
+                  "status": status,
+                  "params": {k: v for k, v in params.items() if k != "fields"},
+                  "top_level_type": type(data).__name__,
+                  "top_level_keys": list(data.keys())[:20] if isinstance(data, dict) else [],
+                  "raw_preview": json.dumps(data, ensure_ascii=False)[:2000],
+                  "flattened_rows": len(rows),
+                  "flattened_sample": rows[:5],
+              })
+
+          Path("codex-check-results/age_breakdown_probe_2026-05-29_haegideuk.json").write_text(
+              json.dumps(results, ensure_ascii=False, indent=2),
+              encoding="utf-8",
+          )
+          PY
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add codex-check-results/targeting_verify_2026-05-29_haegideuk*.json
-          git commit -m "Add Codex targeting verification result" || true
+          git add codex-check-results/age_breakdown_probe_2026-05-29_haegideuk.json
+          git commit -m "Add Codex age breakdown probe result" || true
           git push || true
-          exit "$code"

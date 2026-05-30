@@ -1080,7 +1080,9 @@ def _budget_naver_scope_df(_engine) -> pd.DataFrame:
         if not cid or not str(cid).isdigit():
             continue
         label = _first_nonblank(row.get("account_label"), cid)
-        meta_row = meta_by_cid.get(cid) or meta_by_name.get(_account_label_key(label))
+        meta_row = meta_by_cid.get(cid)
+        if meta_row is None:
+            meta_row = meta_by_name.get(_account_label_key(label))
         rows.append({
             "customer_id": cid,
             "account_name": label,

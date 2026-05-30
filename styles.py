@@ -55,7 +55,7 @@ header[data-testid="stHeader"] { background-color: transparent !important; }
 [data-testid="stSidebarNav"] { display: none !important; }
 
 div.block-container {
-  padding-top: 1.15rem !important;
+  padding-top: 1.0rem !important;
   padding-bottom: 4rem !important;
   max-width: 1510px;
   padding-left: 1.5rem;
@@ -135,7 +135,7 @@ h1, h2, h3, h4, h5, h6 {
   border: 1px solid var(--nv-line);
   border-radius: var(--nv-radius-lg);
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
-  margin: 0 0 12px;
+  margin: 0 0 18px;
   overflow: hidden;
 }
 .nv-console-top {
@@ -143,14 +143,14 @@ h1, h2, h3, h4, h5, h6 {
   align-items: flex-start;
   justify-content: space-between;
   gap: 18px;
-  padding: 13px 16px 11px;
+  padding: 15px 18px 13px;
 }
 .nv-filter-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 8px 12px;
+  padding: 10px 14px;
   border-top: 1px solid var(--nv-line);
   background: var(--nv-surface);
 }
@@ -437,19 +437,22 @@ h1, h2, h3, h4, h5, h6 {
 .nv-kpi-strip {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 1px;
-  overflow: hidden;
-  border: 1px solid var(--nv-line);
-  border-radius: var(--nv-radius-lg);
-  background: var(--nv-line);
+  gap: 10px;
+  overflow: visible;
+  border: none;
+  border-radius: 0;
+  background: transparent;
   box-shadow: 0 14px 38px rgba(15, 23, 42, 0.06);
-  margin: 12px 0 16px;
+  margin: 16px 0 22px;
 }
 .nv-kpi-item {
   background: var(--nv-bg);
-  padding: 14px 14px;
+  padding: 16px 16px;
   min-width: 0;
   position: relative;
+  border: 1px solid var(--nv-line);
+  border-radius: var(--nv-radius-lg);
+  box-shadow: var(--nv-shadow-soft);
 }
 .nv-kpi-item::before {
   content: "";
@@ -497,14 +500,14 @@ h1, h2, h3, h4, h5, h6 {
 .nv-op-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  margin: 14px 0 16px;
+  gap: 16px;
+  margin: 18px 0 22px;
 }
 .nv-op-card {
   background: var(--nv-bg);
   border: 1px solid var(--nv-line);
   border-radius: var(--nv-radius-lg);
-  padding: 14px 14px 14px 15px;
+  padding: 16px 16px 16px 17px;
   box-shadow: var(--nv-shadow-soft);
   min-width: 0;
   position: relative;
@@ -556,8 +559,8 @@ h1, h2, h3, h4, h5, h6 {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 11px 13px;
-  margin: 12px 0;
+  padding: 13px 15px;
+  margin: 16px 0 18px;
   background: var(--nv-bg);
   border: 1px solid var(--nv-line);
   border-radius: var(--nv-radius-lg);
@@ -891,6 +894,23 @@ div[data-baseweb="select"] > div:focus-within {
 
 div[data-testid="stHorizontalBlock"] {
   gap: 1rem;
+}
+
+
+/* Dashboard alignment / breathing room */
+.nv-console-head + .element-container,
+.nv-console-head + div[data-testid="stVerticalBlock"] {
+  margin-top: 2px !important;
+}
+.nv-kpi-strip + .element-container,
+.nv-op-grid + .element-container {
+  margin-top: 8px !important;
+}
+[data-testid="stMain"] div[data-testid="stVerticalBlock"] > div:has(.nv-sec-title) {
+  margin-bottom: 6px !important;
+}
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"]:has(.sidebar-brand-card) {
+  display: none !important;
 }
 
 @media (max-width: 1100px) {

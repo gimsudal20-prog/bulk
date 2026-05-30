@@ -55,11 +55,6 @@ def _render_page_header(nav: str, latest: dict | None, f: dict | None = None) ->
             chips.append(("info", "전체 유형"))
         selected_count = len(f.get("selected_customer_ids", []) or [])
         chips.append(("success" if selected_count else "warning", f"조회 ID {selected_count:,}개"))
-    elif latest:
-        cd = latest.get("campaign")
-        chips.append(("primary", f"최근 수집 {str(cd)[:10] if cd else '대기 중'}"))
-    if BUILD_TAG:
-        chips.append(("", f"Build {BUILD_TAG}"))
 
     chip_html = "".join(
         f"<span class='nv-meta-chip {escape(tone)}'>{escape(label)}</span>"
@@ -70,7 +65,6 @@ def _render_page_header(nav: str, latest: dict | None, f: dict | None = None) ->
         <div class='nv-console-head'>
             <div class='nv-console-top'>
                 <div class='nv-page-head-left'>
-                    <div class='nv-page-eyebrow'>Ad Ops Console</div>
                     <div class='nv-h1'>{escape(nav)}</div>
                     <p class='nv-page-sub'>{escape(subtitle)}</p>
                 </div>

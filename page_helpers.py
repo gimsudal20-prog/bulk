@@ -251,30 +251,12 @@ def _scope_df(meta: pd.DataFrame, _engine=None) -> pd.DataFrame:
     base = base[["customer_id", "account_name", "manager", "platform"]].copy()
     linked = _platform_scope_rows(_engine)
 
-    # 설정 > 플랫폼 연동은 매체 구분의 기준으로 쓰되, 같은 광고주명에 메타/구글이
-    # 연동되어 있다는 이유만으로 dim_customer의 네이버 기본 행을 제거하지 않는다.
-    # 이전 패치에서는 account_name 기준으로 base를 제외해 비즈머니/예산용 네이버
-    # customer_id까지 사라지는 문제가 있었다. 대신 외부 매체 account_id와 실제로
-    # 같은 ID인 dim_customer 행만 네이버 fallback에서 제외한다.
-    external_ids = set()
-    try:
-        conn_df = get_platform_credentials(_engine) if _engine is not None else pd.DataFrame()
-        if conn_df is not None and not conn_df.empty:
-            work_conn = conn_df.copy()
-            if "is_active" in work_conn.columns:
-                work_conn = work_conn[work_conn["is_active"].fillna(False).astype(bool)].copy()
-            for _, conn_row in work_conn.iterrows():
-                platform = _normalize_media_label(conn_row.get("platform", ""))
-                if platform == "네이버":
-                    continue
-                external_id = _normalize_customer_id_value_for_page(conn_row.get("account_id", ""))
-                if external_id and external_id.isdigit():
-                    external_ids.add(external_id)
-    except Exception:
-        external_ids = set()
-    if external_ids and "customer_id" in base.columns:
-        base["customer_id"] = _normalize_customer_id_series_for_page(base["customer_id"])
-        base = base[~base["customer_id"].isin(external_ids)].copy()
+    # 설정 > 플랫폼 연동에 등록된 계정은 연동 테이블을 매체 구분의 source of truth로 사용한다.
+    # 기존 dim_customer fallback은 모든 계정을 네이버로 보게 만들어 메타/구글 전용 계정까지
+    # 예산/오버뷰에서 네이버로 살아나는 원인이었다.
+    linked_names = _active_platform_connection_labels(_engine)
+    if linked_names and "account_name" in base.columns:
+        base = base[~base["account_name"].astype(str).str.strip().isin(linked_names)].copy()
 
     combined = pd.concat([base, linked], ignore_index=True)
     if combined.empty:
@@ -506,13 +488,9 @@ def build_filters(meta: pd.DataFrame, type_opts: List[str], engine=None) -> Dict
         st.divider()
 
         st.markdown("<div class='sidebar-section-title compact'>담당자 및 계정</div>", unsafe_allow_html=True)
-        media_default = [x for x in (sv.get("media_sel", []) or []) if x in MEDIA_OPTIONS]
-        media_sel = ui_multiselect(st, "매체", MEDIA_OPTIONS, default=media_default, key="f_media_sel", placeholder="전체 매체")
         manager_sel = ui_multiselect(st, "담당자", managers, default=sv.get("manager", []), key="f_manager", placeholder="전체 담당자")
 
         scope_options = _scope_df(meta, engine)
-        if media_sel and "platform" in scope_options.columns:
-            scope_options = scope_options[scope_options["platform"].isin(media_sel)]
         if manager_sel and "manager" in scope_options.columns:
             scope_options = scope_options[scope_options["manager"].astype(str).str.strip().isin([str(x).strip() for x in manager_sel])]
         accounts_by_mgr = sorted([x for x in scope_options.get("account_name", pd.Series(dtype=str)).dropna().unique().tolist() if str(x).strip()])
@@ -521,6 +499,18 @@ def build_filters(meta: pd.DataFrame, type_opts: List[str], engine=None) -> Dict
 
         prev_acc = [a for a in (sv.get("account", []) or []) if a in accounts_by_mgr]
         account_sel = ui_multiselect(st, "광고주(계정)", accounts_by_mgr, default=prev_acc, key="f_account", placeholder="전체 계정")
+
+        media_default = [x for x in (sv.get("media_sel", []) or []) if x in MEDIA_OPTIONS]
+        media_options_scope = scope_options.copy()
+        if account_sel and "account_name" in media_options_scope.columns:
+            media_options_scope = media_options_scope[media_options_scope["account_name"].astype(str).str.strip().isin([str(x).strip() for x in account_sel])]
+        if "platform" in media_options_scope.columns and not media_options_scope.empty:
+            available_media = [m for m in MEDIA_OPTIONS if m in set(media_options_scope["platform"].dropna().astype(str).tolist())]
+            media_options = available_media or MEDIA_OPTIONS
+        else:
+            media_options = MEDIA_OPTIONS
+        media_default = [x for x in media_default if x in media_options]
+        media_sel = ui_multiselect(st, "매체", media_options, default=media_default, key="f_media_sel", placeholder="전체 매체")
 
         selected_scope = "전체 계정"
         if account_sel:

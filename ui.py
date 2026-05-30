@@ -130,26 +130,9 @@ def render_scope_bar(items: list[str], media_labels: list[str] | tuple[str, ...]
     )
 
 
-def render_hero(latest_dates: dict | None, build_tag: str, dashboard_title: str = "마케팅 통합 대시보드") -> None:
-    dt_str = "수집 대기 중"
-    if latest_dates:
-        cd = latest_dates.get("campaign")
-        dt_str = str(cd)[:10] if cd else "수집 대기 중"
-
-    safe_title = html.escape(dashboard_title)
-    safe_dt = html.escape(dt_str)
-    safe_tag = html.escape(str(build_tag or "local"))
-
-    st.sidebar.markdown(f"""
-    <div class='sidebar-brand-card'>
-        <div class='sidebar-brand-mark'>A</div>
-        <div class='sidebar-brand-copy'>
-            <div class='sidebar-info-label'>{safe_title}</div>
-            <div class='sidebar-info-value'>최근 수집 <span>{safe_dt}</span></div>
-            <div class='sidebar-build-tag'>Build {safe_tag}</div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+def render_hero(latest_dates: dict | None, build_tag: str, dashboard_title: str = "") -> None:
+    """Sidebar brand/status block intentionally hidden to keep navigation compact."""
+    return None
 
 
 def _delta_class_and_text(cur_val, base_val, improve_when_up: bool = True) -> tuple[str, str]:

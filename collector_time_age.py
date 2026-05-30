@@ -52,6 +52,7 @@ def resolve_accounts(engine: Engine, args: argparse.Namespace) -> List[Dict[str,
 
 def sync_campaigns(engine: Engine, customer_id: str) -> None:
     rows: List[Dict[str, str]] = []
+    adgroup_rows: List[Dict[str, str]] = []
     for camp in collector.list_campaigns(customer_id) or []:
         cid = str(camp.get("nccCampaignId") or "").strip()
         if not cid:
@@ -63,8 +64,21 @@ def sync_campaigns(engine: Engine, customer_id: str) -> None:
             "campaign_tp": str(camp.get("campaignTp", "")),
             "status": str(camp.get("status", "")),
         })
+        for adgroup in collector.list_adgroups(customer_id, cid) or []:
+            gid = str(adgroup.get("nccAdgroupId") or "").strip()
+            if not gid:
+                continue
+            adgroup_rows.append({
+                "customer_id": str(customer_id),
+                "adgroup_id": gid,
+                "campaign_id": cid,
+                "adgroup_name": str(adgroup.get("name", "")),
+                "status": str(adgroup.get("status", "")),
+            })
     if rows:
         collector.upsert_many(engine, "dim_campaign", rows, ["customer_id", "campaign_id"])
+    if adgroup_rows:
+        collector.upsert_many(engine, "dim_adgroup", adgroup_rows, ["customer_id", "adgroup_id"])
 
 
 def load_campaign_targets(engine: Engine, customer_id: str, shopping_only: bool) -> tuple[List[str], set[str], Dict[str, str]]:

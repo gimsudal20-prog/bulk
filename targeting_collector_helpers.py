@@ -434,13 +434,10 @@ def _build_rows_from_breakdown(raw_rows: List[dict], customer_id: str, target_da
             continue
         bd_value = _extract_breakdown_value(row, breakdown)
         if not bd_value:
-            if breakdown == "ageRangeNm":
-                bd_value = "알 수 없음"
-            else:
-                rejected["missing_breakdown"] += 1
-                if len(samples["missing_breakdown"]) < 3:
-                    samples["missing_breakdown"].append({k: row.get(k) for k in list(row.keys())[:12]})
-                continue
+            rejected["missing_breakdown"] += 1
+            if len(samples["missing_breakdown"]) < 3:
+                samples["missing_breakdown"].append({k: row.get(k) for k in list(row.keys())[:12]})
+            continue
         if breakdown == "hh24":
             bucket_value = normalize_hour_value(bd_value)
             if bucket_value is None:
@@ -501,6 +498,44 @@ def _build_rows_from_breakdown(raw_rows: List[dict], customer_id: str, target_da
     return rows, meta
 
 
+def _load_adgroup_campaign_map(engine: Engine, customer_id: str, campaign_ids: Iterable[str]) -> Dict[str, str]:
+    clean_ids = [str(x).strip() for x in campaign_ids if str(x or "").strip()]
+    if not clean_ids:
+        return {}
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                """
+                SELECT adgroup_id, campaign_id
+                FROM dim_adgroup
+                WHERE customer_id = :cid
+                  AND campaign_id = ANY(:campaign_ids)
+                  AND adgroup_id IS NOT NULL
+                """
+            ),
+            {"cid": str(customer_id), "campaign_ids": clean_ids},
+        ).mappings().all()
+    return {str(r["adgroup_id"]).strip(): str(r["campaign_id"]).strip() for r in rows if str(r["adgroup_id"] or "").strip()}
+
+
+def _remap_stat_row_ids(raw_rows: List[dict], id_map: Dict[str, str]) -> List[dict]:
+    if not id_map:
+        return raw_rows
+    out: List[dict] = []
+    for row in raw_rows or []:
+        if not isinstance(row, dict):
+            continue
+        source_id = _extract_id(row)
+        campaign_id = id_map.get(source_id)
+        if not campaign_id:
+            continue
+        remapped = dict(row)
+        remapped["source_id"] = source_id
+        remapped["id"] = campaign_id
+        out.append(remapped)
+    return out
+
+
 def collect_campaign_time_age_stats(
     engine: Engine,
     customer_id: str,
@@ -539,13 +574,20 @@ def collect_campaign_time_age_stats(
     shopping_set = {str(x).strip() for x in (shopping_campaign_ids or []) if str(x or "").strip()}
     age_ids = [x for x in all_campaign_ids if x in shopping_set]
 
+    age_adgroup_map = _load_adgroup_campaign_map(engine, customer_id, age_ids)
+    age_lookup_ids = sorted(age_adgroup_map) if age_adgroup_map else age_ids
+    reverse_type_map = {adgroup_id: type_map.get(campaign_id, "UNKNOWN") or "UNKNOWN" for adgroup_id, campaign_id in age_adgroup_map.items()}
+    age_type_map = reverse_type_map if age_adgroup_map else type_map
+
     age_buckets: Dict[str, List[str]] = {}
-    for cid in age_ids:
-        age_buckets.setdefault(type_map.get(cid, "UNKNOWN") or "UNKNOWN", []).append(cid)
+    for lookup_id in age_lookup_ids:
+        age_buckets.setdefault(age_type_map.get(lookup_id, "UNKNOWN") or "UNKNOWN", []).append(lookup_id)
 
     age_raw: List[dict] = []
     for _, ids in age_buckets.items():
         age_raw.extend(get_stats_breakdown_range_fn(customer_id, ids, target_date, "ageRangeNm", log_fn=log_fn))
+    if age_adgroup_map:
+        age_raw = _remap_stat_row_ids(age_raw, age_adgroup_map)
     age_rows, age_meta = _build_rows_from_breakdown(age_raw, customer_id, target_date, "ageRangeNm")
     age_rows = _densify_breakdown_rows(age_rows, customer_id, target_date, age_ids, "ageRangeNm")
     age_saved = _replace_campaign_age_rows(engine, customer_id, target_date, age_rows, scoped_ids=age_ids)

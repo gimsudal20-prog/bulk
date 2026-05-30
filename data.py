@@ -1065,7 +1065,19 @@ def _budget_naver_scope_df(_engine) -> pd.DataFrame:
         if col not in conn.columns:
             conn[col] = ""
     conn["platform_norm"] = conn["platform"].fillna("").astype(str).str.strip().str.lower()
-    conn_names = {_account_label_key(x) for x in conn["account_label"].dropna().tolist() if _account_label_key(x)}
+    conn["platform_label"] = conn["platform"].apply(_infer_platform_label_from_campaign_type)
+
+    # Meta/Google 연동이 있다는 이유만으로 같은 광고주명의 dim_customer 행을
+    # 제거하면 네이버 비즈머니용 customer_id까지 끊긴다. 외부 매체 account_id와
+    # 실제로 동일한 dim_customer 행만 네이버 fallback에서 제외한다.
+    external_ids = set()
+    for _, conn_row in conn.iterrows():
+        platform_label = str(conn_row.get("platform_label", "") or "").strip()
+        if platform_label == "네이버":
+            continue
+        external_id = _normalize_customer_id_value(conn_row.get("account_id", ""))
+        if external_id and str(external_id).isdigit():
+            external_ids.add(str(external_id))
 
     meta_by_cid = {}
     meta_by_name = {}
@@ -1092,11 +1104,13 @@ def _budget_naver_scope_df(_engine) -> pd.DataFrame:
             "platform": "네이버",
         })
 
-    # Only accounts with no active platform connection keep the legacy Naver fallback.
-    if not meta.empty and conn_names:
-        fallback = meta[~meta["account_name"].map(_account_label_key).isin(conn_names)].copy()
-    else:
-        fallback = meta.copy()
+    # dim_customer is still the source for legacy Naver budget/Bizmoney rows.
+    # Keep it even when the same account_name has Meta/Google credentials; only
+    # remove rows whose customer_id is exactly an external media account_id.
+    fallback = meta.copy()
+    if not fallback.empty and external_ids:
+        fallback["customer_id"] = _normalize_customer_id_series(fallback["customer_id"])
+        fallback = fallback[~fallback["customer_id"].astype(str).isin(external_ids)].copy()
     if not fallback.empty:
         fallback["platform"] = "네이버"
         rows.extend(fallback[["customer_id", "account_name", "manager", "monthly_budget", "operating_weekdays", "platform"]].to_dict("records"))

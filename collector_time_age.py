@@ -224,10 +224,12 @@ def process_account(engine: Engine, account: Dict[str, str], target_date, args: 
         if args.require_age:
             result["verification"]["hour_raw_rows_ok"] = int(result.get("hour_raw_rows", 0) or 0) > 0
             result["verification"]["age_raw_rows_ok"] = int(result.get("age_raw_rows", 0) or 0) > 0
+            result["verification"]["age_parsed_rows_ok"] = int(result.get("age_meta", {}).get("parsed_rows", 0) or 0) > 0
             result["verification"]["ok"] = bool(
                 result["verification"]["ok"]
                 and result["verification"]["hour_raw_rows_ok"]
                 and result["verification"]["age_raw_rows_ok"]
+                and result["verification"]["age_parsed_rows_ok"]
             )
     collector.log(
         f"✅ [ {account_name} ] 시간대/연령대 전용 수집 완료 | hour={result.get('hour_rows_saved', 0)} age={result.get('age_rows_saved', 0)}"

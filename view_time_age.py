@@ -238,6 +238,20 @@ def _format_display(df: pd.DataFrame, first_cols: List[str]) -> pd.DataFrame:
     return out[cols]
 
 
+def _column_config(df: pd.DataFrame) -> dict:
+    cfg = {}
+    for c in df.columns:
+        if c in ["노출", "클릭", "광고비", "전환매출"]:
+            cfg[c] = st.column_config.NumberColumn(c, format="%,.0f")
+        elif c in ["전환수"]:
+            cfg[c] = st.column_config.NumberColumn(c, format="%,.1f")
+        elif c in ["CTR(%)", "ROAS(%)"]:
+            cfg[c] = st.column_config.NumberColumn(c, format="%.1f%%")
+        elif c == "CPC":
+            cfg[c] = st.column_config.NumberColumn("CPC", format="%,.0f원")
+    return cfg
+
+
 def _format_table_cell(column: str, value) -> str:
     if pd.isna(value):
         return ""
@@ -279,36 +293,15 @@ def _limit_rows_for_static_table(df: pd.DataFrame, *, key: str) -> pd.DataFrame:
 
 
 def _render_table(df: pd.DataFrame, *, key_cols: Iterable[str] | None = None, table_key: str = "table") -> None:
-    """Render a static, non-scroll table so the dataframe does not zoom/scroll internally."""
+    """Render the table with Streamlit's native dataframe, restored from the original UI."""
     if df is None or df.empty:
         st.info("표시할 데이터가 없습니다.")
         return
-    view = _limit_rows_for_static_table(df.copy(), key=table_key)
-    key_cols = set(key_cols or [])
-    num_cols = {"노출", "클릭", "CTR(%)", "CPC", "광고비", "전환수", "전환매출", "ROAS(%)"}
-    header_html = "".join(f"<th>{escape(str(c))}</th>" for c in view.columns)
-    rows_html = []
-    for _, row in view.iterrows():
-        cells = []
-        for c in view.columns:
-            classes = []
-            if c in key_cols:
-                classes.append("key")
-            if c in num_cols:
-                classes.append("num")
-            class_attr = f" class='{' '.join(classes)}'" if classes else ""
-            cells.append(f"<td{class_attr}>{_format_table_cell(c, row.get(c))}</td>")
-        rows_html.append("<tr>" + "".join(cells) + "</tr>")
-    st.markdown(
-        f"""
-        <div class='ta-static-table-wrap'>
-            <table class='ta-static-table'>
-                <thead><tr>{header_html}</tr></thead>
-                <tbody>{''.join(rows_html)}</tbody>
-            </table>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    st.dataframe(
+        df.copy(),
+        width="stretch",
+        hide_index=True,
+        column_config=_column_config(df),
     )
 
 
@@ -603,8 +596,9 @@ def page_time_age(meta: pd.DataFrame, engine, f: Dict) -> None:
         .ta-section-title{font-size:15px;font-weight:850;color:#0F172A;letter-spacing:-.02em;}
         .ta-section-desc{font-size:12px;font-weight:650;color:#64748B;text-align:right;line-height:1.35;}
         [data-testid="stVegaLiteChart"], [data-testid="stDataFrame"]{transform:none!important;transition:none!important;}
+        [data-testid="stVegaLiteChart"]{overscroll-behavior:contain!important;touch-action:pan-y!important;}
         [data-testid="stVegaLiteChart"] canvas,
-        [data-testid="stVegaLiteChart"] svg{overscroll-behavior:contain;touch-action:pan-y;}
+        [data-testid="stVegaLiteChart"] svg{pointer-events:none!important;transform:none!important;transition:none!important;}
         [data-testid="stDataFrame"]{border-radius:14px!important;border:1px solid #E2E8F0!important;box-shadow:0 4px 14px rgba(15,23,42,.035)!important;}
         [data-testid="stDataFrame"] *{transform:none!important;}
         [data-baseweb="tab-list"]{margin-top:14px!important;}

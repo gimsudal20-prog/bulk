@@ -631,69 +631,174 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 /* =========================================
-   Sidebar & Navigation (Minimalist)
+   Sidebar & Navigation (Minimalist Radio)
    ========================================= */
 [data-testid="stSidebar"] {
-  background: #F5F5F7 !important; /* 부드러운 라이트 그레이 배경 */
-  border-right: 1px solid #E5E5EA !important;
+  background: #FFFFFF !important;
+  border-right: 1px solid var(--nv-line) !important;
 }
 [data-testid="stSidebar"] .block-container {
-  padding-top: 1.5rem !important;
-  padding-bottom: 1.5rem !important;
-  padding-left: 1rem !important;
-  padding-right: 1rem !important;
+  padding-top: 0.42rem !important;
+  padding-bottom: 0.55rem !important;
+  padding-left: 0.75rem !important;
+  padding-right: 0.75rem !important;
 }
 [data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
-  gap: 0.35rem !important;
+  gap: 0.25rem !important;
 }
 .nav-sidebar-title {
   font-size: 11px;
-  font-weight: 700;
-  color: #86868B;
-  margin: 0 0 12px 0;
-  padding: 0 8px;
+  font-weight: 750;
+  color: var(--nv-muted-light);
+  margin: 0;
+  padding: 9px 4px 8px;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0;
+  line-height: 1.15;
+  min-height: 30px;
+  box-sizing: border-box;
+}
+.sidebar-section-title {
+  color: var(--nv-text-soft);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.2;
+  margin: 0;
+  padding: 8px 0 11px;
+  box-sizing: border-box;
+}
+.sidebar-section-title.compact {
+  padding-top: 4px;
+}
+.sidebar-section-label {
+  color: var(--nv-muted);
+  font-size: 13px;
+  font-weight: 750;
+  line-height: 1.2;
+  margin: 0;
+  padding: 4px 0 10px;
+  box-sizing: border-box;
+}
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"]:has(.nav-sidebar-title),
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"]:has(.sidebar-section-title),
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"]:has(.sidebar-section-label) {
+  overflow: visible;
+  min-height: 34px !important;
+  margin-bottom: 3px !important;
+}
+
+.sidebar-brand-card {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  padding: 7px;
+  margin-bottom: 6px;
+  border: 1px solid var(--nv-line);
+  border-radius: var(--nv-radius-lg);
+  background: var(--nv-bg);
+  box-shadow: var(--nv-shadow-soft);
+}
+.sidebar-brand-mark {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: var(--nv-primary);
+  color: #fff;
+  font-size: 17px;
+  line-height: 1;
+  font-weight: 500;
+}
+.sidebar-brand-copy { min-width: 0; }
+.sidebar-build-tag {
+  margin-top: 4px;
+  color: var(--nv-muted-light);
+  font-size: 10px;
+  font-weight: 800;
 }
 
 [data-testid="stSidebar"] [data-testid="stButton"] {
-  margin-bottom: 2px !important;
+  margin-bottom: 3px !important;
 }
 [data-testid="stSidebar"] [data-testid="stButton"] button {
   justify-content: flex-start !important;
-  min-height: 38px !important;
-  padding: 0 12px !important;
-  border-radius: 8px !important;
-  font-size: 14px !important;
-  font-weight: 600 !important;
+  min-height: 35px !important;
+  padding: 0 10px !important;
+  border-radius: 10px !important;
+  font-size: 13px !important;
+  font-weight: 850 !important;
   letter-spacing: -0.01em !important;
   box-shadow: none !important;
-  border: none !important;
-  transition: background-color 0.2s ease, color 0.2s ease !important;
+  transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.15s ease, color 0.15s ease !important;
+}
+[data-testid="stSidebar"] [data-testid="stButton"] button:hover {
+  transform: translateY(-1px);
 }
 [data-testid="stSidebar"] [data-testid="stButton"] button span {
   display: inline-flex !important;
   align-items: center !important;
-  gap: 8px !important;
+  gap: 5px !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
 }
-
-/* Inactive State (비활성화 상태) */
 [data-testid="stSidebar"] [data-testid="baseButton-secondary"] {
-  color: #515154 !important;
-  background: transparent !important;
+  color: var(--nv-text-soft) !important;
+  background: var(--nv-bg) !important;
+  border: 1px solid var(--nv-line) !important;
 }
 [data-testid="stSidebar"] [data-testid="baseButton-secondary"]:hover {
-  color: #1D1D1F !important;
-  background: #E8E8ED !important;
+  color: var(--nv-text) !important;
+  background: var(--nv-surface-2) !important;
+  border-color: var(--nv-line-strong) !important;
+}
+[data-testid="stSidebar"] [data-testid="baseButton-primary"] {
+  background: linear-gradient(135deg, var(--nv-primary), var(--nv-primary-hover)) !important;
+  color: #fff !important;
+  border: 1px solid var(--nv-primary) !important;
+  box-shadow: 0 8px 18px rgba(7, 71, 217, 0.16) !important;
 }
 
-/* Active State (현재 선택된 페이지) */
-[data-testid="stSidebar"] [data-testid="baseButton-primary"] {
-  background: #0071E3 !important; /* 선명한 포인트 블루 */
-  color: #FFFFFF !important;
+[data-testid="stSidebar"] [role="radiogroup"] {
+  background: transparent;
+  padding: 0;
+  gap: 4px;
+  display: flex;
+  flex-direction: column;
 }
-[data-testid="stSidebar"] [data-testid="baseButton-primary"]:hover {
-  background: #0077ED !important;
+[data-testid="stSidebar"] [role="radiogroup"] label {
+  align-items: center !important;
+  min-height: 31px !important;
+  padding: 0 10px !important;
+  margin-bottom: 0 !important;
+  border-radius: 6px !important;
+  background: transparent !important;
+  border: 1px solid transparent !important;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+[data-testid="stSidebar"] [role="radiogroup"] label > div:first-child {
+  display: none !important;
+}
+[data-testid="stSidebar"] [role="radiogroup"] label:hover { 
+  background: var(--nv-surface-2) !important; 
+  border-color: var(--nv-line) !important;
+}
+[data-testid="stSidebar"] [role="radiogroup"] label p {
+  color: var(--nv-text-soft) !important;
+  font-weight: 800 !important;
+  font-size: 13.5px !important;
+  line-height: 1.2 !important;
+}
+[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {
+  background: var(--nv-primary) !important;
+  box-shadow: none !important;
+  border: 1px solid var(--nv-primary) !important;
+}
+[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) p {
+  color: #fff !important;
+  font-weight: 800 !important;
 }
 
 /* =========================================

@@ -498,6 +498,29 @@ def _build_rows_from_breakdown(raw_rows: List[dict], customer_id: str, target_da
     return rows, meta
 
 
+def _load_ad_campaign_map(engine: Engine, customer_id: str, campaign_ids: Iterable[str]) -> Dict[str, str]:
+    clean_ids = [str(x).strip() for x in campaign_ids if str(x or "").strip()]
+    if not clean_ids:
+        return {}
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                """
+                SELECT a.ad_id, g.campaign_id
+                FROM dim_ad a
+                JOIN dim_adgroup g
+                  ON a.customer_id = g.customer_id
+                 AND a.adgroup_id = g.adgroup_id
+                WHERE a.customer_id = :cid
+                  AND g.campaign_id = ANY(:campaign_ids)
+                  AND a.ad_id IS NOT NULL
+                """
+            ),
+            {"cid": str(customer_id), "campaign_ids": clean_ids},
+        ).mappings().all()
+    return {str(r["ad_id"]).strip(): str(r["campaign_id"]).strip() for r in rows if str(r["ad_id"] or "").strip()}
+
+
 def _load_adgroup_campaign_map(engine: Engine, customer_id: str, campaign_ids: Iterable[str]) -> Dict[str, str]:
     clean_ids = [str(x).strip() for x in campaign_ids if str(x or "").strip()]
     if not clean_ids:
@@ -574,10 +597,14 @@ def collect_campaign_time_age_stats(
     shopping_set = {str(x).strip() for x in (shopping_campaign_ids or []) if str(x or "").strip()}
     age_ids = [x for x in all_campaign_ids if x in shopping_set]
 
-    age_adgroup_map = _load_adgroup_campaign_map(engine, customer_id, age_ids)
-    age_lookup_ids = sorted(age_adgroup_map) if age_adgroup_map else age_ids
-    reverse_type_map = {adgroup_id: type_map.get(campaign_id, "UNKNOWN") or "UNKNOWN" for adgroup_id, campaign_id in age_adgroup_map.items()}
-    age_type_map = reverse_type_map if age_adgroup_map else type_map
+    age_entity_map = _load_ad_campaign_map(engine, customer_id, age_ids)
+    age_entity_source = "ad"
+    if not age_entity_map:
+        age_entity_map = _load_adgroup_campaign_map(engine, customer_id, age_ids)
+        age_entity_source = "adgroup"
+    age_lookup_ids = sorted(age_entity_map) if age_entity_map else age_ids
+    reverse_type_map = {entity_id: type_map.get(campaign_id, "UNKNOWN") or "UNKNOWN" for entity_id, campaign_id in age_entity_map.items()}
+    age_type_map = reverse_type_map if age_entity_map else type_map
 
     age_buckets: Dict[str, List[str]] = {}
     for lookup_id in age_lookup_ids:
@@ -586,8 +613,8 @@ def collect_campaign_time_age_stats(
     age_raw: List[dict] = []
     for _, ids in age_buckets.items():
         age_raw.extend(get_stats_breakdown_range_fn(customer_id, ids, target_date, "ageRangeNm", log_fn=log_fn))
-    if age_adgroup_map:
-        age_raw = _remap_stat_row_ids(age_raw, age_adgroup_map)
+    if age_entity_map:
+        age_raw = _remap_stat_row_ids(age_raw, age_entity_map)
     age_rows, age_meta = _build_rows_from_breakdown(age_raw, customer_id, target_date, "ageRangeNm")
     age_rows = _densify_breakdown_rows(age_rows, customer_id, target_date, age_ids, "ageRangeNm")
     age_saved = _replace_campaign_age_rows(engine, customer_id, target_date, age_rows, scoped_ids=age_ids)
@@ -598,6 +625,8 @@ def collect_campaign_time_age_stats(
         "hour_raw_rows": int(hour_meta.get("raw_rows", 0)),
         "hour_meta": hour_meta,
         "age_ids": len(age_ids),
+        "age_entity_source": age_entity_source if age_entity_map else "campaign",
+        "age_entity_ids": len(age_lookup_ids),
         "age_rows_saved": int(age_saved),
         "age_raw_rows": int(age_meta.get("raw_rows", 0)),
         "age_meta": age_meta,

@@ -161,7 +161,7 @@ def check_targeting_breakdown_contract(root: Path) -> list[str]:
         '연령대는 쇼핑 캠페인만 요청': 'age_ids = [x for x in all_campaign_ids if x in shopping_set]' in targeting_text,
         '시간대 24구간 zero-fill': 'for hour in range(24)' in targeting_text,
         '연령대 표준구간 zero-fill': 'AGE_BUCKETS = ["18세 이하", "20대~30대", "30대~40대", "40대~50대", "50대~60대", "60세 이상", "알 수 없음", "해당 없음"]' in targeting_text,
-        '연령대 광고그룹 조회 후 캠페인 합산': '_load_adgroup_campaign_map' in targeting_text and '_remap_stat_row_ids' in targeting_text,
+        '연령대 하위 엔티티 조회 후 캠페인 합산': '_load_ad_campaign_map' in targeting_text and '_load_adgroup_campaign_map' in targeting_text and '_remap_stat_row_ids' in targeting_text,
         '캠페인 타입 맵 DB 로드': 'SELECT campaign_id, COALESCE(campaign_tp' in collector_text,
         'live 캠페인 타입 맵 병합': 'live_campaign_type_map' in runner_text and 'campaign_type_map.update(live_campaign_type_map)' in runner_text,
     }

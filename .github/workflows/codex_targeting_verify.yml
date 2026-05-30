@@ -120,4 +120,5 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add codex-check-results/age_breakdown_probe_2026-05-29_haegideuk.json
           git commit -m "Add Codex age breakdown probe result" || true
-          git push || true
+          git pull --rebase origin main
+          git push

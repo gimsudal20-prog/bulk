@@ -12,9 +12,10 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 
-TARGETING_PARSER_VERSION = "targeting_v20260528_stats_breakdown1"
+TARGETING_PARSER_VERSION = "targeting_v20260530_dense_breakdown1"
 
 FIELDS = ["impCnt", "clkCnt", "salesAmt", "ccnt", "convAmt"]
+AGE_BUCKETS = ["10대", "20대", "30대", "40대", "50대", "60대이상"]
 METRIC_ALIASES = {
     "imp": ["impCnt", "impressions", "impression", "imp", "노출수"],
     "clk": ["clkCnt", "clicks", "click", "clk", "클릭수"],
@@ -166,7 +167,70 @@ def normalize_age_range(v: Any) -> str:
     raw = str(v or "").strip()
     if not raw or raw in {"-", "None", "nan", "NaN"}:
         return "미분류"
-    return raw.replace(" ", "")
+    compact = raw.replace(" ", "")
+    aliases = {
+        "10": "10대",
+        "20": "20대",
+        "30": "30대",
+        "40": "40대",
+        "50": "50대",
+        "60": "60대이상",
+        "60대": "60대이상",
+        "60세이상": "60대이상",
+        "60이상": "60대이상",
+        "OVER_60": "60대이상",
+        "UNKNOWN": "미분류",
+    }
+    return aliases.get(compact.upper(), aliases.get(compact, compact))
+
+
+def _empty_breakdown_row(customer_id: str, target_date: date, campaign_id: str, breakdown: str, bucket_value: Any) -> Dict[str, Any]:
+    row: Dict[str, Any] = {
+        "dt": target_date,
+        "customer_id": str(customer_id),
+        "campaign_id": str(campaign_id),
+        "imp": 0,
+        "clk": 0,
+        "cost": 0,
+        "conv": 0.0,
+        "sales": 0,
+        "roas": 0.0,
+        "parser_version": TARGETING_PARSER_VERSION,
+    }
+    if breakdown == "hh24":
+        row["hour_of_day"] = int(bucket_value)
+        row["data_source"] = "stats_breakdown_hh24_zero_fill"
+    else:
+        row["age_range"] = str(bucket_value)
+        row["data_source"] = "stats_breakdown_ageRangeNm_zero_fill"
+    return row
+
+
+def _densify_breakdown_rows(
+    rows: List[Dict[str, Any]],
+    customer_id: str,
+    target_date: date,
+    campaign_ids: Iterable[str],
+    breakdown: str,
+) -> List[Dict[str, Any]]:
+    clean_ids = [str(x).strip() for x in campaign_ids if str(x or "").strip()]
+    if not clean_ids:
+        return rows
+
+    dense = list(rows or [])
+    if breakdown == "hh24":
+        existing = {(str(r.get("campaign_id")), int(r.get("hour_of_day"))) for r in dense if r.get("hour_of_day") is not None}
+        for cid in clean_ids:
+            for hour in range(24):
+                if (cid, hour) not in existing:
+                    dense.append(_empty_breakdown_row(customer_id, target_date, cid, breakdown, hour))
+    else:
+        existing = {(str(r.get("campaign_id")), str(r.get("age_range"))) for r in dense if r.get("age_range") is not None}
+        for cid in clean_ids:
+            for age in AGE_BUCKETS:
+                if (cid, age) not in existing:
+                    dense.append(_empty_breakdown_row(customer_id, target_date, cid, breakdown, age))
+    return dense
 
 
 def ensure_targeting_tables(engine: Engine):
@@ -434,6 +498,7 @@ def collect_campaign_time_age_stats(
     for _, ids in buckets.items():
         hour_raw.extend(get_stats_breakdown_range_fn(customer_id, ids, target_date, "hh24", log_fn=log_fn))
     hour_rows, hour_meta = _build_rows_from_breakdown(hour_raw, customer_id, target_date, "hh24")
+    hour_rows = _densify_breakdown_rows(hour_rows, customer_id, target_date, hour_ids, "hh24")
     hour_saved = _replace_campaign_hourly_rows(engine, customer_id, target_date, hour_rows, scoped_ids=hour_ids)
 
     # ageRangeNm breakdown은 쇼핑 캠페인 보고서에서만 지원되므로 쇼핑 캠페인으로 제한합니다.
@@ -450,6 +515,7 @@ def collect_campaign_time_age_stats(
     for _, ids in age_buckets.items():
         age_raw.extend(get_stats_breakdown_range_fn(customer_id, ids, target_date, "ageRangeNm", log_fn=log_fn))
     age_rows, age_meta = _build_rows_from_breakdown(age_raw, customer_id, target_date, "ageRangeNm")
+    age_rows = _densify_breakdown_rows(age_rows, customer_id, target_date, age_ids, "ageRangeNm")
     age_saved = _replace_campaign_age_rows(engine, customer_id, target_date, age_rows, scoped_ids=age_ids)
 
     return {

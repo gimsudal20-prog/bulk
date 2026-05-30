@@ -353,6 +353,46 @@ def ensure_targeting_tables(engine: Engine):
             )
             """
         ))
+        conn.execute(text(
+            """
+            CREATE TABLE IF NOT EXISTS fact_adgroup_hourly_daily (
+                dt DATE,
+                customer_id TEXT,
+                campaign_id TEXT,
+                adgroup_id TEXT,
+                hour_of_day INTEGER,
+                imp BIGINT DEFAULT 0,
+                clk BIGINT DEFAULT 0,
+                cost BIGINT DEFAULT 0,
+                conv DOUBLE PRECISION DEFAULT 0,
+                sales BIGINT DEFAULT 0,
+                roas DOUBLE PRECISION DEFAULT 0,
+                data_source TEXT,
+                parser_version TEXT,
+                PRIMARY KEY(dt, customer_id, adgroup_id, hour_of_day)
+            )
+            """
+        ))
+        conn.execute(text(
+            """
+            CREATE TABLE IF NOT EXISTS fact_adgroup_age_daily (
+                dt DATE,
+                customer_id TEXT,
+                campaign_id TEXT,
+                adgroup_id TEXT,
+                age_range TEXT,
+                imp BIGINT DEFAULT 0,
+                clk BIGINT DEFAULT 0,
+                cost BIGINT DEFAULT 0,
+                conv DOUBLE PRECISION DEFAULT 0,
+                sales BIGINT DEFAULT 0,
+                roas DOUBLE PRECISION DEFAULT 0,
+                data_source TEXT,
+                parser_version TEXT,
+                PRIMARY KEY(dt, customer_id, adgroup_id, age_range)
+            )
+            """
+        ))
 
 
 def _replace_campaign_hourly_rows(engine: Engine, customer_id: str, target_date: date, rows: List[Dict[str, Any]], scoped_ids: List[str] | None = None) -> int:
@@ -420,6 +460,82 @@ def _replace_campaign_age_rows(engine: Engine, customer_id: str, target_date: da
                     ON CONFLICT (dt, customer_id, campaign_id, age_range) DO UPDATE SET
                         imp=EXCLUDED.imp, clk=EXCLUDED.clk, cost=EXCLUDED.cost, conv=EXCLUDED.conv,
                         sales=EXCLUDED.sales, roas=EXCLUDED.roas, data_source=EXCLUDED.data_source,
+                        parser_version=EXCLUDED.parser_version
+                """, values, page_size=1000)
+        raw.commit()
+    except Exception:
+        raw.rollback()
+        raise
+    finally:
+        raw.close()
+    return len(rows)
+
+
+def _replace_adgroup_hourly_rows(engine: Engine, customer_id: str, target_date: date, rows: List[Dict[str, Any]], scoped_ids: List[str] | None = None) -> int:
+    ensure_targeting_tables(engine)
+    target_ids = [str(x) for x in (scoped_ids or []) if str(x or "").strip()]
+    raw = engine.raw_connection()
+    try:
+        with raw.cursor() as cur:
+            if target_ids:
+                cur.execute(
+                    "DELETE FROM fact_adgroup_hourly_daily WHERE dt=%s AND customer_id=%s AND adgroup_id = ANY(%s)",
+                    (target_date, str(customer_id), target_ids),
+                )
+            else:
+                cur.execute("DELETE FROM fact_adgroup_hourly_daily WHERE dt=%s AND customer_id=%s", (target_date, str(customer_id)))
+            if rows:
+                values = [(
+                    r["dt"], r["customer_id"], r.get("campaign_id", ""), r["adgroup_id"], int(r["hour_of_day"]),
+                    int(r.get("imp", 0) or 0), int(r.get("clk", 0) or 0), int(r.get("cost", 0) or 0),
+                    float(r.get("conv", 0) or 0), int(r.get("sales", 0) or 0), float(r.get("roas", 0) or 0),
+                    str(r.get("data_source") or "stats_breakdown_hh24_adgroup"), str(r.get("parser_version") or TARGETING_PARSER_VERSION),
+                ) for r in rows]
+                psycopg2.extras.execute_values(cur, """
+                    INSERT INTO fact_adgroup_hourly_daily
+                    (dt, customer_id, campaign_id, adgroup_id, hour_of_day, imp, clk, cost, conv, sales, roas, data_source, parser_version)
+                    VALUES %s
+                    ON CONFLICT (dt, customer_id, adgroup_id, hour_of_day) DO UPDATE SET
+                        campaign_id=EXCLUDED.campaign_id, imp=EXCLUDED.imp, clk=EXCLUDED.clk, cost=EXCLUDED.cost,
+                        conv=EXCLUDED.conv, sales=EXCLUDED.sales, roas=EXCLUDED.roas, data_source=EXCLUDED.data_source,
+                        parser_version=EXCLUDED.parser_version
+                """, values, page_size=1000)
+        raw.commit()
+    except Exception:
+        raw.rollback()
+        raise
+    finally:
+        raw.close()
+    return len(rows)
+
+
+def _replace_adgroup_age_rows(engine: Engine, customer_id: str, target_date: date, rows: List[Dict[str, Any]], scoped_ids: List[str] | None = None) -> int:
+    ensure_targeting_tables(engine)
+    target_ids = [str(x) for x in (scoped_ids or []) if str(x or "").strip()]
+    raw = engine.raw_connection()
+    try:
+        with raw.cursor() as cur:
+            if target_ids:
+                cur.execute(
+                    "DELETE FROM fact_adgroup_age_daily WHERE dt=%s AND customer_id=%s AND adgroup_id = ANY(%s)",
+                    (target_date, str(customer_id), target_ids),
+                )
+            else:
+                cur.execute("DELETE FROM fact_adgroup_age_daily WHERE dt=%s AND customer_id=%s", (target_date, str(customer_id)))
+            if rows:
+                values = [(
+                    r["dt"], r["customer_id"], r.get("campaign_id", ""), r["adgroup_id"], str(r["age_range"]),
+                    int(r.get("imp", 0) or 0), int(r.get("clk", 0) or 0), int(r.get("cost", 0) or 0),
+                    float(r.get("conv", 0) or 0), int(r.get("sales", 0) or 0), float(r.get("roas", 0) or 0),
+                    str(r.get("data_source") or "stats_breakdown_ageRangeNm_adgroup"), str(r.get("parser_version") or TARGETING_PARSER_VERSION),
+                ) for r in rows]
+                psycopg2.extras.execute_values(cur, """
+                    INSERT INTO fact_adgroup_age_daily
+                    (dt, customer_id, campaign_id, adgroup_id, age_range, imp, clk, cost, conv, sales, roas, data_source, parser_version)
+                    VALUES %s
+                    ON CONFLICT (dt, customer_id, adgroup_id, age_range) DO UPDATE SET
+                        campaign_id=EXCLUDED.campaign_id, imp=EXCLUDED.imp, clk=EXCLUDED.clk, cost=EXCLUDED.cost,
+                        conv=EXCLUDED.conv, sales=EXCLUDED.sales, roas=EXCLUDED.roas, data_source=EXCLUDED.data_source,
                         parser_version=EXCLUDED.parser_version
                 """, values, page_size=1000)
         raw.commit()
@@ -600,6 +716,96 @@ def _load_adgroup_campaign_map(engine: Engine, customer_id: str, campaign_ids: I
     return {str(r["adgroup_id"]).strip(): str(r["campaign_id"]).strip() for r in rows if str(r["adgroup_id"] or "").strip()}
 
 
+def _build_adgroup_rows_from_breakdown(
+    raw_rows: List[dict],
+    customer_id: str,
+    target_date: date,
+    breakdown: str,
+    adgroup_campaign_map: Dict[str, str],
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Build rows keyed by adgroup_id while keeping campaign_id for UI joins."""
+    agg: Dict[Tuple[str, Any], Dict[str, Any]] = {}
+    rejected = {"missing_id": 0, "unknown_adgroup": 0, "missing_breakdown": 0, "bad_hour": 0, "zero_metric": 0}
+    samples = {"missing_breakdown": [], "bad_hour": [], "zero_metric": [], "unknown_adgroup": []}
+
+    for row in raw_rows or []:
+        aid = _extract_id(row)
+        if not aid:
+            rejected["missing_id"] += 1
+            continue
+        campaign_id = adgroup_campaign_map.get(str(aid).strip())
+        if not campaign_id:
+            rejected["unknown_adgroup"] += 1
+            if len(samples["unknown_adgroup"]) < 3:
+                samples["unknown_adgroup"].append({k: row.get(k) for k in list(row.keys())[:12]})
+            continue
+        bd_value = _extract_breakdown_value(row, breakdown)
+        if not bd_value:
+            rejected["missing_breakdown"] += 1
+            if len(samples["missing_breakdown"]) < 3:
+                samples["missing_breakdown"].append({k: row.get(k) for k in list(row.keys())[:12]})
+            continue
+        if breakdown == "hh24":
+            bucket_value = normalize_hour_value(bd_value)
+            if bucket_value is None:
+                rejected["bad_hour"] += 1
+                if len(samples["bad_hour"]) < 3:
+                    samples["bad_hour"].append({k: row.get(k) for k in list(row.keys())[:12]})
+                continue
+        else:
+            bucket_value = normalize_age_range(bd_value)
+
+        imp = int(_extract_metric(row, "imp") or 0)
+        clk = int(_extract_metric(row, "clk") or 0)
+        cost = int(_extract_metric(row, "cost") or 0)
+        conv = float(_extract_metric(row, "conv") or 0)
+        sales = int(_extract_metric(row, "sales") or 0)
+        if imp == 0 and clk == 0 and cost == 0 and conv == 0 and sales == 0:
+            rejected["zero_metric"] += 1
+            if len(samples["zero_metric"]) < 3:
+                samples["zero_metric"].append({k: row.get(k) for k in list(row.keys())[:12]})
+            continue
+
+        key = (str(aid).strip(), bucket_value)
+        b = agg.setdefault(key, {
+            "dt": target_date,
+            "customer_id": str(customer_id),
+            "campaign_id": str(campaign_id),
+            "adgroup_id": str(aid).strip(),
+            "imp": 0,
+            "clk": 0,
+            "cost": 0,
+            "conv": 0.0,
+            "sales": 0,
+            "roas": 0.0,
+            "parser_version": TARGETING_PARSER_VERSION,
+        })
+        b["imp"] += imp
+        b["clk"] += clk
+        b["cost"] += cost
+        b["conv"] += conv
+        b["sales"] += sales
+
+    rows = []
+    for (_aid, bucket_value), b in agg.items():
+        b["roas"] = (float(b["sales"]) / float(b["cost"]) * 100.0) if float(b["cost"] or 0) > 0 else 0.0
+        if breakdown == "hh24":
+            b["hour_of_day"] = int(bucket_value)
+            b["data_source"] = "stats_breakdown_hh24_adgroup"
+        else:
+            b["age_range"] = str(bucket_value)
+            b["data_source"] = "stats_breakdown_ageRangeNm_adgroup"
+        rows.append(b)
+
+    meta = {
+        "raw_rows": len(raw_rows or []),
+        "parsed_rows": len(rows),
+        **rejected,
+        "samples": samples,
+    }
+    return rows, meta
+
+
 def _remap_stat_row_ids(raw_rows: List[dict], id_map: Dict[str, str]) -> List[dict]:
     if not id_map:
         return raw_rows
@@ -667,16 +873,59 @@ def collect_campaign_time_age_stats(
     age_rows = _densify_breakdown_rows(age_rows, customer_id, target_date, age_ids, "ageRangeNm")
     age_saved = _replace_campaign_age_rows(engine, customer_id, target_date, age_rows, scoped_ids=age_ids)
 
+    # 그룹별 필터/표시를 위해 광고그룹 단위 breakdown도 함께 저장합니다.
+    # /stats가 계정/캠페인 유형에 따라 광고그룹 ids breakdown을 반환하지 않는 경우가 있어,
+    # 실패하더라도 캠페인 단위 수집은 유지하고 그룹 테이블만 빈 상태로 둡니다.
+    adgroup_campaign_map = _load_adgroup_campaign_map(engine, customer_id, hour_ids)
+    hour_adgroup_ids = list(adgroup_campaign_map.keys())
+    adgroup_hour_raw: List[dict] = []
+    adgroup_hour_meta: Dict[str, Any] = {"raw_rows": 0, "parsed_rows": 0, "skipped": "no_adgroups" if not hour_adgroup_ids else ""}
+    adgroup_hour_saved = 0
+    if hour_adgroup_ids:
+        adgroup_buckets: Dict[str, List[str]] = {}
+        for gid, cid in adgroup_campaign_map.items():
+            adgroup_buckets.setdefault(type_map.get(str(cid), "UNKNOWN") or "UNKNOWN", []).append(gid)
+        for _, ids in adgroup_buckets.items():
+            adgroup_hour_raw.extend(get_stats_breakdown_range_fn(customer_id, ids, target_date, "hh24", log_fn=log_fn))
+        adgroup_hour_rows, adgroup_hour_meta = _build_adgroup_rows_from_breakdown(
+            adgroup_hour_raw, customer_id, target_date, "hh24", adgroup_campaign_map
+        )
+        adgroup_hour_saved = _replace_adgroup_hourly_rows(engine, customer_id, target_date, adgroup_hour_rows, scoped_ids=hour_adgroup_ids)
+
+    age_adgroup_campaign_map = _load_adgroup_campaign_map(engine, customer_id, age_ids)
+    age_adgroup_ids = list(age_adgroup_campaign_map.keys())
+    adgroup_age_raw: List[dict] = []
+    adgroup_age_meta: Dict[str, Any] = {"raw_rows": 0, "parsed_rows": 0, "skipped": "no_adgroups" if not age_adgroup_ids else ""}
+    adgroup_age_saved = 0
+    if age_adgroup_ids:
+        age_adgroup_buckets: Dict[str, List[str]] = {}
+        for gid, cid in age_adgroup_campaign_map.items():
+            age_adgroup_buckets.setdefault(type_map.get(str(cid), "UNKNOWN") or "UNKNOWN", []).append(gid)
+        for _, ids in age_adgroup_buckets.items():
+            adgroup_age_raw.extend(get_stats_breakdown_range_fn(customer_id, ids, target_date, "ageRangeNm", log_fn=log_fn))
+        adgroup_age_rows, adgroup_age_meta = _build_adgroup_rows_from_breakdown(
+            adgroup_age_raw, customer_id, target_date, "ageRangeNm", age_adgroup_campaign_map
+        )
+        adgroup_age_saved = _replace_adgroup_age_rows(engine, customer_id, target_date, adgroup_age_rows, scoped_ids=age_adgroup_ids)
+
     return {
         "hour_ids": len(hour_ids),
         "hour_rows_saved": int(hour_saved),
         "hour_raw_rows": int(hour_meta.get("raw_rows", 0)),
         "hour_meta": hour_meta,
+        "hour_adgroup_ids": len(hour_adgroup_ids),
+        "hour_adgroup_rows_saved": int(adgroup_hour_saved),
+        "hour_adgroup_raw_rows": int(adgroup_hour_meta.get("raw_rows", 0)),
+        "hour_adgroup_meta": adgroup_hour_meta,
         "age_ids": len(age_ids),
         "age_entity_source": "campaign",
         "age_entity_ids": len(age_ids),
         "age_rows_saved": int(age_saved),
         "age_raw_rows": int(age_meta.get("raw_rows", 0)),
         "age_meta": age_meta,
+        "age_adgroup_ids": len(age_adgroup_ids),
+        "age_adgroup_rows_saved": int(adgroup_age_saved),
+        "age_adgroup_raw_rows": int(adgroup_age_meta.get("raw_rows", 0)),
+        "age_adgroup_meta": adgroup_age_meta,
         "parser_version": TARGETING_PARSER_VERSION,
     }

@@ -8,7 +8,6 @@ from typing import Dict, Iterable, List
 import numpy as np
 import pandas as pd
 import streamlit as st
-from sqlalchemy import text
 
 from data import get_table_columns, sql_read, table_exists
 
@@ -19,6 +18,23 @@ TYPE_LABEL_MAP = {
     "POWER_CONTENTS": "파워컨텐츠",
     "BRAND_SEARCH": "브랜드검색",
     "PLACE": "플레이스",
+}
+
+
+AGE_SORT_ORDER = {
+    "14세 이하": 0,
+    "15~19세": 1,
+    "20~24세": 2,
+    "25~29세": 3,
+    "30~34세": 4,
+    "35~39세": 5,
+    "40~44세": 6,
+    "45~49세": 7,
+    "50~54세": 8,
+    "55~59세": 9,
+    "60세 이상": 10,
+    "알 수 없음": 98,
+    "미분류": 99,
 }
 
 
@@ -101,16 +117,39 @@ def _metric_expr(prefix: str = "f") -> str:
     """
 
 
+def _metric_columns() -> list[str]:
+    return ["imp", "clk", "cost", "conv", "sales"]
+
+
 def _add_calc_cols(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame()
     out = df.copy()
-    for c in ["imp", "clk", "cost", "conv", "sales"]:
+    for c in _metric_columns():
         out[c] = pd.to_numeric(out.get(c, 0), errors="coerce").fillna(0)
     out["CTR(%)"] = np.where(out["imp"] > 0, out["clk"] / out["imp"] * 100.0, 0.0)
     out["CPC"] = np.where(out["clk"] > 0, out["cost"] / out["clk"], 0.0)
     out["ROAS(%)"] = np.where(out["cost"] > 0, out["sales"] / out["cost"] * 100.0, 0.0)
     return out
+
+
+def _aggregate_metrics(df: pd.DataFrame, by_cols: list[str]) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+    work = df.copy()
+    for c in _metric_columns():
+        work[c] = pd.to_numeric(work.get(c, 0), errors="coerce").fillna(0)
+    return work.groupby(by_cols, dropna=False, as_index=False)[_metric_columns()].sum()
+
+
+def _sort_options_by_cost(df: pd.DataFrame, col: str) -> list[str]:
+    if df is None or df.empty or col not in df.columns:
+        return []
+    work = df.copy()
+    work[col] = work[col].astype(str).replace({"": "미분류"}).fillna("미분류")
+    work["cost"] = pd.to_numeric(work.get("cost", 0), errors="coerce").fillna(0)
+    ranked = work.groupby(col, dropna=False)["cost"].sum().sort_values(ascending=False)
+    return [str(x) for x in ranked.index.tolist() if str(x).strip()]
 
 
 def _format_hour_range(value) -> str:
@@ -140,70 +179,6 @@ def _normalize_age_label(value) -> str:
 def _normalize_type_label(value) -> str:
     raw = str(value or "").strip()
     return TYPE_LABEL_MAP.get(raw, raw or "미분류")
-
-
-def _metric_columns() -> list[str]:
-    return ["imp", "clk", "cost", "conv", "sales"]
-
-
-def _aggregate_metrics(df: pd.DataFrame, by_cols: list[str]) -> pd.DataFrame:
-    if df is None or df.empty:
-        return pd.DataFrame()
-    work = df.copy()
-    for c in _metric_columns():
-        work[c] = pd.to_numeric(work.get(c, 0), errors="coerce").fillna(0)
-    return work.groupby(by_cols, dropna=False, as_index=False)[_metric_columns()].sum()
-
-
-def _sort_options_by_cost(df: pd.DataFrame, col: str) -> list[str]:
-    if df is None or df.empty or col not in df.columns:
-        return []
-    work = df.copy()
-    work[col] = work[col].astype(str).replace({"": "미분류"}).fillna("미분류")
-    work["cost"] = pd.to_numeric(work.get("cost", 0), errors="coerce").fillna(0)
-    ranked = work.groupby(col, dropna=False)["cost"].sum().sort_values(ascending=False)
-    return [str(x) for x in ranked.index.tolist() if str(x).strip()]
-
-
-def _campaign_filter(df: pd.DataFrame, *, key: str, label: str = "캠페인 필터") -> tuple[pd.DataFrame, list[str]]:
-    if df is None or df.empty or "campaign_name" not in df.columns:
-        return df if df is not None else pd.DataFrame(), []
-    options = _sort_options_by_cost(df, "campaign_name")
-    if not options:
-        return df, []
-    selected = st.multiselect(
-        label,
-        options,
-        default=[],
-        key=key,
-        help="미선택 시 전체 캠페인을 표시합니다.",
-        placeholder="캠페인 선택 또는 전체",
-    )
-    if not selected:
-        return df, []
-    return df[df["campaign_name"].astype(str).isin(selected)].copy(), selected
-
-
-def _adgroup_filter(df: pd.DataFrame, *, key: str, campaign_selected: list[str] | None = None) -> tuple[pd.DataFrame, list[str]]:
-    if df is None or df.empty or "adgroup_name" not in df.columns:
-        return df if df is not None else pd.DataFrame(), []
-    work = df.copy()
-    if campaign_selected and "campaign_name" in work.columns:
-        work = work[work["campaign_name"].astype(str).isin(campaign_selected)].copy()
-    options = _sort_options_by_cost(work, "adgroup_name")
-    if not options:
-        return work, []
-    selected = st.multiselect(
-        "그룹 필터",
-        options,
-        default=[],
-        key=key,
-        help="미선택 시 선택된 캠페인의 전체 그룹을 표시합니다.",
-        placeholder="그룹 선택 또는 전체",
-    )
-    if not selected:
-        return work, []
-    return work[work["adgroup_name"].astype(str).isin(selected)].copy(), selected
 
 
 def _render_section_title(title: str, desc: str = "") -> None:
@@ -252,48 +227,8 @@ def _column_config(df: pd.DataFrame) -> dict:
     return cfg
 
 
-def _format_table_cell(column: str, value) -> str:
-    if pd.isna(value):
-        return ""
-    if column in {"노출", "클릭", "광고비", "전환매출"}:
-        try:
-            suffix = "원" if column in {"광고비", "전환매출"} else ""
-            return f"{float(value):,.0f}{suffix}"
-        except Exception:
-            return escape(str(value))
-    if column in {"전환수"}:
-        try:
-            return f"{float(value):,.1f}"
-        except Exception:
-            return escape(str(value))
-    if column in {"CTR(%)", "ROAS(%)"}:
-        try:
-            return f"{float(value):,.1f}%"
-        except Exception:
-            return escape(str(value))
-    if column == "CPC":
-        try:
-            return f"{float(value):,.0f}원"
-        except Exception:
-            return escape(str(value))
-    return escape(str(value))
-
-
-def _limit_rows_for_static_table(df: pd.DataFrame, *, key: str) -> pd.DataFrame:
-    if df is None or df.empty or len(df) <= 30:
-        return df
-    options = ["30개", "50개", "100개", "전체"]
-    label = st.selectbox("표시 행 수", options, index=1 if len(df) > 50 else 0, key=f"{key}_limit")
-    if label == "전체":
-        st.caption(f"전체 {len(df):,}개 행을 표시합니다. 내부 표 스크롤 없이 페이지 스크롤로만 이동합니다.")
-        return df
-    limit = int(label.replace("개", ""))
-    st.caption(f"전체 {len(df):,}개 중 상위 {min(limit, len(df)):,}개 표시 · 내부 표 스크롤 없음")
-    return df.head(limit).copy()
-
-
-def _render_table(df: pd.DataFrame, *, key_cols: Iterable[str] | None = None, table_key: str = "table") -> None:
-    """Render the table with Streamlit's native dataframe, restored from the original UI."""
+def _render_table(df: pd.DataFrame) -> None:
+    """Use Streamlit's native dataframe so header click sorting stays available."""
     if df is None or df.empty:
         st.info("표시할 데이터가 없습니다.")
         return
@@ -328,6 +263,89 @@ def _kpi_row(summary: pd.DataFrame) -> None:
                 """,
                 unsafe_allow_html=True,
             )
+
+
+def _render_static_bar_chart(df: pd.DataFrame, label_col: str, value_col: str, *, value_label: str = "광고비") -> None:
+    """Render a non-interactive horizontal bar chart to avoid wheel/hover zoom side effects."""
+    if df is None or df.empty or label_col not in df.columns or value_col not in df.columns:
+        st.info("차트로 표시할 데이터가 없습니다.")
+        return
+    work = df[[label_col, value_col]].copy()
+    work[value_col] = pd.to_numeric(work[value_col], errors="coerce").fillna(0)
+    max_val = float(work[value_col].max() or 0)
+    rows_html = []
+    for _, row in work.iterrows():
+        label = escape(str(row.get(label_col, "")))
+        val = float(row.get(value_col, 0) or 0)
+        pct = 0 if max_val <= 0 else max(1.5, min(100, val / max_val * 100))
+        val_text = f"{val:,.0f}원" if value_label == "광고비" else f"{val:,.0f}"
+        rows_html.append(
+            f"""
+            <div class='ta-chart-row'>
+                <div class='ta-chart-label'>{label}</div>
+                <div class='ta-chart-track'><div class='ta-chart-bar' style='width:{pct:.2f}%'></div></div>
+                <div class='ta-chart-value'>{escape(val_text)}</div>
+            </div>
+            """
+        )
+    st.markdown(
+        f"<div class='ta-chart-card'>{''.join(rows_html)}</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _filter_campaign_and_group(
+    df: pd.DataFrame,
+    *,
+    campaign_key: str,
+    group_key: str,
+    desc: str = "",
+) -> tuple[pd.DataFrame, list[str], list[str]]:
+    if df is None or df.empty:
+        return pd.DataFrame(), [], []
+    work = df.copy()
+    selected_campaigns: list[str] = []
+    selected_groups: list[str] = []
+
+    _render_section_title("필터", desc or "캠페인/그룹을 선택하면 KPI, 차트, 표가 모두 같은 조건으로 변경됩니다.")
+    col_campaign, col_group = st.columns(2, gap="medium")
+    with col_campaign:
+        campaign_options = _sort_options_by_cost(work, "campaign_name") if "campaign_name" in work.columns else []
+        selected_campaigns = st.multiselect(
+            "캠페인",
+            campaign_options,
+            default=[],
+            key=campaign_key,
+            help="미선택 시 전체 캠페인을 표시합니다.",
+            placeholder="캠페인 선택 또는 전체",
+        ) if campaign_options else []
+    if selected_campaigns and "campaign_name" in work.columns:
+        work = work[work["campaign_name"].astype(str).isin(selected_campaigns)].copy()
+
+    with col_group:
+        if "adgroup_name" in work.columns:
+            group_options = _sort_options_by_cost(work, "adgroup_name")
+            selected_groups = st.multiselect(
+                "광고그룹",
+                group_options,
+                default=[],
+                key=group_key,
+                help="미선택 시 선택 캠페인의 전체 그룹을 표시합니다.",
+                placeholder="광고그룹 선택 또는 전체",
+            ) if group_options else []
+        else:
+            st.multiselect(
+                "광고그룹",
+                [],
+                default=[],
+                key=group_key,
+                disabled=True,
+                help="그룹별 시간·연령 수집 테이블이 있을 때 활성화됩니다.",
+                placeholder="그룹 데이터 없음",
+            )
+    if selected_groups and "adgroup_name" in work.columns:
+        work = work[work["adgroup_name"].astype(str).isin(selected_groups)].copy()
+    return work, selected_campaigns, selected_groups
 
 
 def _query_hourly(engine, d1, d2, cids: tuple, type_sel: tuple, by_campaign: bool = False) -> pd.DataFrame:
@@ -366,7 +384,7 @@ def _query_hourly(engine, d1, d2, cids: tuple, type_sel: tuple, by_campaign: boo
 
 
 def _query_adgroup_hourly(engine, d1, d2, cids: tuple, type_sel: tuple) -> pd.DataFrame:
-    """Optional adgroup-level hourly view if a future collector/table exists."""
+    """Adgroup-level hourly view if the group collector/table exists."""
     if not table_exists(engine, "fact_adgroup_hourly_daily"):
         return pd.DataFrame()
     where_cid = f"AND CAST(f.customer_id AS TEXT) IN ({_sql_in_str_list(cids)})" if cids else ""
@@ -431,7 +449,7 @@ def _query_age(engine, d1, d2, cids: tuple, type_sel: tuple, by_campaign: bool =
 
 
 def _query_adgroup_age(engine, d1, d2, cids: tuple, type_sel: tuple) -> pd.DataFrame:
-    """Optional adgroup-level age view if a future collector/table exists."""
+    """Adgroup-level age view if the group collector/table exists."""
     if not table_exists(engine, "fact_adgroup_age_daily"):
         return pd.DataFrame()
     where_cid = f"AND CAST(f.customer_id AS TEXT) IN ({_sql_in_str_list(cids)})" if cids else ""
@@ -461,127 +479,167 @@ def _query_adgroup_age(engine, d1, d2, cids: tuple, type_sel: tuple) -> pd.DataF
     return sql_read(engine, sql, {"d1": str(d1), "d2": str(d2)})
 
 
+def _prepare_hour_frame(df: pd.DataFrame) -> pd.DataFrame:
+    work = df.copy()
+    work["hour_of_day"] = pd.to_numeric(work["hour_of_day"], errors="coerce").fillna(0).astype(int)
+    work["시간대"] = work["hour_of_day"].map(_format_hour_range)
+    return work.sort_values("hour_of_day")
+
+
+def _prepare_age_frame(df: pd.DataFrame) -> pd.DataFrame:
+    work = df.copy()
+    work["age_range"] = work["age_range"].map(_normalize_age_label)
+    work["_age_sort"] = work["age_range"].map(lambda x: AGE_SORT_ORDER.get(str(x), 50))
+    return work.sort_values(["_age_sort", "age_range"]).drop(columns=["_age_sort"], errors="ignore")
+
+
 def _render_hour_tab(engine, f: Dict) -> None:
     cids = tuple(f.get("selected_customer_ids", []))
     type_sel = tuple(f.get("type_sel", []))
+
     by_camp_all = _query_hourly(engine, f["start"], f["end"], cids, type_sel, by_campaign=True)
-    if by_camp_all.empty:
+    by_group_all = _query_adgroup_hourly(engine, f["start"], f["end"], cids, type_sel)
+    if by_camp_all.empty and by_group_all.empty:
         st.info("시간대별 데이터가 아직 없습니다. 패치 적용 후 해당 날짜를 다시 수집하면 표시됩니다.")
         return
 
-    _render_section_title("캠페인 필터", "미선택 시 전체 캠페인 기준으로 요약/차트/표가 표시됩니다.")
-    by_camp_filtered, selected_campaigns = _campaign_filter(by_camp_all, key="ta_hour_campaign_filter")
-
-    hourly = _aggregate_metrics(by_camp_filtered, ["hour_of_day"])
-    if hourly.empty:
-        st.info("선택한 캠페인 조건에 해당하는 시간대별 데이터가 없습니다.")
+    filter_base = by_group_all if not by_group_all.empty else by_camp_all
+    filtered, selected_campaigns, selected_groups = _filter_campaign_and_group(
+        filter_base,
+        campaign_key="ta_hour_campaign_filter_v10",
+        group_key="ta_hour_adgroup_filter_v10",
+        desc="캠페인/광고그룹을 선택하면 시간대 요약, 캠페인별, 그룹별 표가 동일 조건으로 변경됩니다.",
+    )
+    if filtered.empty:
+        st.info("선택한 캠페인/그룹 조건에 해당하는 시간대별 데이터가 없습니다.")
         return
 
-    summary = hourly[["imp", "clk", "cost", "conv", "sales"]].sum().to_frame().T
+    hourly = _aggregate_metrics(filtered, ["hour_of_day"])
+    if hourly.empty:
+        st.info("선택 조건에 해당하는 시간대별 데이터가 없습니다.")
+        return
+
+    summary = hourly[_metric_columns()].sum().to_frame().T
     _kpi_row(summary)
 
-    chart = _add_calc_cols(hourly).copy()
-    chart["hour_of_day"] = pd.to_numeric(chart["hour_of_day"], errors="coerce").fillna(0).astype(int)
-    chart["시간대"] = chart["hour_of_day"].map(_format_hour_range)
-    chart = chart.sort_values("hour_of_day")
-    _render_section_title("시간대별 광고비", "선택한 캠페인 기준으로 차트와 표가 함께 바뀝니다.")
-    st.bar_chart(chart.set_index("시간대")[["cost"]], height=260)
+    chart = _prepare_hour_frame(_add_calc_cols(hourly))
+    _render_section_title("시간대별 광고비", "표는 기존 dataframe 방식이라 헤더 클릭 정렬이 가능합니다.")
+    _render_static_bar_chart(chart, "시간대", "cost")
 
     tab_summary, tab_campaign, tab_group = st.tabs(["시간대 요약", "캠페인별", "그룹별"])
     with tab_summary:
-        _render_section_title("시간대별 상세", "시간 표시는 00시~01시 형식으로 통일했습니다.")
-        disp = _format_display(chart.rename(columns={"hour_of_day": "시간"}), ["시간"])
-        disp["시간"] = chart["시간대"].values
-        _render_table(disp, key_cols=["시간"], table_key="hour_summary")
+        _render_section_title("시간대별 상세", "시간 표시는 00시~01시 형식입니다.")
+        disp = _format_display(chart.rename(columns={"시간대": "시간"}), ["시간"])
+        _render_table(disp)
 
     with tab_campaign:
-        work = by_camp_filtered.copy()
-        work["hour_of_day"] = pd.to_numeric(work["hour_of_day"], errors="coerce").fillna(0).astype(int)
-        work["campaign_type"] = work["campaign_type"].map(_normalize_type_label)
-        work = work.rename(columns={"hour_of_day": "시간", "campaign_name": "캠페인", "campaign_type": "유형"})
-        work["시간"] = work["시간"].map(_format_hour_range)
-        # 캠페인별 탭은 캠페인/시간 조합을 그대로 보여준다. 비용 큰 순서로 정렬.
-        work = work.sort_values("cost", ascending=False)
-        disp2 = _format_display(work, ["유형", "캠페인", "시간"])
-        _render_section_title("캠페인별 시간대 상세", "상단 캠페인 필터로 원하는 캠페인만 좁혀 볼 수 있습니다.")
-        _render_table(disp2, key_cols=["유형", "캠페인", "시간"], table_key="hour_campaign")
+        if not by_group_all.empty:
+            camp_src = _aggregate_metrics(filtered, ["campaign_type", "campaign_name", "hour_of_day"])
+        else:
+            camp_src = filtered.copy()
+        camp_src = _prepare_hour_frame(camp_src)
+        camp_src["campaign_type"] = camp_src["campaign_type"].map(_normalize_type_label)
+        camp_src = camp_src.rename(columns={"campaign_type": "유형", "campaign_name": "캠페인", "시간대": "시간"})
+        camp_src = camp_src.sort_values("cost", ascending=False)
+        disp2 = _format_display(camp_src, ["유형", "캠페인", "시간"])
+        desc = "상단 캠페인/그룹 필터가 적용된 캠페인별 시간대 데이터입니다."
+        if selected_campaigns:
+            desc = f"선택 캠페인 {len(selected_campaigns):,}개 기준입니다."
+        if selected_groups:
+            desc += f" 선택 그룹 {len(selected_groups):,}개만 반영했습니다."
+        _render_section_title("캠페인별 시간대 상세", desc)
+        _render_table(disp2)
 
     with tab_group:
-        by_group = _query_adgroup_hourly(engine, f["start"], f["end"], cids, type_sel)
-        if by_group.empty:
-            st.info("현재 시간·연령 수집 데이터는 캠페인 단위까지만 저장되어 있어 그룹별 필터/표시는 제공할 수 없습니다. 그룹별 시간·연령 테이블이 추가되면 이 탭에서 바로 필터링됩니다.")
+        if by_group_all.empty:
+            st.info("그룹별 시간대 데이터가 아직 없습니다. 이번 패치의 수집기 보강 후 시간·연령 수집을 다시 실행하면 그룹 필터/표가 활성화됩니다.")
         else:
-            by_group, selected_groups = _adgroup_filter(by_group, key="ta_hour_adgroup_filter", campaign_selected=selected_campaigns)
-            by_group["hour_of_day"] = pd.to_numeric(by_group["hour_of_day"], errors="coerce").fillna(0).astype(int)
-            by_group["campaign_type"] = by_group["campaign_type"].map(_normalize_type_label)
-            by_group = by_group.rename(columns={"hour_of_day": "시간", "campaign_name": "캠페인", "campaign_type": "유형", "adgroup_name": "광고그룹"})
-            by_group["시간"] = by_group["시간"].map(_format_hour_range)
-            by_group = by_group.sort_values("cost", ascending=False)
-            disp3 = _format_display(by_group, ["유형", "캠페인", "광고그룹", "시간"])
-            desc = "그룹 필터 미선택 시 선택 캠페인의 전체 그룹이 표시됩니다."
+            group_src = _aggregate_metrics(filtered, ["campaign_type", "campaign_name", "adgroup_name", "hour_of_day"])
+            group_src = _prepare_hour_frame(group_src)
+            group_src["campaign_type"] = group_src["campaign_type"].map(_normalize_type_label)
+            group_src = group_src.rename(columns={"campaign_type": "유형", "campaign_name": "캠페인", "adgroup_name": "광고그룹", "시간대": "시간"})
+            group_src = group_src.sort_values("cost", ascending=False)
+            disp3 = _format_display(group_src, ["유형", "캠페인", "광고그룹", "시간"])
+            desc = "상단 광고그룹 필터로 원하는 그룹만 좁혀 볼 수 있습니다."
             if selected_groups:
                 desc = f"선택 그룹 {len(selected_groups):,}개 기준입니다."
             _render_section_title("그룹별 시간대 상세", desc)
-            _render_table(disp3, key_cols=["유형", "캠페인", "광고그룹", "시간"], table_key="hour_group")
+            _render_table(disp3)
 
 
 def _render_age_tab(engine, f: Dict) -> None:
     cids = tuple(f.get("selected_customer_ids", []))
     type_sel = tuple(f.get("type_sel", []))
+
     by_camp_all = _query_age(engine, f["start"], f["end"], cids, type_sel, by_campaign=True)
-    if by_camp_all.empty:
+    by_group_all = _query_adgroup_age(engine, f["start"], f["end"], cids, type_sel)
+    if by_camp_all.empty and by_group_all.empty:
         st.info("연령대별 데이터가 아직 없습니다. 패치 적용 후 해당 날짜를 다시 수집하면 표시됩니다. 단, 계정/캠페인별 API 응답 가능 여부에 따라 빈 값일 수 있습니다.")
         return
 
-    _render_section_title("캠페인 필터", "미선택 시 전체 캠페인 기준으로 요약/차트/표가 표시됩니다.")
-    by_camp_filtered, selected_campaigns = _campaign_filter(by_camp_all, key="ta_age_campaign_filter")
-
-    age = _aggregate_metrics(by_camp_filtered, ["age_range"])
-    if age.empty:
-        st.info("선택한 캠페인 조건에 해당하는 연령대별 데이터가 없습니다.")
+    filter_base = by_group_all if not by_group_all.empty else by_camp_all
+    filtered, selected_campaigns, selected_groups = _filter_campaign_and_group(
+        filter_base,
+        campaign_key="ta_age_campaign_filter_v10",
+        group_key="ta_age_adgroup_filter_v10",
+        desc="캠페인/광고그룹을 선택하면 연령대 요약, 캠페인별, 그룹별 표가 동일 조건으로 변경됩니다.",
+    )
+    if filtered.empty:
+        st.info("선택한 캠페인/그룹 조건에 해당하는 연령대별 데이터가 없습니다.")
         return
 
-    summary = age[["imp", "clk", "cost", "conv", "sales"]].sum().to_frame().T
+    age = _aggregate_metrics(filtered, ["age_range"])
+    if age.empty:
+        st.info("선택 조건에 해당하는 연령대별 데이터가 없습니다.")
+        return
+
+    summary = age[_metric_columns()].sum().to_frame().T
     _kpi_row(summary)
 
-    chart = _add_calc_cols(age).copy()
+    chart = _prepare_age_frame(_add_calc_cols(age))
     chart = chart.rename(columns={"age_range": "연령대"})
-    chart["연령대"] = chart["연령대"].map(_normalize_age_label)
-    _render_section_title("연령대별 광고비", "선택한 캠페인 기준으로 연령대 분포를 표시합니다.")
-    st.bar_chart(chart.set_index("연령대")[["cost"]], height=260)
+    _render_section_title("연령대별 광고비", "표는 기존 dataframe 방식이라 헤더 클릭 정렬이 가능합니다.")
+    _render_static_bar_chart(chart, "연령대", "cost")
 
     tab_summary, tab_campaign, tab_group = st.tabs(["연령대 요약", "캠페인별", "그룹별"])
     with tab_summary:
         _render_section_title("연령대별 상세", "쇼핑 캠페인에서 제공되는 연령대 breakdown 기준입니다.")
         disp = _format_display(chart, ["연령대"])
-        _render_table(disp, key_cols=["연령대"], table_key="age_summary")
+        _render_table(disp)
 
     with tab_campaign:
-        work = by_camp_filtered.copy()
-        work["campaign_type"] = work["campaign_type"].map(_normalize_type_label)
-        work = work.rename(columns={"age_range": "연령대", "campaign_name": "캠페인", "campaign_type": "유형"})
-        work["연령대"] = work["연령대"].map(_normalize_age_label)
-        work = work.sort_values("cost", ascending=False)
-        disp2 = _format_display(work, ["유형", "캠페인", "연령대"])
-        _render_section_title("캠페인별 연령대 상세", "상단 캠페인 필터로 원하는 캠페인만 좁혀 볼 수 있습니다.")
-        _render_table(disp2, key_cols=["유형", "캠페인", "연령대"], table_key="age_campaign")
+        if not by_group_all.empty:
+            camp_src = _aggregate_metrics(filtered, ["campaign_type", "campaign_name", "age_range"])
+        else:
+            camp_src = filtered.copy()
+        camp_src = _prepare_age_frame(camp_src)
+        camp_src["campaign_type"] = camp_src["campaign_type"].map(_normalize_type_label)
+        camp_src = camp_src.rename(columns={"age_range": "연령대", "campaign_type": "유형", "campaign_name": "캠페인"})
+        camp_src = camp_src.sort_values("cost", ascending=False)
+        disp2 = _format_display(camp_src, ["유형", "캠페인", "연령대"])
+        desc = "상단 캠페인/그룹 필터가 적용된 캠페인별 연령대 데이터입니다."
+        if selected_campaigns:
+            desc = f"선택 캠페인 {len(selected_campaigns):,}개 기준입니다."
+        if selected_groups:
+            desc += f" 선택 그룹 {len(selected_groups):,}개만 반영했습니다."
+        _render_section_title("캠페인별 연령대 상세", desc)
+        _render_table(disp2)
 
     with tab_group:
-        by_group = _query_adgroup_age(engine, f["start"], f["end"], cids, type_sel)
-        if by_group.empty:
-            st.info("현재 시간·연령 수집 데이터는 캠페인 단위까지만 저장되어 있어 그룹별 필터/표시는 제공할 수 없습니다. 그룹별 시간·연령 테이블이 추가되면 이 탭에서 바로 필터링됩니다.")
+        if by_group_all.empty:
+            st.info("그룹별 연령대 데이터가 아직 없습니다. 이번 패치의 수집기 보강 후 시간·연령 수집을 다시 실행하면 그룹 필터/표가 활성화됩니다.")
         else:
-            by_group, selected_groups = _adgroup_filter(by_group, key="ta_age_adgroup_filter", campaign_selected=selected_campaigns)
-            by_group["campaign_type"] = by_group["campaign_type"].map(_normalize_type_label)
-            by_group = by_group.rename(columns={"age_range": "연령대", "campaign_name": "캠페인", "campaign_type": "유형", "adgroup_name": "광고그룹"})
-            by_group["연령대"] = by_group["연령대"].map(_normalize_age_label)
-            by_group = by_group.sort_values("cost", ascending=False)
-            disp3 = _format_display(by_group, ["유형", "캠페인", "광고그룹", "연령대"])
-            desc = "그룹 필터 미선택 시 선택 캠페인의 전체 그룹이 표시됩니다."
+            group_src = _aggregate_metrics(filtered, ["campaign_type", "campaign_name", "adgroup_name", "age_range"])
+            group_src = _prepare_age_frame(group_src)
+            group_src["campaign_type"] = group_src["campaign_type"].map(_normalize_type_label)
+            group_src = group_src.rename(columns={"age_range": "연령대", "campaign_type": "유형", "campaign_name": "캠페인", "adgroup_name": "광고그룹"})
+            group_src = group_src.sort_values("cost", ascending=False)
+            disp3 = _format_display(group_src, ["유형", "캠페인", "광고그룹", "연령대"])
+            desc = "상단 광고그룹 필터로 원하는 그룹만 좁혀 볼 수 있습니다."
             if selected_groups:
                 desc = f"선택 그룹 {len(selected_groups):,}개 기준입니다."
             _render_section_title("그룹별 연령대 상세", desc)
-            _render_table(disp3, key_cols=["유형", "캠페인", "광고그룹", "연령대"], table_key="age_group")
+            _render_table(disp3)
 
 
 def page_time_age(meta: pd.DataFrame, engine, f: Dict) -> None:
@@ -595,21 +653,13 @@ def page_time_age(meta: pd.DataFrame, engine, f: Dict) -> None:
         .ta-section-head{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin:22px 0 10px;padding:0 2px;}
         .ta-section-title{font-size:15px;font-weight:850;color:#0F172A;letter-spacing:-.02em;}
         .ta-section-desc{font-size:12px;font-weight:650;color:#64748B;text-align:right;line-height:1.35;}
-        [data-testid="stVegaLiteChart"], [data-testid="stDataFrame"]{transform:none!important;transition:none!important;}
-        [data-testid="stVegaLiteChart"]{overscroll-behavior:contain!important;touch-action:pan-y!important;}
-        [data-testid="stVegaLiteChart"] canvas,
-        [data-testid="stVegaLiteChart"] svg{pointer-events:none!important;transform:none!important;transition:none!important;}
-        [data-testid="stDataFrame"]{border-radius:14px!important;border:1px solid #E2E8F0!important;box-shadow:0 4px 14px rgba(15,23,42,.035)!important;}
-        [data-testid="stDataFrame"] *{transform:none!important;}
+        .ta-chart-card{border:1px solid #E2E8F0;border-radius:16px;background:#fff;box-shadow:0 6px 18px rgba(15,23,42,.035);padding:14px 16px;margin:8px 0 16px;user-select:none;}
+        .ta-chart-row{display:grid;grid-template-columns:minmax(84px,140px) 1fr minmax(84px,104px);gap:10px;align-items:center;margin:8px 0;}
+        .ta-chart-label{font-size:12px;font-weight:750;color:#334155;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+        .ta-chart-track{height:12px;border-radius:999px;background:#F1F5F9;overflow:hidden;}
+        .ta-chart-bar{height:100%;border-radius:999px;background:#CBD5E1;}
+        .ta-chart-value{font-size:12px;font-weight:750;color:#475569;text-align:right;font-variant-numeric:tabular-nums;}
         [data-baseweb="tab-list"]{margin-top:14px!important;}
-        .ta-static-table-wrap{width:100%;border:1px solid #E2E8F0;border-radius:16px;background:#fff;box-shadow:0 6px 18px rgba(15,23,42,.035);margin:8px 0 18px;overflow:visible!important;}
-        .ta-static-table{width:100%;border-collapse:separate;border-spacing:0;table-layout:auto;font-size:13px;color:#0F172A;}
-        .ta-static-table th{background:#F8FAFC;color:#475569;font-size:12px;font-weight:850;text-align:left;padding:11px 12px;border-bottom:1px solid #E2E8F0;white-space:nowrap;}
-        .ta-static-table td{padding:10px 12px;border-bottom:1px solid #EEF2F7;vertical-align:middle;line-height:1.35;word-break:keep-all;overflow-wrap:anywhere;}
-        .ta-static-table tbody tr:last-child td{border-bottom:0;}
-        .ta-static-table tbody tr:nth-child(even) td{background:#FCFCFD;}
-        .ta-static-table td.key{font-weight:750;color:#0F172A;background:#F8FAFC;}
-        .ta-static-table td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;font-weight:650;}
         div[data-baseweb="select"]{transform:none!important;transition:none!important;}
         </style>
         """,

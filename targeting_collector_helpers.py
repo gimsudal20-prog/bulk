@@ -100,6 +100,14 @@ def _extract_breakdown_value(row: dict, breakdown_key: str) -> str:
     if val not in (None, ""):
         return str(val).strip()
 
+    name_val = _get_case_insensitive(row, ["name"])
+    if name_val not in (None, ""):
+        name_text = str(name_val).strip()
+        if breakdown_key == "hh24" and "시" in name_text:
+            return name_text
+        if breakdown_key == "ageRangeNm" and ("대" in name_text or "세" in name_text or "이상" in name_text):
+            return name_text
+
     bd = row.get("breakdown") or row.get("breakdowns") if isinstance(row, dict) else None
     if isinstance(bd, dict):
         val = _get_case_insensitive(bd, aliases)

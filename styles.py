@@ -384,7 +384,7 @@ h1, h2, h3, h4, h5, h6 {
 }
 .nv-kpi-item-value {
   color: var(--nv-text);
-  font-size: 22px;
+  font-size: 19px;
   font-weight: 850;
   line-height: 1.12;
   white-space: nowrap;
@@ -449,7 +449,7 @@ h1, h2, h3, h4, h5, h6 {
   margin-bottom: 8px;
 }
 .nv-op-card-value {
-  font-size: 22px;
+  font-size: 19px;
   line-height: 1.15;
   font-weight: 850;
   color: var(--nv-text);
@@ -516,7 +516,7 @@ h1, h2, h3, h4, h5, h6 {
    Streamlit Native Overrides
    ========================================= */
 [data-baseweb="tab-list"] {
-  gap: 24px;
+  gap: 20px;
   padding-bottom: 0px;
   border-bottom: 1px solid var(--nv-line);
 }
@@ -524,10 +524,10 @@ h1, h2, h3, h4, h5, h6 {
   background: transparent !important;
   border: none !important;
   font-weight: 600;
-  padding: 16px 4px !important;
+  padding: 10px 4px !important;
   margin: 0 !important;
   color: var(--nv-muted-light) !important;
-  font-size: 15px;
+  font-size: 14px;
   border-radius: 0 !important;
   transition: color 0.2s ease;
 }
@@ -548,15 +548,19 @@ h1, h2, h3, h4, h5, h6 {
   border-right: 1px solid var(--nv-line) !important;
 }
 [data-testid="stSidebar"] .block-container {
-  padding-top: 1.05rem !important;
-  padding-left: 0.85rem !important;
-  padding-right: 0.85rem !important;
+  padding-top: 0.65rem !important;
+  padding-bottom: 0.75rem !important;
+  padding-left: 0.75rem !important;
+  padding-right: 0.75rem !important;
+}
+[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+  gap: 0.25rem !important;
 }
 .nav-sidebar-title {
-  font-size: 12px;
-  font-weight: 700;
+  font-size: 11px;
+  font-weight: 750;
   color: var(--nv-muted-light);
-  margin: 12px 0 10px;
+  margin: 6px 0 6px;
   text-transform: uppercase;
   letter-spacing: 0;
   padding-left: 4px;
@@ -564,26 +568,26 @@ h1, h2, h3, h4, h5, h6 {
 
 .sidebar-brand-card {
   display: grid;
-  grid-template-columns: 42px minmax(0, 1fr);
-  gap: 11px;
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: 9px;
   align-items: center;
-  padding: 11px;
-  margin-bottom: 12px;
+  padding: 8px;
+  margin-bottom: 8px;
   border: 1px solid var(--nv-line);
   border-radius: var(--nv-radius-lg);
   background: var(--nv-bg);
   box-shadow: var(--nv-shadow-soft);
 }
 .sidebar-brand-mark {
-  width: 42px;
-  height: 42px;
+  width: 36px;
+  height: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
   border-radius: 6px;
   background: var(--nv-primary);
   color: #fff;
-  font-size: 22px;
+  font-size: 19px;
   line-height: 1;
   font-weight: 500;
 }
@@ -596,14 +600,14 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 [data-testid="stSidebar"] [data-testid="stButton"] {
-  margin-bottom: 7px !important;
+  margin-bottom: 3px !important;
 }
 [data-testid="stSidebar"] [data-testid="stButton"] button {
   justify-content: flex-start !important;
-  min-height: 46px !important;
-  padding: 0 14px !important;
-  border-radius: 12px !important;
-  font-size: 14px !important;
+  min-height: 38px !important;
+  padding: 0 11px !important;
+  border-radius: 10px !important;
+  font-size: 13.5px !important;
   font-weight: 850 !important;
   letter-spacing: -0.01em !important;
   box-shadow: none !important;
@@ -615,7 +619,7 @@ h1, h2, h3, h4, h5, h6 {
 [data-testid="stSidebar"] [data-testid="stButton"] button span {
   display: inline-flex !important;
   align-items: center !important;
-  gap: 9px !important;
+  gap: 7px !important;
 }
 [data-testid="stSidebar"] [data-testid="baseButton-secondary"] {
   color: var(--nv-text-soft) !important;
@@ -637,14 +641,14 @@ h1, h2, h3, h4, h5, h6 {
 [data-testid="stSidebar"] [role="radiogroup"] {
   background: transparent;
   padding: 0;
-  gap: 7px;
+  gap: 4px;
   display: flex;
   flex-direction: column;
 }
 [data-testid="stSidebar"] [role="radiogroup"] label {
   align-items: center !important;
-  min-height: 38px !important;
-  padding: 0 14px !important;
+  min-height: 34px !important;
+  padding: 0 11px !important;
   margin-bottom: 0 !important;
   border-radius: 6px !important;
   background: transparent !important;
@@ -661,7 +665,7 @@ h1, h2, h3, h4, h5, h6 {
 [data-testid="stSidebar"] [role="radiogroup"] label p {
   color: var(--nv-text-soft) !important;
   font-weight: 800 !important;
-  font-size: 14px !important;
+  font-size: 13.5px !important;
   line-height: 1.2 !important;
 }
 [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {

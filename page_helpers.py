@@ -434,7 +434,7 @@ def build_filters(meta: pd.DataFrame, type_opts: List[str], engine=None) -> Dict
     with st.sidebar:
         st.markdown("<div class='nav-sidebar-title'>Global Filters</div>", unsafe_allow_html=True)
 
-        st.markdown("<div style='font-size:13px; font-weight:600; color:var(--nv-muted); margin-bottom:8px;'>기간 선택</div>", unsafe_allow_html=True)
+        st.markdown("<div class='sidebar-section-label'>기간 선택</div>", unsafe_allow_html=True)
         
         period_options = ["어제", "오늘", "최근 7일", "최근 30일", "이번 달", "지난 주", "지난 달", "직접 선택"]
         sv_period = sv.get("period_mode", "어제")
@@ -487,7 +487,7 @@ def build_filters(meta: pd.DataFrame, type_opts: List[str], engine=None) -> Dict
 
         st.divider()
 
-        st.markdown("<div style='font-size:13px; font-weight:600; color:var(--nv-muted); margin-bottom:8px;'>담당자 및 계정</div>", unsafe_allow_html=True)
+        st.markdown("<div class='sidebar-section-title compact'>담당자 및 계정</div>", unsafe_allow_html=True)
         media_default = [x for x in (sv.get("media_sel", []) or []) if x in MEDIA_OPTIONS]
         media_sel = ui_multiselect(st, "매체", MEDIA_OPTIONS, default=media_default, key="f_media_sel", placeholder="전체 매체")
         manager_sel = ui_multiselect(st, "담당자", managers, default=sv.get("manager", []), key="f_manager", placeholder="전체 담당자")
@@ -533,11 +533,11 @@ def build_filters(meta: pd.DataFrame, type_opts: List[str], engine=None) -> Dict
             prev_type_default = [x for x in (sv.get("type_sel", []) or []) if x in type_opts_for_media]
             type_sel = ui_multiselect(st, "광고 유형", type_opts_for_media, default=prev_type_default, key="f_type_sel", placeholder="전체 광고 유형")
             
-            st.markdown("<div style='margin-top:12px; margin-bottom:4px; font-size:12px; font-weight:500; color:var(--nv-muted);'>표시 데이터 수 제한</div>", unsafe_allow_html=True)
+            st.markdown("<div class='sidebar-section-label'>표시 데이터 수 제한</div>", unsafe_allow_html=True)
             top_n_campaign = st.number_input("캠페인 한도", min_value=10, max_value=2000, value=int(sv.get("top_n_campaign", 200)), step=50, key="f_top_n_campaign")
             top_n_keyword = st.number_input("키워드 한도", min_value=10, max_value=2000, value=int(sv.get("top_n_keyword", 300)), step=50, key="f_top_n_keyword")
             top_n_ad = st.number_input("소재 한도", min_value=10, max_value=2000, value=int(sv.get("top_n_ad", 200)), step=50, key="f_top_n_ad")
-            st.markdown("<div style='margin-top:12px; margin-bottom:4px; font-size:12px; font-weight:500; color:var(--nv-muted);'>관리자 옵션</div>", unsafe_allow_html=True)
+            st.markdown("<div class='sidebar-section-label'>관리자 옵션</div>", unsafe_allow_html=True)
             show_diagnostics = st.checkbox("조회 진단 보기", value=bool(sv.get("show_diagnostics", False)), key="f_show_diagnostics")
 
         st.caption("필터 변경 시 즉시 반영됩니다.")

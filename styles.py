@@ -650,10 +650,39 @@ h1, h2, h3, h4, h5, h6 {
   font-size: 11px;
   font-weight: 750;
   color: var(--nv-muted-light);
-  margin: 4px 0 4px;
+  margin: 0;
+  padding: 9px 4px 8px;
   text-transform: uppercase;
   letter-spacing: 0;
-  padding-left: 4px;
+  line-height: 1.15;
+  min-height: 30px;
+  box-sizing: border-box;
+}
+.sidebar-section-title {
+  color: var(--nv-text-soft);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.2;
+  margin: 0;
+  padding: 8px 0 11px;
+  box-sizing: border-box;
+}
+.sidebar-section-title.compact {
+  padding-top: 4px;
+}
+.sidebar-section-label {
+  color: var(--nv-muted);
+  font-size: 13px;
+  font-weight: 750;
+  line-height: 1.2;
+  margin: 0;
+  padding: 4px 0 10px;
+  box-sizing: border-box;
+}
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"]:has(.nav-sidebar-title),
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"]:has(.sidebar-section-title),
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"]:has(.sidebar-section-label) {
+  overflow: visible;
 }
 
 .sidebar-brand-card {
@@ -710,6 +739,8 @@ h1, h2, h3, h4, h5, h6 {
   display: inline-flex !important;
   align-items: center !important;
   gap: 5px !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
 }
 [data-testid="stSidebar"] [data-testid="baseButton-secondary"] {
   color: var(--nv-text-soft) !important;

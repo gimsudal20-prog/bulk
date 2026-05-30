@@ -634,7 +634,28 @@ def _load_targets_from_dims(
     shopping_keyword_ids: set[str],
 ):
     with engine.connect() as conn:
-        shopping_campaign_ids = {str(r[0]) for r in conn.execute(text("SELECT campaign_id FROM dim_campaign WHERE customer_id = :cid AND lower(coalesce(campaign_tp,'')) LIKE :kw"), {"cid": customer_id, "kw": '%shopping%'})}
+        shopping_campaign_ids = {
+            str(r[0]) for r in conn.execute(
+                text(
+                    """
+                    SELECT campaign_id
+                    FROM dim_campaign
+                    WHERE customer_id = :cid
+                      AND (
+                        lower(coalesce(campaign_tp,'')) LIKE :shopping_kw
+                        OR lower(coalesce(campaign_tp,'')) LIKE :shop_kw
+                        OR coalesce(campaign_tp,'') LIKE :shopping_ko
+                      )
+                    """
+                ),
+                {
+                    "cid": customer_id,
+                    "shopping_kw": "%shopping%",
+                    "shop_kw": "%shop%",
+                    "shopping_ko": "%쇼핑%",
+                },
+            )
+        }
         shopping_adgroup_ids = {
             str(r[0]) for r in conn.execute(
                 text("SELECT adgroup_id FROM dim_adgroup WHERE customer_id = :cid AND campaign_id = ANY(:cids)"),

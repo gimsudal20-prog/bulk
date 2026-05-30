@@ -10,6 +10,7 @@ import pandas as pd
 import streamlit as st
 
 from data import get_table_columns, sql_read, table_exists
+from targeting_collector_helpers import AGE_BUCKETS
 
 
 TYPE_LABEL_MAP = {
@@ -21,21 +22,12 @@ TYPE_LABEL_MAP = {
 }
 
 
-AGE_SORT_ORDER = {
-    "14세 이하": 0,
-    "15~19세": 1,
-    "20~24세": 2,
-    "25~29세": 3,
-    "30~34세": 4,
-    "35~39세": 5,
-    "40~44세": 6,
-    "45~49세": 7,
-    "50~54세": 8,
-    "55~59세": 9,
-    "60세 이상": 10,
-    "알 수 없음": 98,
+AGE_SORT_ORDER = {label: idx for idx, label in enumerate(AGE_BUCKETS)}
+AGE_SORT_ORDER.update({
+    "연령 알 수 없음": AGE_SORT_ORDER.get("연령 알 수 없음", 98),
+    "알 수 없음": AGE_SORT_ORDER.get("연령 알 수 없음", 98),
     "미분류": 99,
-}
+})
 
 
 def _sql_in_str_list(values: Iterable[str]) -> str:
@@ -168,7 +160,8 @@ def _normalize_age_label(value) -> str:
         return "미분류"
     upper = raw.upper()
     mapping = {
-        "UNKNOWN": "알 수 없음",
+        "UNKNOWN": "연령 알 수 없음",
+        "알 수 없음": "연령 알 수 없음",
         "ETC": "기타",
         "NONE": "미분류",
         "-": "미분류",
@@ -377,7 +370,6 @@ def _query_hourly(engine, d1, d2, cids: tuple, type_sel: tuple, by_campaign: boo
           {where_cid}
           {type_filter}
         GROUP BY {group_by}
-        HAVING SUM(CAST(COALESCE(f.imp,0) AS NUMERIC)) + SUM(CAST(COALESCE(f.clk,0) AS NUMERIC)) + SUM(CAST(COALESCE(f.cost,0) AS NUMERIC)) > 0
         ORDER BY {order_by}
     """
     return sql_read(engine, sql, {"d1": str(d1), "d2": str(d2)})
@@ -473,7 +465,6 @@ def _query_adgroup_age(engine, d1, d2, cids: tuple, type_sel: tuple) -> pd.DataF
           {where_cid}
           {type_filter}
         GROUP BY COALESCE(NULLIF(TRIM(f.age_range), ''), '미분류'), COALESCE(NULLIF(TRIM(CAST(c.{cp_col} AS TEXT)), ''), '미분류'), COALESCE(NULLIF(TRIM(c.campaign_name), ''), g.campaign_id, f.campaign_id, '미분류'), COALESCE(NULLIF(TRIM(g.adgroup_name), ''), f.adgroup_id, '미분류')
-        HAVING SUM(CAST(COALESCE(f.imp,0) AS NUMERIC)) + SUM(CAST(COALESCE(f.clk,0) AS NUMERIC)) + SUM(CAST(COALESCE(f.cost,0) AS NUMERIC)) > 0
         ORDER BY cost DESC
     """
     return sql_read(engine, sql, {"d1": str(d1), "d2": str(d2)})

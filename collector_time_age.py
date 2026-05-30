@@ -16,6 +16,17 @@ import collector
 from targeting_collector_helpers import AGE_BUCKETS
 
 
+SHOPPING_TYPE_HINTS = ("shopping", "쇼핑", "shop", "product", "catalog")
+
+
+def is_shopping_campaign_type(value: str) -> bool:
+    raw = str(value or "").strip()
+    if not raw:
+        return False
+    lower = raw.lower()
+    return any(hint in lower for hint in SHOPPING_TYPE_HINTS)
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="시간대/연령대 breakdown 전용 수집기")
     p.add_argument("--date", default="", help="수집일 YYYY-MM-DD. 비우면 KST 어제")
@@ -118,7 +129,7 @@ def load_campaign_targets(engine: Engine, customer_id: str, shopping_only: bool)
         if not cid:
             continue
         ctype = str(row["campaign_tp"] or "")
-        is_shopping = "shopping" in ctype.lower()
+        is_shopping = is_shopping_campaign_type(ctype)
         if shopping_only and not is_shopping:
             continue
         campaign_ids.append(cid)

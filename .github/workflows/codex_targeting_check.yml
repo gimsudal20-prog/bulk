@@ -1,0 +1,219 @@
+name: Codex targeting check
+run-name: Codex targeting check | 핵이득마켓 | 2026-05-29
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/codex_targeting_check.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: codex-targeting-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      TZ: Asia/Seoul
+      PYTHONUNBUFFERED: "1"
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      NAVER_API_KEY: ${{ secrets.NAVER_API_KEY || secrets.NAVER_ADS_API_KEY }}
+      NAVER_API_SECRET: ${{ secrets.NAVER_API_SECRET || secrets.NAVER_ADS_SECRET }}
+      ACCOUNT_MASTER_FILE: account_master.xlsx
+      ACCOUNT_MASTER_XLSX_B64: ${{ secrets.ACCOUNT_MASTER_XLSX_B64 }}
+      TARGET_DATE: "2026-05-29"
+      TARGET_ACCOUNT_NAME: "핵이득마켓"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Collect target account
+        run: |
+          python collector.py \
+            --date "${TARGET_DATE}" \
+            --account_name "${TARGET_ACCOUNT_NAME}" \
+            --workers 1 \
+            --collect_mode sa_with_device \
+            --sa_scope full
+
+      - name: Verify targeting buckets
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          from sqlalchemy import create_engine, text
+
+          date = os.environ["TARGET_DATE"]
+          account_name = os.environ["TARGET_ACCOUNT_NAME"]
+          engine = create_engine(os.environ["DATABASE_URL"], pool_pre_ping=True)
+          age_buckets = ["10대", "20대", "30대", "40대", "50대", "60대이상"]
+
+          with engine.connect() as conn:
+              customers = conn.execute(
+                  text(
+                      """
+                      SELECT customer_id, MAX(account_name) AS account_name
+                      FROM dim_customer
+                      WHERE account_name ILIKE :name
+                      GROUP BY customer_id
+                      ORDER BY account_name
+                      """
+                  ),
+                  {"name": f"%{account_name}%"},
+              ).mappings().all()
+
+              if not customers:
+                  customers = conn.execute(
+                      text(
+                          """
+                          SELECT customer_id, MAX(account_name) AS account_name
+                          FROM accounts
+                          WHERE account_name ILIKE :name
+                          GROUP BY customer_id
+                          ORDER BY account_name
+                          """
+                      ),
+                      {"name": f"%{account_name}%"},
+                  ).mappings().all()
+
+              customer_ids = [str(r["customer_id"]) for r in customers]
+              campaign_rows = conn.execute(
+                  text(
+                      """
+                      SELECT customer_id, campaign_id, COALESCE(campaign_name, campaign_id) AS campaign_name,
+                             COALESCE(campaign_tp, '') AS campaign_tp
+                      FROM dim_campaign
+                      WHERE customer_id = ANY(:customer_ids)
+                      ORDER BY customer_id, campaign_id
+                      """
+                  ),
+                  {"customer_ids": customer_ids},
+              ).mappings().all() if customer_ids else []
+
+              campaign_ids = [str(r["campaign_id"]) for r in campaign_rows]
+              shopping_campaign_ids = [
+                  str(r["campaign_id"]) for r in campaign_rows
+                  if "shopping" in str(r["campaign_tp"] or "").lower()
+              ]
+
+              hourly_missing = conn.execute(
+                  text(
+                      """
+                      WITH target AS (
+                          SELECT unnest(:campaign_ids) AS campaign_id
+                      ),
+                      expected AS (
+                          SELECT campaign_id, generate_series(0, 23) AS hour_of_day
+                          FROM target
+                      )
+                      SELECT e.campaign_id, e.hour_of_day
+                      FROM expected e
+                      LEFT JOIN fact_campaign_hourly_daily f
+                        ON f.dt = :dt
+                       AND f.campaign_id = e.campaign_id
+                       AND f.hour_of_day = e.hour_of_day
+                      WHERE f.campaign_id IS NULL
+                      ORDER BY e.campaign_id, e.hour_of_day
+                      """
+                  ),
+                  {"campaign_ids": campaign_ids, "dt": date},
+              ).mappings().all() if campaign_ids else []
+
+              age_missing = conn.execute(
+                  text(
+                      """
+                      WITH target AS (
+                          SELECT unnest(:campaign_ids) AS campaign_id
+                      ),
+                      expected AS (
+                          SELECT campaign_id, unnest(:ages) AS age_range
+                          FROM target
+                      )
+                      SELECT e.campaign_id, e.age_range
+                      FROM expected e
+                      LEFT JOIN fact_campaign_age_daily f
+                        ON f.dt = :dt
+                       AND f.campaign_id = e.campaign_id
+                       AND f.age_range = e.age_range
+                      WHERE f.campaign_id IS NULL
+                      ORDER BY e.campaign_id, e.age_range
+                      """
+                  ),
+                  {"campaign_ids": shopping_campaign_ids, "ages": age_buckets, "dt": date},
+              ).mappings().all() if shopping_campaign_ids else []
+
+              hourly_rows = conn.execute(
+                  text(
+                      """
+                      SELECT COUNT(*)
+                      FROM fact_campaign_hourly_daily
+                      WHERE dt = :dt AND campaign_id = ANY(:campaign_ids)
+                      """
+                  ),
+                  {"dt": date, "campaign_ids": campaign_ids},
+              ).scalar_one() if campaign_ids else 0
+
+              age_rows = conn.execute(
+                  text(
+                      """
+                      SELECT COUNT(*)
+                      FROM fact_campaign_age_daily
+                      WHERE dt = :dt AND campaign_id = ANY(:campaign_ids)
+                      """
+                  ),
+                  {"dt": date, "campaign_ids": shopping_campaign_ids},
+              ).scalar_one() if shopping_campaign_ids else 0
+
+          report = {
+              "target_date": date,
+              "target_account_name": account_name,
+              "matched_customers": [dict(r) for r in customers],
+              "campaign_count": len(campaign_ids),
+              "shopping_campaign_count": len(shopping_campaign_ids),
+              "hourly_rows": int(hourly_rows),
+              "hourly_expected_rows": len(campaign_ids) * 24,
+              "hourly_missing_count": len(hourly_missing),
+              "hourly_missing_sample": [dict(r) for r in hourly_missing[:20]],
+              "age_rows": int(age_rows),
+              "age_expected_rows": len(shopping_campaign_ids) * len(age_buckets),
+              "age_missing_count": len(age_missing),
+              "age_missing_sample": [dict(r) for r in age_missing[:20]],
+              "ok": bool(campaign_ids) and len(hourly_missing) == 0 and len(age_missing) == 0,
+          }
+          Path("codex-check-results").mkdir(exist_ok=True)
+          Path("codex-check-results/targeting_2026-05-29_haegideuk.json").write_text(
+              json.dumps(report, ensure_ascii=False, indent=2),
+              encoding="utf-8",
+          )
+          print(json.dumps(report, ensure_ascii=False, indent=2))
+          if not report["ok"]:
+              raise SystemExit(1)
+          PY
+
+      - name: Commit report
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add codex-check-results/targeting_2026-05-29_haegideuk.json
+          git commit -m "Add Codex targeting check result" || exit 0
+          git push

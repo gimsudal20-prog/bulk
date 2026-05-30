@@ -1,0 +1,35 @@
+name: Codex Time Age Backfill
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/codex_time_age_backfill.yml"
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      TZ: Asia/Seoul
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      NAVER_ADS_API_KEY: ${{ secrets.NAVER_ADS_API_KEY }}
+      NAVER_ADS_SECRET: ${{ secrets.NAVER_ADS_SECRET }}
+      ACCOUNT_MASTER_FILE: account_master.xlsx
+      ACCOUNT_MASTER_XLSX_B64: ${{ secrets.ACCOUNT_MASTER_XLSX_B64 }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Backfill time and age
+        run: |
+          python collector_time_age.py --date 2026-05-29 --workers 2 --sync_campaigns

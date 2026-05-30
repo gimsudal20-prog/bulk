@@ -56,11 +56,75 @@ jobs:
             --require_age \
             --report_path codex-check-results/targeting_2026-05-29_haegideuk.json
 
+      - name: Probe age breakdown variants
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          from sqlalchemy import create_engine, text
+          import collector
+
+          target_date = os.environ["TARGET_DATE"]
+          engine = create_engine(os.environ["DATABASE_URL"], pool_pre_ping=True)
+          customer_id = "2535578"
+          with engine.connect() as conn:
+              rows = conn.execute(text("""
+                  SELECT c.campaign_id, g.adgroup_id, a.ad_id
+                  FROM dim_campaign c
+                  JOIN dim_adgroup g ON c.customer_id = g.customer_id AND c.campaign_id = g.campaign_id
+                  JOIN dim_ad a ON g.customer_id = a.customer_id AND g.adgroup_id = a.adgroup_id
+                  WHERE c.customer_id = :cid
+                    AND lower(coalesce(c.campaign_tp, '')) LIKE '%shopping%'
+                  LIMIT 3
+              """), {"cid": customer_id}).mappings().all()
+
+          fields = json.dumps(["impCnt", "clkCnt", "salesAmt", "ccnt", "convAmt"], separators=(",", ":"))
+          time_range = json.dumps({"since": target_date, "until": target_date}, separators=(",", ":"))
+          breakdowns = ["ageRangeNm", "ageRange", "age", "ageRangeCd", "ageTp", "ageType", "genderNm"]
+          probes = []
+          for row in rows:
+              ids = {
+                  "campaign": row["campaign_id"],
+                  "adgroup": row["adgroup_id"],
+                  "ad": row["ad_id"],
+              }
+              for entity, value in ids.items():
+                  for breakdown in breakdowns:
+                      for mode in ["id", "ids"]:
+                          params = {
+                              mode: value,
+                              "fields": fields,
+                              "timeRange": time_range,
+                              "breakdown": breakdown,
+                          }
+                          status, data = collector.request_json("GET", "/stats", customer_id, params=params, raise_error=False)
+                          sample = data
+                          if isinstance(sample, dict) and "data" in sample:
+                              sample = sample["data"][:2] if isinstance(sample["data"], list) else sample["data"]
+                          elif isinstance(sample, list):
+                              sample = sample[:2]
+                          probes.append({
+                              "entity": entity,
+                              "id": value,
+                              "mode": mode,
+                              "breakdown": breakdown,
+                              "status": status,
+                              "sample": sample,
+                          })
+          path = Path("codex-check-results/age_probe_2026-05-29_haegideuk.json")
+          path.parent.mkdir(exist_ok=True)
+          path.write_text(json.dumps(probes, ensure_ascii=False, indent=2), encoding="utf-8")
+          print(json.dumps(probes[:10], ensure_ascii=False, indent=2))
+          PY
+
       - name: Commit report
         if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add codex-check-results/targeting_2026-05-29_haegideuk.json
+          git add codex-check-results/age_probe_2026-05-29_haegideuk.json
           git commit -m "Add Codex targeting check result" || exit 0
           git push

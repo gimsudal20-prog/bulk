@@ -118,6 +118,79 @@
       ]
     },
     {
+      "name": "campaign_ids_age_increment_1",
+      "status": 400,
+      "params": {
+        "ids": "cmp-a001-02-000000010655475",
+        "timeRange": "{\"since\":\"2026-05-29\",\"until\":\"2026-05-29\"}",
+        "timeIncrement": "1",
+        "breakdown": "ageRangeNm"
+      },
+      "top_level_type": "dict",
+      "top_level_keys": [
+        "code",
+        "message",
+        "status"
+      ],
+      "raw_preview": "{\"code\": 11001, \"message\": \"지원하지 않는 기능입니다.\", \"status\": \"BAD_REQUEST\"}",
+      "flattened_rows": 0,
+      "flattened_sample": []
+    },
+    {
+      "name": "campaign_ids_age_range",
+      "status": 200,
+      "params": {
+        "ids": "cmp-a001-02-000000010655475",
+        "timeRange": "{\"since\":\"2026-05-29\",\"until\":\"2026-05-29\"}",
+        "breakdown": "ageRange"
+      },
+      "top_level_type": "dict",
+      "top_level_keys": [
+        "data",
+        "compTm",
+        "cycleBaseTm"
+      ],
+      "raw_preview": "{\"data\": [{\"ccnt\": 5, \"convAmt\": 39300, \"id\": \"cmp-a001-02-000000010655475\", \"clkCnt\": 19, \"impCnt\": 5289, \"salesAmt\": 10041}], \"compTm\": \"202605301243\", \"cycleBaseTm\": \"202605301200\"}",
+      "flattened_rows": 1,
+      "flattened_sample": [
+        {
+          "ccnt": 5,
+          "convAmt": 39300,
+          "id": "cmp-a001-02-000000010655475",
+          "clkCnt": 19,
+          "impCnt": 5289,
+          "salesAmt": 10041
+        }
+      ]
+    },
+    {
+      "name": "campaign_ids_age_lower",
+      "status": 200,
+      "params": {
+        "ids": "cmp-a001-02-000000010655475",
+        "timeRange": "{\"since\":\"2026-05-29\",\"until\":\"2026-05-29\"}",
+        "breakdown": "age"
+      },
+      "top_level_type": "dict",
+      "top_level_keys": [
+        "data",
+        "compTm",
+        "cycleBaseTm"
+      ],
+      "raw_preview": "{\"data\": [{\"ccnt\": 5, \"convAmt\": 39300, \"id\": \"cmp-a001-02-000000010655475\", \"clkCnt\": 19, \"impCnt\": 5289, \"salesAmt\": 10041}], \"compTm\": \"202605301243\", \"cycleBaseTm\": \"202605301200\"}",
+      "flattened_rows": 1,
+      "flattened_sample": [
+        {
+          "ccnt": 5,
+          "convAmt": 39300,
+          "id": "cmp-a001-02-000000010655475",
+          "clkCnt": 19,
+          "impCnt": 5289,
+          "salesAmt": 10041
+        }
+      ]
+    },
+    {
       "name": "campaign_ids_gender",
       "status": 200,
       "params": {

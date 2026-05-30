@@ -1,0 +1,110 @@
+{
+  "target_date": "2026-05-29",
+  "target_account_name": "핵이득마켓",
+  "matched_customers": [
+    {
+      "customer_id": "2761547013",
+      "account_name": "핵이득마켓"
+    },
+    {
+      "customer_id": "1069491557",
+      "account_name": "핵이득마켓"
+    },
+    {
+      "customer_id": "143436265335363",
+      "account_name": "핵이득마켓"
+    }
+  ],
+  "campaign_count": 133,
+  "shopping_campaign_count": 0,
+  "hourly_rows": 0,
+  "hourly_expected_rows": 3192,
+  "hourly_missing_count": 3192,
+  "hourly_missing_sample": [
+    {
+      "campaign_id": "120200067878610740",
+      "hour_of_day": 0
+    },
+    {
+      "campaign_id": "120200067878610740",
+      "hour_of_day": 1
+    },
+    {
+      "campaign_id": "120200067878610740",
+      "hour_of_day": 2
+    },
+    {
+      "campaign_id": "120200067878610740",
+      "hour_of_day": 3
+    },
+    {
+      "campaign_id": "120200067878610740",
+      "hour_of_day": 4
+    },
+    {
+      "campaign_id": "120200067878610740",
+      "hour_of_day": 5
+    },
+    {
+      "campaign_id": "120200067878610740",
+      "hour_of_day": 6
+    },
+    {
+      "campaign_id": "120200067878610740",
+      "hour_of_day": 7
+    },
+    {
+      "campaign_id": "120200067878610740",
+      "hour_of_day": 8
+    },
+    {
+      "campaign_id": "120200067878610740",
+      "hour_of_day": 9
+    },
+    {
+      "campaign_id": "120200067878610740",
+      "hour_of_day": 10
+    },
+    {
+      "campaign_id": "120200067878610740",
+      "hour_of_day": 11
+    },
+    {
+      "campaign_id": "120200067878610740",
+      "hour_of_day": 12
+    },
+    {
+      "campaign_id": "120200067878610740",
+      "hour_of_day": 13
+    },
+    {
+      "campaign_id": "120200067878610740",
+      "hour_of_day": 14
+    },
+    {
+      "campaign_id": "120200067878610740",
+      "hour_of_day": 15
+    },
+    {
+      "campaign_id": "120200067878610740",
+      "hour_of_day": 16
+    },
+    {
+      "campaign_id": "120200067878610740",
+      "hour_of_day": 17
+    },
+    {
+      "campaign_id": "120200067878610740",
+      "hour_of_day": 18
+    },
+    {
+      "campaign_id": "120200067878610740",
+      "hour_of_day": 19
+    }
+  ],
+  "age_rows": 0,
+  "age_expected_rows": 0,
+  "age_missing_count": 0,
+  "age_missing_sample": [],
+  "ok": false
+}

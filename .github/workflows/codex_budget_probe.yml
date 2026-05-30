@@ -36,78 +36,87 @@ jobs:
       - name: Probe budget data
         shell: bash
         run: |
-          set -e
+          set +e
           mkdir -p codex-check-results
           python - <<'PY'
           import json
+          import traceback
           from datetime import date, timedelta
           from pathlib import Path
 
-          from data import (
-              _budget_naver_scope_df,
-              get_engine,
-              get_meta,
-              get_platform_credentials,
-              query_budget_bundle,
-              sql_read,
-              table_exists,
-          )
+          result = {}
+          try:
+              from data import (
+                  _budget_naver_scope_df,
+                  get_engine,
+                  get_meta,
+                  get_platform_credentials,
+                  query_budget_bundle,
+                  sql_read,
+                  table_exists,
+              )
 
-          engine = get_engine()
-          today = date(2026, 5, 30)
-          yesterday = today - timedelta(days=1)
-          month_d1 = yesterday.replace(day=1)
-          month_d2 = date(yesterday.year, yesterday.month + 1, 1) - timedelta(days=1)
-          prev_month_d2 = month_d1 - timedelta(days=1)
-          prev_month_d1 = prev_month_d2.replace(day=1)
-          avg_d2 = yesterday
-          avg_d1 = avg_d2 - timedelta(days=2)
+              engine = get_engine()
+              today = date(2026, 5, 30)
+              yesterday = today - timedelta(days=1)
+              month_d1 = yesterday.replace(day=1)
+              month_d2 = date(yesterday.year, yesterday.month + 1, 1) - timedelta(days=1)
+              prev_month_d2 = month_d1 - timedelta(days=1)
+              prev_month_d1 = prev_month_d2.replace(day=1)
+              avg_d2 = yesterday
+              avg_d1 = avg_d2 - timedelta(days=2)
 
-          meta = get_meta(engine)
-          platform = get_platform_credentials(engine)
-          scope = _budget_naver_scope_df(engine)
-          bundle = query_budget_bundle(engine, tuple(), yesterday, avg_d1, avg_d2, month_d1, month_d2, prev_month_d1, prev_month_d2, 3)
+              meta = get_meta(engine)
+              platform = get_platform_credentials(engine)
+              scope = _budget_naver_scope_df(engine)
+              bundle = query_budget_bundle(engine, tuple(), yesterday, avg_d1, avg_d2, month_d1, month_d2, prev_month_d1, prev_month_d2, 3)
 
-          def frame_info(df, sample_cols=None):
-              if df is None:
-                  return {"rows": None, "columns": []}
-              sample = df.head(8).copy()
-              if sample_cols:
-                  sample = sample[[c for c in sample_cols if c in sample.columns]]
-              return {
-                  "rows": int(len(df.index)),
-                  "columns": list(df.columns),
-                  "sample": json.loads(sample.astype(str).to_json(orient="records", force_ascii=False)),
+              def frame_info(df, sample_cols=None):
+                  if df is None:
+                      return {"rows": None, "columns": []}
+                  sample = df.head(8).copy()
+                  if sample_cols:
+                      sample = sample[[c for c in sample_cols if c in sample.columns]]
+                  return {
+                      "rows": int(len(df.index)),
+                      "columns": list(df.columns),
+                      "sample": json.loads(sample.astype(str).to_json(orient="records", force_ascii=False)),
+                  }
+
+              result = {
+                  "status": "ok",
+                  "meta": frame_info(meta, ["customer_id", "account_name", "manager", "monthly_budget"]),
+                  "platform": frame_info(platform, ["platform", "account_label", "customer_id", "account_id", "is_active"]),
+                  "budget_scope": frame_info(scope, ["customer_id", "account_name", "manager", "monthly_budget", "platform"]),
+                  "budget_bundle": frame_info(bundle, ["customer_id", "account_name", "manager", "monthly_budget", "bizmoney_balance", "current_month_cost"]),
+                  "tables": {},
               }
-
-          result = {
-              "meta": frame_info(meta, ["customer_id", "account_name", "manager", "monthly_budget"]),
-              "platform": frame_info(platform, ["platform", "account_label", "customer_id", "account_id", "is_active"]),
-              "budget_scope": frame_info(scope, ["customer_id", "account_name", "manager", "monthly_budget", "platform"]),
-              "budget_bundle": frame_info(bundle, ["customer_id", "account_name", "manager", "monthly_budget", "bizmoney_balance", "current_month_cost"]),
-              "tables": {},
-          }
-          for table in ["dim_customer", "dim_account_meta", "platform_credentials", "fact_bizmoney_daily", "fact_campaign_daily", "overview_campaign_daily_cache"]:
-              try:
-                  exists = table_exists(engine, table)
-                  info = {"exists": bool(exists)}
-                  if exists:
-                      cnt = sql_read(engine, f"SELECT COUNT(*) AS n FROM {table}")
-                      info["rows"] = int(cnt.iloc[0]["n"]) if not cnt.empty else 0
-                      sample = sql_read(engine, f"SELECT * FROM {table} LIMIT 5")
-                      info["columns"] = list(sample.columns)
-                  result["tables"][table] = info
-              except Exception as exc:
-                  result["tables"][table] = {"error": str(exc)}
+              for table in ["dim_customer", "dim_account_meta", "platform_credentials", "fact_bizmoney_daily", "fact_campaign_daily", "overview_campaign_daily_cache"]:
+                  try:
+                      exists = table_exists(engine, table)
+                      info = {"exists": bool(exists)}
+                      if exists:
+                          cnt = sql_read(engine, f"SELECT COUNT(*) AS n FROM {table}")
+                          info["rows"] = int(cnt.iloc[0]["n"]) if not cnt.empty else 0
+                          sample = sql_read(engine, f"SELECT * FROM {table} LIMIT 5")
+                          info["columns"] = list(sample.columns)
+                      result["tables"][table] = info
+                  except Exception as exc:
+                      result["tables"][table] = {"error": str(exc)}
+          except Exception as exc:
+              result = {"status": "error", "error": str(exc), "traceback": traceback.format_exc()}
 
           Path("codex-check-results/budget_probe.json").write_text(
               json.dumps(result, ensure_ascii=False, indent=2),
               encoding="utf-8",
           )
           PY
+          code=$?
+          set -e
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add codex-check-results/budget_probe.json
           git commit -m "Add Codex budget probe result" || true
           git pull --rebase origin main
           git push
+          exit "$code"

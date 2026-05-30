@@ -370,7 +370,7 @@ def get_stats_breakdown_range(
 
     def fetch(chunk: List[str]) -> Tuple[bool, List[dict], str]:
         params = {
-            "ids": json.dumps(chunk, separators=(",", ":")),
+            "ids": ",".join(chunk),
             "fields": fields,
             "timeRange": time_range,
             "breakdown": breakdown,

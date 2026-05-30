@@ -157,7 +157,7 @@ def check_targeting_breakdown_contract(root: Path) -> list[str]:
     collector_text = collector_path.read_text(encoding='utf-8')
     runner_text = runner_path.read_text(encoding='utf-8')
     required = {
-        'targeting ids JSON 배열 파라미터': 'json.dumps(chunk, separators=(",", ":"))' in targeting_text,
+        'targeting ids 쉼표 파라미터': '"ids": ",".join(chunk)' in targeting_text,
         '연령대는 쇼핑 캠페인만 요청': 'age_ids = [x for x in all_campaign_ids if x in shopping_set]' in targeting_text,
         '시간대 24구간 zero-fill': 'for hour in range(24)' in targeting_text,
         '연령대 표준구간 zero-fill': 'AGE_BUCKETS = ["10대", "20대", "30대", "40대", "50대", "60대이상"]' in targeting_text,

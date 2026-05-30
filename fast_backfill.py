@@ -172,6 +172,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--with_gfa", action="store_true", help="collector_gfa.py도 함께 실행")
     p.add_argument("--with_shop_ext", action="store_true", help="collector_shop_ext.py도 함께 실행")
     p.add_argument("--shopping_only", action="store_true", help="쇼핑검색(SSA) 캠페인만 수집/백필")
+    p.add_argument("--skip_time_age", action="store_true", help="collector.py 시간대/연령대 breakdown 수집 건너뛰기")
     p.add_argument("--collect_mode", default="검색광고 전체+기기", help="검색광고 전체만 / 기기만 / 검색광고 전체+기기")
     p.add_argument("--sa_scope", default="전체", help="검색광고 수집 범위: 전체 / 소재만")
     p.add_argument("--run_target", default="검색광고 전체만", help="실행 대상: 검색광고 전체만 / 확장소재만 / 검색광고 전체+확장소재")
@@ -228,6 +229,8 @@ def build_search_ads_cmd(args: argparse.Namespace, d_str: str, first: bool) -> L
         cmd += ["--account_names", args.account_names]
     if args.shopping_only:
         cmd.append("--shopping_only")
+    if args.skip_time_age and _supports_cli_arg("collector.py", "--skip_time_age"):
+        cmd.append("--skip_time_age")
     if args.sa_scope == "ad_only" and _supports_cli_arg("collector.py", "--sa_scope"):
         cmd += ["--sa_scope", args.sa_scope]
 

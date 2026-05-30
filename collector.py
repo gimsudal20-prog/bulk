@@ -1099,7 +1099,7 @@ def _finalize_account_result(
     )
 
 
-def process_account(engine: Engine, customer_id: str, account_name: str, target_date: date, skip_dim: bool = False, fast_mode: bool = False, collect_mode: str = "sa_with_device", sa_scope: str = "full", shopping_only: bool = False):
+def process_account(engine: Engine, customer_id: str, account_name: str, target_date: date, skip_dim: bool = False, fast_mode: bool = False, collect_mode: str = "sa_with_device", sa_scope: str = "full", shopping_only: bool = False, skip_time_age: bool = False):
     return collector_runner_mod.process_account(
         engine,
         customer_id,
@@ -1131,7 +1131,7 @@ def process_account(engine: Engine, customer_id: str, account_name: str, target_
         save_device_stats_fn=save_device_stats,
         build_unsegmented_device_stat_from_totals_fn=build_unsegmented_device_stat_from_totals,
         collect_media_fact_fn=collect_media_fact,
-        collect_time_age_stats_fn=collect_time_age_stats,
+        collect_time_age_stats_fn=None if skip_time_age else collect_time_age_stats,
         resolve_split_payload_fn=_resolve_split_payload,
         save_report_stats_and_breakdowns_fn=_save_report_stats_and_breakdowns,
         is_ad_only_scope_fn=_is_ad_only_scope,
@@ -1163,6 +1163,7 @@ def build_main_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--collect_mode", type=str, default="sa_with_device", help="sa_only/device_only/sa_with_device 또는 검색광고 전체만/기기만/검색광고 전체+기기")
     parser.add_argument("--sa_scope", type=str, default="full", help="full/ad_only 또는 전체/소재만")
     parser.add_argument("--shopping_only", action="store_true", help="쇼핑검색 캠페인만 수집/재적재")
+    parser.add_argument("--skip_time_age", action="store_true", help="시간대/연령대 breakdown 수집은 건너뜁니다")
     parser.add_argument("--include_gfa_accounts", action="store_true", help="이름 끝이 GFA 인 네이버 GFA 계정도 함께 대상으로 포함")
     return parser
 
@@ -1337,6 +1338,7 @@ def run_account_collection_tasks(engine: Engine, accounts_info: List[Dict[str, s
                 args.collect_mode,
                 args.sa_scope,
                 args.shopping_only,
+                args.skip_time_age,
             )
             for acc in accounts_info
         ]

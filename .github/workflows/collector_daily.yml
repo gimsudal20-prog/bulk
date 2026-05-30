@@ -79,17 +79,20 @@ jobs:
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             FAST_FLAG=""
             [[ "${DISPATCH_FAST:-true}" == "true" ]] && FAST_FLAG="--fast"
-            python collector.py --date "${YESTERDAY}" --workers 2 --collect_mode "${COLLECT_MODE}" ${FAST_FLAG}
+            python collector.py --date "${YESTERDAY}" --workers 2 --collect_mode "${COLLECT_MODE}" --skip_time_age ${FAST_FLAG}
+            python collector_time_age.py --date "${YESTERDAY}" --workers 2 --sync_campaigns
           else
             if [[ "${KST_HOUR}" == "04" ]]; then
-              python collector.py --date "${YESTERDAY}" --workers 2 --collect_mode "${COLLECT_MODE}"
+              python collector.py --date "${YESTERDAY}" --workers 2 --collect_mode "${COLLECT_MODE}" --skip_time_age
             else
-              python fast_backfill.py --start "${YESTERDAY}" --end "${YESTERDAY}" --workers 2 --collect_mode "${COLLECT_MODE}" --sync_dim_first_day
+              python fast_backfill.py --start "${YESTERDAY}" --end "${YESTERDAY}" --workers 2 --collect_mode "${COLLECT_MODE}" --sync_dim_first_day --skip_time_age
             fi
+            python collector_time_age.py --date "${YESTERDAY}" --workers 2 --sync_campaigns
 
             if [[ "${COLLECT_MODE}" == "device_only" ]]; then
               echo "device_only 모드에서는 당일 빠른 갱신을 건너뜁니다."
             else
-              python collector.py --date "${TODAY}" --workers 2 --collect_mode "${COLLECT_MODE}" --fast
+              python collector.py --date "${TODAY}" --workers 2 --collect_mode "${COLLECT_MODE}" --fast --skip_time_age
+              python collector_time_age.py --date "${TODAY}" --workers 2 --sync_campaigns
             fi
           fi

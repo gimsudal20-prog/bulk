@@ -74,6 +74,9 @@ jobs:
               ("campaign_id_age", {"id": target_campaign, "fields": fields, "timeRange": time_range, "breakdown": "ageRangeNm"}),
               ("campaign_ids_age_allDays", {"ids": target_campaign, "fields": fields, "timeRange": time_range, "timeIncrement": "allDays", "breakdown": "ageRangeNm"}),
               ("campaign_ids_age_daily", {"ids": target_campaign, "fields": fields, "timeRange": time_range, "timeIncrement": "daily", "breakdown": "ageRangeNm"}),
+              ("campaign_ids_age_increment_1", {"ids": target_campaign, "fields": fields, "timeRange": time_range, "timeIncrement": "1", "breakdown": "ageRangeNm"}),
+              ("campaign_ids_age_range", {"ids": target_campaign, "fields": fields, "timeRange": time_range, "breakdown": "ageRange"}),
+              ("campaign_ids_age_lower", {"ids": target_campaign, "fields": fields, "timeRange": time_range, "breakdown": "age"}),
               ("campaign_ids_gender", {"ids": target_campaign, "fields": fields, "timeRange": time_range, "breakdown": "genderNm"}),
           ]
           if target_adgroup:

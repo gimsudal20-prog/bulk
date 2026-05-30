@@ -1,0 +1,60 @@
+name: Codex Targeting Verify
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/codex_targeting_verify.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    env:
+      TZ: Asia/Seoul
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      NAVER_ADS_API_KEY: ${{ secrets.NAVER_ADS_API_KEY }}
+      NAVER_ADS_SECRET: ${{ secrets.NAVER_ADS_SECRET }}
+      ACCOUNT_MASTER_FILE: account_master.xlsx
+      ACCOUNT_MASTER_XLSX_B64: ${{ secrets.ACCOUNT_MASTER_XLSX_B64 }}
+      DEBUG_REPORTS: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Verify targeting collection
+        shell: bash
+        run: |
+          set +e
+          mkdir -p codex-check-results
+          python collector_time_age.py \
+            --date 2026-05-29 \
+            --account_name "핵이득마켓" \
+            --workers 1 \
+            --sync_campaigns \
+            --verify \
+            --require_age \
+            --report_path codex-check-results/targeting_verify_2026-05-29_haegideuk.json
+          code=$?
+          set -e
+          printf '{"exit_code":%s}\n' "$code" > codex-check-results/targeting_verify_2026-05-29_haegideuk_status.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add codex-check-results/targeting_verify_2026-05-29_haegideuk*.json
+          git commit -m "Add Codex targeting verification result" || true
+          git push || true
+          exit "$code"

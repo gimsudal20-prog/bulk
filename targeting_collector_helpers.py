@@ -12,10 +12,24 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 
-TARGETING_PARSER_VERSION = "targeting_v20260530_dense_breakdown1"
+TARGETING_PARSER_VERSION = "targeting_v20260530_age_bucket_detail1"
 
 FIELDS = ["impCnt", "clkCnt", "salesAmt", "ccnt", "convAmt"]
-AGE_BUCKETS = ["18세 이하", "20대~30대", "30대~40대", "40대~50대", "50대~60대", "60세 이상", "알 수 없음", "해당 없음"]
+AGE_BUCKETS = [
+    "14세 미만",
+    "14세 ~ 18세",
+    "19세 ~ 24세",
+    "25세 ~ 29세",
+    "30세 ~ 34세",
+    "35세 ~ 39세",
+    "40세 ~ 44세",
+    "45세 ~ 49세",
+    "50세 ~ 54세",
+    "55세 ~ 59세",
+    "60세 이상",
+    "연령 알 수 없음",
+    "해당 없음",
+]
 METRIC_ALIASES = {
     "imp": ["impCnt", "impressions", "impression", "imp", "노출수"],
     "clk": ["clkCnt", "clicks", "click", "clk", "클릭수"],
@@ -174,35 +188,80 @@ def normalize_hour_value(v: Any) -> int | None:
 def normalize_age_range(v: Any) -> str:
     raw = str(v or "").strip()
     if not raw or raw in {"-", "None", "nan", "NaN"}:
-        return "알 수 없음"
-    compact = raw.replace(" ", "")
+        return "연령 알 수 없음"
+    compact = raw.replace(" ", "").replace("∼", "~").replace("-", "~")
+    compact_upper = compact.upper()
     aliases = {
-        "18세이하": "18세 이하",
-        "18이하": "18세 이하",
-        "20대~30대": "20대~30대",
-        "20대-30대": "20대~30대",
-        "20~30대": "20대~30대",
-        "30대~40대": "30대~40대",
-        "30대-40대": "30대~40대",
-        "30~40대": "30대~40대",
-        "40대~50대": "40대~50대",
-        "40대-50대": "40대~50대",
-        "40~50대": "40대~50대",
-        "50대~60대": "50대~60대",
-        "50대-60대": "50대~60대",
-        "50~60대": "50대~60대",
+        "14세미만": "14세 미만",
+        "14미만": "14세 미만",
+        "UNDER14": "14세 미만",
+        "UNDER_14": "14세 미만",
+        "AGE_UNDER_14": "14세 미만",
+        "AGE_0_13": "14세 미만",
+        "14세~18세": "14세 ~ 18세",
+        "14~18세": "14세 ~ 18세",
+        "14~18": "14세 ~ 18세",
+        "AGE_14_18": "14세 ~ 18세",
+        "19세~24세": "19세 ~ 24세",
+        "19~24세": "19세 ~ 24세",
+        "19~24": "19세 ~ 24세",
+        "AGE_19_24": "19세 ~ 24세",
+        "25세~29세": "25세 ~ 29세",
+        "25~29세": "25세 ~ 29세",
+        "25~29": "25세 ~ 29세",
+        "AGE_25_29": "25세 ~ 29세",
+        "30세~34세": "30세 ~ 34세",
+        "30~34세": "30세 ~ 34세",
+        "30~34": "30세 ~ 34세",
+        "AGE_30_34": "30세 ~ 34세",
+        "35세~39세": "35세 ~ 39세",
+        "35~39세": "35세 ~ 39세",
+        "35~39": "35세 ~ 39세",
+        "AGE_35_39": "35세 ~ 39세",
+        "40세~44세": "40세 ~ 44세",
+        "40~44세": "40세 ~ 44세",
+        "40~44": "40세 ~ 44세",
+        "AGE_40_44": "40세 ~ 44세",
+        "45세~49세": "45세 ~ 49세",
+        "45~49세": "45세 ~ 49세",
+        "45~49": "45세 ~ 49세",
+        "AGE_45_49": "45세 ~ 49세",
+        "50세~54세": "50세 ~ 54세",
+        "50~54세": "50세 ~ 54세",
+        "50~54": "50세 ~ 54세",
+        "AGE_50_54": "50세 ~ 54세",
+        "55세~59세": "55세 ~ 59세",
+        "55~59세": "55세 ~ 59세",
+        "55~59": "55세 ~ 59세",
+        "AGE_55_59": "55세 ~ 59세",
         "60세이상": "60세 이상",
         "60대이상": "60세 이상",
         "60이상": "60세 이상",
         "OVER_60": "60세 이상",
-        "UNKNOWN": "알 수 없음",
-        "알수없음": "알 수 없음",
-        "기타": "알 수 없음",
+        "AGE_OVER_60": "60세 이상",
+        "UNKNOWN": "연령 알 수 없음",
+        "알수없음": "연령 알 수 없음",
+        "연령알수없음": "연령 알 수 없음",
+        "기타": "연령 알 수 없음",
         "N/A": "해당 없음",
         "NA": "해당 없음",
         "해당없음": "해당 없음",
     }
-    return aliases.get(compact.upper(), aliases.get(compact, compact))
+    json_like = compact.replace('"', "").replace("'", "")
+    range_aliases = {
+        "{from:14,to:18}": "14세 ~ 18세",
+        "{from:19,to:24}": "19세 ~ 24세",
+        "{from:25,to:29}": "25세 ~ 29세",
+        "{from:30,to:34}": "30세 ~ 34세",
+        "{from:35,to:39}": "35세 ~ 39세",
+        "{from:40,to:44}": "40세 ~ 44세",
+        "{from:45,to:49}": "45세 ~ 49세",
+        "{from:50,to:54}": "50세 ~ 54세",
+        "{from:55,to:59}": "55세 ~ 59세",
+        "{from:60,to:200}": "60세 이상",
+        "{from:~1,to:~1}": "해당 없음",
+    }
+    return aliases.get(compact_upper, aliases.get(compact, range_aliases.get(json_like, compact)))
 
 
 def _empty_breakdown_row(customer_id: str, target_date: date, campaign_id: str, breakdown: str, bucket_value: Any) -> Dict[str, Any]:
@@ -597,24 +656,13 @@ def collect_campaign_time_age_stats(
     shopping_set = {str(x).strip() for x in (shopping_campaign_ids or []) if str(x or "").strip()}
     age_ids = [x for x in all_campaign_ids if x in shopping_set]
 
-    age_entity_map = _load_ad_campaign_map(engine, customer_id, age_ids)
-    age_entity_source = "ad"
-    if not age_entity_map:
-        age_entity_map = _load_adgroup_campaign_map(engine, customer_id, age_ids)
-        age_entity_source = "adgroup"
-    age_lookup_ids = sorted(age_entity_map) if age_entity_map else age_ids
-    reverse_type_map = {entity_id: type_map.get(campaign_id, "UNKNOWN") or "UNKNOWN" for entity_id, campaign_id in age_entity_map.items()}
-    age_type_map = reverse_type_map if age_entity_map else type_map
-
     age_buckets: Dict[str, List[str]] = {}
-    for lookup_id in age_lookup_ids:
-        age_buckets.setdefault(age_type_map.get(lookup_id, "UNKNOWN") or "UNKNOWN", []).append(lookup_id)
+    for lookup_id in age_ids:
+        age_buckets.setdefault(type_map.get(lookup_id, "UNKNOWN") or "UNKNOWN", []).append(lookup_id)
 
     age_raw: List[dict] = []
     for _, ids in age_buckets.items():
         age_raw.extend(get_stats_breakdown_range_fn(customer_id, ids, target_date, "ageRangeNm", log_fn=log_fn))
-    if age_entity_map:
-        age_raw = _remap_stat_row_ids(age_raw, age_entity_map)
     age_rows, age_meta = _build_rows_from_breakdown(age_raw, customer_id, target_date, "ageRangeNm")
     age_rows = _densify_breakdown_rows(age_rows, customer_id, target_date, age_ids, "ageRangeNm")
     age_saved = _replace_campaign_age_rows(engine, customer_id, target_date, age_rows, scoped_ids=age_ids)
@@ -625,8 +673,8 @@ def collect_campaign_time_age_stats(
         "hour_raw_rows": int(hour_meta.get("raw_rows", 0)),
         "hour_meta": hour_meta,
         "age_ids": len(age_ids),
-        "age_entity_source": age_entity_source if age_entity_map else "campaign",
-        "age_entity_ids": len(age_lookup_ids),
+        "age_entity_source": "campaign",
+        "age_entity_ids": len(age_ids),
         "age_rows_saved": int(age_saved),
         "age_raw_rows": int(age_meta.get("raw_rows", 0)),
         "age_meta": age_meta,

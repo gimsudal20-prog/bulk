@@ -309,7 +309,7 @@ def page_time_age(meta: pd.DataFrame, engine, f: Dict) -> None:
         """,
         unsafe_allow_html=True,
     )
-    st.caption("시간대는 /stats hh24 breakdown, 연령대는 /stats ageRangeNm breakdown 기반으로 표시됩니다. 파워링크/쇼핑검색 모두 캠페인 기준으로 수집을 시도합니다.")
+    st.caption("시간대는 /stats hh24 breakdown, 연령대는 쇼핑 캠페인 /stats ageRangeNm breakdown 기반으로 표시됩니다.")
 
     if not table_exists(engine, "fact_campaign_hourly_daily") and not table_exists(engine, "fact_campaign_age_daily"):
         st.info("시간대/연령대 수집 테이블이 아직 없습니다. 패치 적용 후 수집기를 한 번 실행하면 자동 생성됩니다.")

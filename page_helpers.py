@@ -30,6 +30,56 @@ TOPUP_AVG_DAYS = _env_int("TOPUP_AVG_DAYS", 3)
 TOPUP_DAYS_COVER = _env_int("TOPUP_DAYS_COVER", 2)
 DASHBOARD_DATA_CACHE_TTL = _env_int("DASHBOARD_DATA_CACHE_TTL", 300)
 
+MEDIA_OPTIONS = ["네이버", "메타", "구글"]
+_PLATFORM_LABEL_MAP = {
+    "naver": "네이버",
+    "naver_ads": "네이버",
+    "naver_search": "네이버",
+    "searchad": "네이버",
+    "search_ad": "네이버",
+    "gfa": "네이버",
+    "meta": "메타",
+    "facebook": "메타",
+    "facebook_ads": "메타",
+    "instagram": "메타",
+    "google": "구글",
+    "google_ads": "구글",
+    "googlead": "구글",
+    "pmax": "구글",
+}
+_CAMPAIGN_PLATFORM_LABELS = {
+    "WEB_SITE": "네이버",
+    "SHOPPING": "네이버",
+    "POWER_CONTENT": "네이버",
+    "POWER_CONTENTS": "네이버",
+    "BRAND_SEARCH": "네이버",
+    "PLACE": "네이버",
+    "파워링크": "네이버",
+    "쇼핑검색": "네이버",
+    "파워컨텐츠": "네이버",
+    "브랜드검색": "네이버",
+    "플레이스": "네이버",
+    "META": "메타",
+    "메타": "메타",
+    "GOOGLE": "구글",
+    "GOOGLE_ADS": "구글",
+    "구글": "구글",
+}
+
+
+def _normalize_media_label(value) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    return _PLATFORM_LABEL_MAP.get(raw.lower(), _CAMPAIGN_PLATFORM_LABELS.get(raw.upper(), _CAMPAIGN_PLATFORM_LABELS.get(raw, raw)))
+
+
+def _campaign_type_platform_label(value) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    return _CAMPAIGN_PLATFORM_LABELS.get(raw.upper(), _CAMPAIGN_PLATFORM_LABELS.get(raw, _normalize_media_label(raw)))
+
 
 def _normalize_customer_id_value_for_page(value) -> str:
     """Return a clean customer_id string for UI joins and filters.
@@ -72,14 +122,15 @@ def _customer_id_int_series_for_page(series: pd.Series) -> pd.Series:
     return numeric.astype("int64")
 
 def _platform_scope_rows(_engine) -> pd.DataFrame:
+    cols = ["customer_id", "account_name", "manager", "platform"]
     if _engine is None:
-        return pd.DataFrame(columns=["customer_id", "account_name", "manager"])
+        return pd.DataFrame(columns=cols)
     try:
         conn_df = get_platform_credentials(_engine)
     except Exception:
-        return pd.DataFrame(columns=["customer_id", "account_name", "manager"])
+        return pd.DataFrame(columns=cols)
     if conn_df is None or conn_df.empty:
-        return pd.DataFrame(columns=["customer_id", "account_name", "manager"])
+        return pd.DataFrame(columns=cols)
 
     work = conn_df.copy()
     if "is_active" in work.columns:
@@ -90,21 +141,36 @@ def _platform_scope_rows(_engine) -> pd.DataFrame:
         if not account_name:
             continue
         manager = str(row.get("manager", "") or "").strip()
-        for id_col in ["customer_id", "account_id"]:
+        platform = _normalize_media_label(row.get("platform", "")) or "네이버"
+
+        # 외부 매체는 account_id가 실제 fact 테이블 customer_id로 들어가는 경우가 많다.
+        # customer_id까지 같이 넣으면 네이버 계정 ID와 섞여 조회되므로, account_id를 우선한다.
+        id_cols = ["customer_id", "account_id"] if platform == "네이버" else ["account_id", "customer_id"]
+        added = False
+        for id_col in id_cols:
             customer_id = _normalize_customer_id_value_for_page(row.get(id_col, ""))
             if customer_id and customer_id.isdigit():
-                rows.append({"customer_id": customer_id, "account_name": account_name, "manager": manager})
+                rows.append({"customer_id": customer_id, "account_name": account_name, "manager": manager, "platform": platform})
+                added = True
+                if platform != "네이버":
+                    break
+        if not added:
+            continue
     if not rows:
-        return pd.DataFrame(columns=["customer_id", "account_name", "manager"])
+        return pd.DataFrame(columns=cols)
     return pd.DataFrame(rows).drop_duplicates().reset_index(drop=True)
 
 
 def _scope_df(meta: pd.DataFrame, _engine=None) -> pd.DataFrame:
-    base = meta.copy() if meta is not None and not meta.empty else pd.DataFrame(columns=["customer_id", "account_name", "manager"])
+    base = meta.copy() if meta is not None and not meta.empty else pd.DataFrame(columns=["customer_id", "account_name", "manager", "platform"])
     for col in ["customer_id", "account_name", "manager"]:
         if col not in base.columns:
             base[col] = ""
-    base = base[["customer_id", "account_name", "manager"]].copy()
+    if "platform" not in base.columns:
+        base["platform"] = "네이버"
+    else:
+        base["platform"] = base["platform"].apply(lambda x: _normalize_media_label(x) or "네이버")
+    base = base[["customer_id", "account_name", "manager", "platform"]].copy()
     linked = _platform_scope_rows(_engine)
     combined = pd.concat([base, linked], ignore_index=True)
     if combined.empty:
@@ -112,14 +178,18 @@ def _scope_df(meta: pd.DataFrame, _engine=None) -> pd.DataFrame:
     combined["customer_id"] = _normalize_customer_id_series_for_page(combined["customer_id"])
     combined["account_name"] = combined["account_name"].astype(str).str.strip()
     combined["manager"] = combined["manager"].astype(str).str.strip()
+    combined["platform"] = combined["platform"].apply(lambda x: _normalize_media_label(x) or "네이버")
     combined = combined[(combined["customer_id"] != "") & (combined["account_name"] != "")]
     return combined.drop_duplicates().reset_index(drop=True)
 
 
-def _all_customer_ids(meta: pd.DataFrame, _engine=None) -> list:
+def _all_customer_ids(meta: pd.DataFrame, _engine=None, platform_sel: list | tuple | None = None) -> list:
     work = _scope_df(meta, _engine)
     if work.empty or "customer_id" not in work.columns:
         return []
+    platforms = [_normalize_media_label(x) for x in (platform_sel or []) if _normalize_media_label(x)]
+    if platforms and "platform" in work.columns:
+        work = work[work["platform"].isin(platforms)]
     s = _customer_id_int_series_for_page(work["customer_id"])
     return sorted(s.drop_duplicates().tolist())
 
@@ -170,17 +240,20 @@ def _build_filter_maps(meta: pd.DataFrame, _engine=None) -> Dict:
     }
 
 
-def resolve_customer_ids(meta: pd.DataFrame, manager_sel: list, account_sel: list, engine=None) -> list:
+def resolve_customer_ids(meta: pd.DataFrame, manager_sel: list, account_sel: list, engine=None, platform_sel: list | tuple | None = None) -> list:
     manager_sel = [str(x).strip() for x in (manager_sel or []) if str(x).strip()]
     account_sel = [str(x).strip() for x in (account_sel or []) if str(x).strip()]
+    platform_sel = [_normalize_media_label(x) for x in (platform_sel or []) if _normalize_media_label(x)]
 
     # 아무 것도 선택하지 않았으면 전체 계정을 반환한다.
-    if not manager_sel and not account_sel:
+    if not manager_sel and not account_sel and not platform_sel:
         return _all_customer_ids(meta, engine)
 
     df = _scope_df(meta, engine)
     if df.empty:
         return []
+    if platform_sel and "platform" in df.columns:
+        df = df[df["platform"].isin(platform_sel)]
     if manager_sel and "manager" in df.columns:
         df = df[df["manager"].astype(str).str.strip().isin(manager_sel)]
     if account_sel and "account_name" in df.columns:
@@ -248,6 +321,7 @@ def _normalize_filter_state(values: Dict) -> Dict:
     out["q"] = str(out.get("q", "") or "")
     out["manager"] = list(out.get("manager", []) or [])
     out["account"] = list(out.get("account", []) or [])
+    out["media_sel"] = list(out.get("media_sel", []) or [])
     out["type_sel"] = list(out.get("type_sel", []) or [])
     out["top_n_campaign"] = int(out.get("top_n_campaign", 200) or 200)
     out["top_n_keyword"] = int(out.get("top_n_keyword", 300) or 300)
@@ -261,7 +335,7 @@ def build_filters(meta: pd.DataFrame, type_opts: List[str], engine=None) -> Dict
 
     if "filters_v8" not in st.session_state:
         st.session_state["filters_v8"] = {
-            "q": "", "manager": [], "account": [], "type_sel": [],
+            "q": "", "manager": [], "account": [], "media_sel": [], "type_sel": [],
             "period_mode": "어제", "d1": default_start, "d2": default_end,
             "top_n_campaign": 200, "top_n_keyword": 300, "top_n_ad": 200, "prefetch_warm": True, "show_diagnostics": False,
         }
@@ -328,15 +402,18 @@ def build_filters(meta: pd.DataFrame, type_opts: List[str], engine=None) -> Dict
         st.divider()
 
         st.markdown("<div style='font-size:13px; font-weight:600; color:var(--nv-muted); margin-bottom:8px;'>담당자 및 계정</div>", unsafe_allow_html=True)
+        media_default = [x for x in (sv.get("media_sel", []) or []) if x in MEDIA_OPTIONS]
+        media_sel = ui_multiselect(st, "매체", MEDIA_OPTIONS, default=media_default, key="f_media_sel", placeholder="전체 매체")
         manager_sel = ui_multiselect(st, "담당자", managers, default=sv.get("manager", []), key="f_manager", placeholder="전체 담당자")
 
-        accounts_by_mgr = accounts
-        if manager_sel:
-            selected_accounts = []
-            manager_to_accounts = filter_maps.get("manager_to_accounts", {})
-            for manager in manager_sel:
-                selected_accounts.extend(manager_to_accounts.get(str(manager).strip(), []))
-            accounts_by_mgr = sorted(set(selected_accounts))
+        scope_options = _scope_df(meta, engine)
+        if media_sel and "platform" in scope_options.columns:
+            scope_options = scope_options[scope_options["platform"].isin(media_sel)]
+        if manager_sel and "manager" in scope_options.columns:
+            scope_options = scope_options[scope_options["manager"].astype(str).str.strip().isin([str(x).strip() for x in manager_sel])]
+        accounts_by_mgr = sorted([x for x in scope_options.get("account_name", pd.Series(dtype=str)).dropna().unique().tolist() if str(x).strip()])
+        if not accounts_by_mgr:
+            accounts_by_mgr = accounts
 
         prev_acc = [a for a in (sv.get("account", []) or []) if a in accounts_by_mgr]
         account_sel = ui_multiselect(st, "광고주(계정)", accounts_by_mgr, default=prev_acc, key="f_account", placeholder="전체 계정")
@@ -346,6 +423,8 @@ def build_filters(meta: pd.DataFrame, type_opts: List[str], engine=None) -> Dict
             selected_scope = f"계정 {len(account_sel):,}개 선택"
         elif manager_sel:
             selected_scope = f"담당자 {len(manager_sel):,}명 선택"
+        if media_sel:
+            selected_scope = f"{selected_scope} · 매체 {len(media_sel):,}개"
         st.markdown(
             f"<div style='display:flex; flex-direction:column; gap:6px; padding:10px 12px; border:1px solid var(--nv-line); border-radius:10px; background:var(--nv-bg); margin-top:12px;'>"
             f"<div style='font-size:11px; color:var(--nv-muted); font-weight:800;'>현재 범위</div>"
@@ -371,7 +450,7 @@ def build_filters(meta: pd.DataFrame, type_opts: List[str], engine=None) -> Dict
         st.caption("필터 변경 시 즉시 반영됩니다.")
 
     updated_filters = _normalize_filter_state({
-        "q": q or "", "manager": manager_sel or [], "account": account_sel or [],
+        "q": q or "", "manager": manager_sel or [], "account": account_sel or [], "media_sel": media_sel or [],
         "type_sel": type_sel or [], "period_mode": period_mode, "d1": d1, "d2": d2,
         "top_n_campaign": top_n_campaign, "top_n_keyword": top_n_keyword, "top_n_ad": top_n_ad,
         "prefetch_warm": sv.get("prefetch_warm", True), "show_diagnostics": bool(show_diagnostics),
@@ -381,22 +460,22 @@ def build_filters(meta: pd.DataFrame, type_opts: List[str], engine=None) -> Dict
         st.session_state["filters_v8"] = dict(updated_filters)
         sv = st.session_state["filters_v8"]
 
-    cids = resolve_customer_ids(meta, manager_sel, account_sel, engine)
-    if not cids and not (manager_sel or account_sel):
+    cids = resolve_customer_ids(meta, manager_sel, account_sel, engine, media_sel)
+    if not cids and not (manager_sel or account_sel or media_sel):
         cids = _all_customer_ids(meta, engine)
 
     return {
-        "q": sv["q"], "manager": sv["manager"], "account": sv["account"], "type_sel": tuple(sv["type_sel"]) if sv["type_sel"] else tuple(),
+        "q": sv["q"], "manager": sv["manager"], "account": sv["account"], "media_sel": tuple(sv.get("media_sel", [])) if sv.get("media_sel") else tuple(), "type_sel": tuple(sv["type_sel"]) if sv["type_sel"] else tuple(),
         "start": d1, "end": d2, "period_mode": period_mode, "customer_ids": cids, "selected_customer_ids": cids,
         "top_n_keyword": int(sv.get("top_n_keyword", 300)), "top_n_ad": int(sv.get("top_n_ad", 200)), "top_n_campaign": int(sv.get("top_n_campaign", 200)),
         "show_diagnostics": bool(sv.get("show_diagnostics", False)),
         "ready": True,
     }
 
-def _perf_common_merge_meta(df: pd.DataFrame, meta: pd.DataFrame) -> pd.DataFrame:
-    if df is None or df.empty or meta is None or meta.empty:
+def _perf_common_merge_meta(df: pd.DataFrame, meta: pd.DataFrame, _engine=None) -> pd.DataFrame:
+    if df is None or df.empty:
         return df
-    if "customer_id" not in df.columns or "customer_id" not in meta.columns:
+    if "customer_id" not in df.columns:
         return df
 
     out = df.copy()
@@ -409,23 +488,41 @@ def _perf_common_merge_meta(df: pd.DataFrame, meta: pd.DataFrame) -> pd.DataFram
     out = out.dropna(subset=["customer_id"]).copy()
     out["customer_id"] = out["customer_id"].astype("int64")
 
-    meta_copy = meta.copy()
-    meta_copy["_customer_id_key"] = _normalize_customer_id_series_for_page(meta_copy["customer_id"])
-    meta_copy = meta_copy[meta_copy["_customer_id_key"].astype(str).str.strip() != ""].copy()
-    if meta_copy.empty:
-        return out.drop(columns=["_customer_id_key"], errors="ignore")
+    meta_scope = _scope_df(meta, _engine) if meta is not None else pd.DataFrame()
+    if meta_scope is not None and not meta_scope.empty:
+        meta_copy = meta_scope.copy()
+        meta_copy["_customer_id_key"] = _normalize_customer_id_series_for_page(meta_copy["customer_id"])
+        meta_copy = meta_copy[meta_copy["_customer_id_key"].astype(str).str.strip() != ""].copy()
+        for col in ["account_name", "manager", "platform"]:
+            if col not in meta_copy.columns:
+                meta_copy[col] = ""
+        meta_view = (
+            meta_copy[["_customer_id_key", "account_name", "manager", "platform"]]
+            .drop_duplicates(subset=["_customer_id_key"], keep="last")
+        )
+        merged = out.merge(meta_view, on="_customer_id_key", how="left", suffixes=("", "_meta"))
+        for col in ["account_name", "manager", "platform"]:
+            meta_col = f"{col}_meta"
+            if meta_col in merged.columns:
+                if col in merged.columns:
+                    merged[col] = merged[col].where(merged[col].astype(str).str.strip() != "", merged[meta_col])
+                    merged[col] = merged[col].where(merged[col].notna(), merged[meta_col])
+                else:
+                    merged[col] = merged[meta_col]
+                merged = merged.drop(columns=[meta_col], errors="ignore")
+    else:
+        merged = out.copy()
 
-    if "account_name" not in meta_copy.columns:
-        meta_copy["account_name"] = ""
-    if "manager" not in meta_copy.columns:
-        meta_copy["manager"] = ""
-
-    meta_view = (
-        meta_copy[["_customer_id_key", "account_name", "manager"]]
-        .drop_duplicates(subset=["_customer_id_key"], keep="last")
-    )
-    merged = out.merge(meta_view, on="_customer_id_key", how="left")
+    if "platform" not in merged.columns:
+        merged["platform"] = ""
+    merged["platform"] = merged["platform"].apply(_normalize_media_label)
+    type_cols = [c for c in ["campaign_type", "campaign_type_label", "campaign_tp", "캠페인유형"] if c in merged.columns]
+    if type_cols:
+        inferred = merged[type_cols[0]].apply(_campaign_type_platform_label)
+        merged["platform"] = merged["platform"].where(merged["platform"].astype(str).str.strip() != "", inferred)
+    merged["platform"] = merged["platform"].replace("", "네이버")
     return merged.drop(columns=["_customer_id_key"], errors="ignore")
+
 def append_comparison_data(df_cur: pd.DataFrame, df_prev: pd.DataFrame, join_keys: list) -> pd.DataFrame:
     if df_prev is None or df_prev.empty or df_cur is None or df_cur.empty: return df_cur.copy()
     valid_join_keys = [k for k in join_keys if k in df_cur.columns and k in df_prev.columns]

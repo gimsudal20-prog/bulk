@@ -257,6 +257,10 @@ def _build_campaign_type_filter(column_name: str, type_sel: tuple, param_prefix:
         "플레이스": "PLACE",
         "메타": "메타",
         "META": "메타",
+        "구글": "구글",
+        "GOOGLE": "구글",
+        "GOOGLE_ADS": "구글",
+        "Google Ads": "구글",
     }
     db_types = [rev_map.get(t, t) for t in normalized_types]
     where_sql, params = _build_in_filter(f"c.{safe_column}", db_types, param_prefix)
@@ -583,16 +587,15 @@ def get_campaign_type_options(dim_campaign: pd.DataFrame) -> list:
     if col_name not in dim_campaign.columns:
         return ["파워링크", "쇼핑검색"]
 
-    mapping = {"WEB_SITE": "파워링크", "SHOPPING": "쇼핑검색", "POWER_CONTENT": "파워컨텐츠", "POWER_CONTENTS": "파워컨텐츠", "BRAND_SEARCH": "브랜드검색", "PLACE": "플레이스"}
+    mapping = {"WEB_SITE": "파워링크", "SHOPPING": "쇼핑검색", "POWER_CONTENT": "파워컨텐츠", "POWER_CONTENTS": "파워컨텐츠", "BRAND_SEARCH": "브랜드검색", "PLACE": "플레이스", "META": "메타", "메타": "메타", "GOOGLE": "구글", "GOOGLE_ADS": "구글", "구글": "구글"}
     raw_opts = [str(x) for x in dim_campaign[col_name].dropna().unique() if str(x).strip()]
-    mapping["META"] = "메타"
-    opts = list(set([mapping.get(x.upper(), x) for x in raw_opts]))
+    opts = list(set([mapping.get(x.upper(), mapping.get(x, x)) for x in raw_opts]))
     return sorted(opts) if opts else ["파워링크", "쇼핑검색"]
 
 def _map_campaign_types(df: pd.DataFrame, col_name: str) -> pd.DataFrame:
     if not df.empty and col_name in df.columns:
-        mapping = {"WEB_SITE": "파워링크", "SHOPPING": "쇼핑검색", "POWER_CONTENT": "파워컨텐츠", "POWER_CONTENTS": "파워컨텐츠", "BRAND_SEARCH": "브랜드검색", "PLACE": "플레이스", "META": "메타"}
-        df[col_name] = df[col_name].apply(lambda x: mapping.get(str(x).upper(), x) if pd.notna(x) else x)
+        mapping = {"WEB_SITE": "파워링크", "SHOPPING": "쇼핑검색", "POWER_CONTENT": "파워컨텐츠", "POWER_CONTENTS": "파워컨텐츠", "BRAND_SEARCH": "브랜드검색", "PLACE": "플레이스", "META": "메타", "메타": "메타", "GOOGLE": "구글", "GOOGLE_ADS": "구글", "구글": "구글"}
+        df[col_name] = df[col_name].apply(lambda x: mapping.get(str(x).upper(), mapping.get(str(x), x)) if pd.notna(x) else x)
     return df
 
 @st.cache_data(ttl=DASHBOARD_DATA_CACHE_TTL, max_entries=30, show_spinner=False)
@@ -922,8 +925,30 @@ def _bundle_limit_clause(topn_cost: int) -> str:
     return f" ORDER BY agg.cost DESC LIMIT {limit_value}"
 
 
+def _infer_platform_label_from_campaign_type(value) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    key = raw.upper()
+    if key in {"META", "메타"}:
+        return "메타"
+    if key in {"GOOGLE", "GOOGLE_ADS", "구글"}:
+        return "구글"
+    if key in {"WEB_SITE", "SHOPPING", "POWER_CONTENT", "POWER_CONTENTS", "BRAND_SEARCH", "PLACE", "파워링크", "쇼핑검색", "파워컨텐츠", "브랜드검색", "플레이스"}:
+        return "네이버"
+    return ""
+
+
 def _finalize_bundle_df(df: pd.DataFrame, campaign_type_col: str) -> pd.DataFrame:
-    return _map_campaign_types(df, campaign_type_col)
+    df = _map_campaign_types(df, campaign_type_col)
+    if df is not None and not df.empty and campaign_type_col in df.columns:
+        inferred = df[campaign_type_col].apply(_infer_platform_label_from_campaign_type)
+        if "platform" in df.columns:
+            df["platform"] = df["platform"].where(df["platform"].astype(str).str.strip() != "", inferred)
+        else:
+            df["platform"] = inferred
+        df["platform"] = df["platform"].replace("", "네이버")
+    return df
 
 
 def _read_fact_customer_summary(_engine, table: str, select_sql: str, d1: date, d2: date, where_cid: str, cid_params: dict) -> pd.DataFrame:
@@ -1098,6 +1123,7 @@ def query_budget_bundle(_engine, cids: tuple, yesterday: date, avg_d1: date, avg
         df["manager"] = "미배정"
     if "account_name" not in df.columns:
         df["account_name"] = df["customer_id"].astype(str)
+    df["platform"] = "네이버"
     return df
 
 def update_monthly_budget(_engine, cid: int, val: int):

@@ -998,6 +998,8 @@ def _normalize_type_label(val) -> str:
     if "브랜드" in s or "BRAND" in s: return "브랜드검색"
     if "POWER_CONTENTS" in s or "파워컨텐츠" in s: return "파워컨텐츠"
     if "PLACE" in s or "플레이스" in s: return "플레이스"
+    if "META" in s or "메타" in s: return "메타"
+    if "GOOGLE" in s or "구글" in s: return "구글"
     return str(val).strip()
 
 
@@ -1031,7 +1033,10 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
 
     diag: list[dict] = []
     raw_cids = tuple(f.get("selected_customer_ids", []))
-    cids = _expand_overview_customer_ids(meta, engine, raw_cids)
+    media_sel = tuple(f.get("media_sel", []))
+    # 매체 필터가 지정된 경우에는 전역 필터에서 이미 해당 매체 ID로 제한되어 있으므로
+    # 오버뷰의 고객 ID 확장 로직이 다시 메타/구글/네이버를 섞지 않도록 확장을 건너뜁니다.
+    cids = tuple(raw_cids) if media_sel else _expand_overview_customer_ids(meta, engine, raw_cids)
     type_sel = tuple(f.get("type_sel", []))
     opts = get_dynamic_cmp_options(f["start"], f["end"])
     cmp_mode = opts[1] if len(opts) > 1 else "이전 같은 기간 대비"
@@ -1042,7 +1047,7 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
         "ok",
         len(cids),
         "filters",
-        f"기간={f['start']}~{f['end']} | 비교={cmp_mode} | 유형={', '.join(type_sel) if type_sel else '전체'} | 원선택={len(raw_cids)} / 확장={len(cids)}",
+        f"기간={f['start']}~{f['end']} | 비교={cmp_mode} | 매체={', '.join(media_sel) if media_sel else '전체'} | 유형={', '.join(type_sel) if type_sel else '전체'} | 원선택={len(raw_cids)} / 조회={len(cids)}",
     )
 
     with st.spinner("데이터를 집계 중입니다... (최적화 모드)"):

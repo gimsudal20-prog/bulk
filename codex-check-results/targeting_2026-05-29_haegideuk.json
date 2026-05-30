@@ -11,38 +11,13 @@
       "hour_raw_rows": 651,
       "hour_meta": {
         "raw_rows": 651,
-        "parsed_rows": 29,
+        "parsed_rows": 622,
         "missing_id": 0,
-        "missing_breakdown": 622,
+        "missing_breakdown": 0,
         "bad_hour": 0,
         "zero_metric": 0,
         "samples": {
-          "missing_breakdown": [
-            {
-              "ccnt": 0,
-              "name": "00시~01시",
-              "clkCnt": 0,
-              "impCnt": 73,
-              "salesAmt": 0,
-              "id": "cmp-a001-01-000000010657933"
-            },
-            {
-              "ccnt": 0,
-              "name": "01시~02시",
-              "clkCnt": 0,
-              "impCnt": 35,
-              "salesAmt": 0,
-              "id": "cmp-a001-01-000000010657933"
-            },
-            {
-              "ccnt": 0,
-              "name": "02시~03시",
-              "clkCnt": 0,
-              "impCnt": 30,
-              "salesAmt": 0,
-              "id": "cmp-a001-01-000000010657933"
-            }
-          ],
+          "missing_breakdown": [],
           "bad_hour": [],
           "zero_metric": []
         }

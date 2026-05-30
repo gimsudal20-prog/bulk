@@ -259,32 +259,15 @@ def _kpi_row(summary: pd.DataFrame) -> None:
 
 
 def _render_static_bar_chart(df: pd.DataFrame, label_col: str, value_col: str, *, value_label: str = "광고비") -> None:
-    """Render a non-interactive horizontal bar chart to avoid wheel/hover zoom side effects."""
+    """Render a native Streamlit bar chart so raw HTML never leaks into the UI."""
     if df is None or df.empty or label_col not in df.columns or value_col not in df.columns:
         st.info("차트로 표시할 데이터가 없습니다.")
         return
     work = df[[label_col, value_col]].copy()
     work[value_col] = pd.to_numeric(work[value_col], errors="coerce").fillna(0)
-    max_val = float(work[value_col].max() or 0)
-    rows_html = []
-    for _, row in work.iterrows():
-        label = escape(str(row.get(label_col, "")))
-        val = float(row.get(value_col, 0) or 0)
-        pct = 0 if max_val <= 0 else max(1.5, min(100, val / max_val * 100))
-        val_text = f"{val:,.0f}원" if value_label == "광고비" else f"{val:,.0f}"
-        rows_html.append(
-            f"""
-            <div class='ta-chart-row'>
-                <div class='ta-chart-label'>{label}</div>
-                <div class='ta-chart-track'><div class='ta-chart-bar' style='width:{pct:.2f}%'></div></div>
-                <div class='ta-chart-value'>{escape(val_text)}</div>
-            </div>
-            """
-        )
-    st.markdown(
-        f"<div class='ta-chart-card'>{''.join(rows_html)}</div>",
-        unsafe_allow_html=True,
-    )
+    work[label_col] = work[label_col].astype(str)
+    chart_data = work.rename(columns={value_col: value_label}).set_index(label_col)
+    st.bar_chart(chart_data, height=320, use_container_width=True)
 
 
 def _filter_campaign_and_group(
@@ -644,12 +627,6 @@ def page_time_age(meta: pd.DataFrame, engine, f: Dict) -> None:
         .ta-section-head{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin:22px 0 10px;padding:0 2px;}
         .ta-section-title{font-size:15px;font-weight:850;color:#0F172A;letter-spacing:-.02em;}
         .ta-section-desc{font-size:12px;font-weight:650;color:#64748B;text-align:right;line-height:1.35;}
-        .ta-chart-card{border:1px solid #E2E8F0;border-radius:16px;background:#fff;box-shadow:0 6px 18px rgba(15,23,42,.035);padding:14px 16px;margin:8px 0 16px;user-select:none;}
-        .ta-chart-row{display:grid;grid-template-columns:minmax(84px,140px) 1fr minmax(84px,104px);gap:10px;align-items:center;margin:8px 0;}
-        .ta-chart-label{font-size:12px;font-weight:750;color:#334155;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-        .ta-chart-track{height:12px;border-radius:999px;background:#F1F5F9;overflow:hidden;}
-        .ta-chart-bar{height:100%;border-radius:999px;background:#CBD5E1;}
-        .ta-chart-value{font-size:12px;font-weight:750;color:#475569;text-align:right;font-variant-numeric:tabular-nums;}
         [data-baseweb="tab-list"]{margin-top:14px!important;}
         div[data-baseweb="select"]{transform:none!important;transition:none!important;}
         </style>

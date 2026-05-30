@@ -1,0 +1,1766 @@
+[
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000010655475",
+    "mode": "id",
+    "breakdown": "ageRangeNm",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 39300,
+        "clkCnt": 19,
+        "dateStart": "2026-05-29",
+        "ccnt": 5,
+        "dateEnd": "2026-05-29",
+        "impCnt": 5289,
+        "salesAmt": 10041
+      }
+    ]
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000010655475",
+    "mode": "ids",
+    "breakdown": "ageRangeNm",
+    "status": 200,
+    "sample": [
+      {
+        "ccnt": 5,
+        "convAmt": 39300,
+        "id": "cmp-a001-02-000000010655475",
+        "clkCnt": 19,
+        "impCnt": 5289,
+        "salesAmt": 10041
+      }
+    ]
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000010655475",
+    "mode": "id",
+    "breakdown": "ageRange",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 39300,
+        "clkCnt": 19,
+        "dateStart": "2026-05-29",
+        "ccnt": 5,
+        "dateEnd": "2026-05-29",
+        "impCnt": 5289,
+        "salesAmt": 10041
+      }
+    ]
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000010655475",
+    "mode": "ids",
+    "breakdown": "ageRange",
+    "status": 200,
+    "sample": [
+      {
+        "ccnt": 5,
+        "convAmt": 39300,
+        "id": "cmp-a001-02-000000010655475",
+        "clkCnt": 19,
+        "impCnt": 5289,
+        "salesAmt": 10041
+      }
+    ]
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000010655475",
+    "mode": "id",
+    "breakdown": "age",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 39300,
+        "clkCnt": 19,
+        "dateStart": "2026-05-29",
+        "ccnt": 5,
+        "dateEnd": "2026-05-29",
+        "impCnt": 5289,
+        "salesAmt": 10041
+      }
+    ]
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000010655475",
+    "mode": "ids",
+    "breakdown": "age",
+    "status": 200,
+    "sample": [
+      {
+        "ccnt": 5,
+        "convAmt": 39300,
+        "id": "cmp-a001-02-000000010655475",
+        "clkCnt": 19,
+        "impCnt": 5289,
+        "salesAmt": 10041
+      }
+    ]
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000010655475",
+    "mode": "id",
+    "breakdown": "ageRangeCd",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 39300,
+        "clkCnt": 19,
+        "dateStart": "2026-05-29",
+        "ccnt": 5,
+        "dateEnd": "2026-05-29",
+        "impCnt": 5289,
+        "salesAmt": 10041
+      }
+    ]
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000010655475",
+    "mode": "ids",
+    "breakdown": "ageRangeCd",
+    "status": 200,
+    "sample": [
+      {
+        "ccnt": 5,
+        "convAmt": 39300,
+        "id": "cmp-a001-02-000000010655475",
+        "clkCnt": 19,
+        "impCnt": 5289,
+        "salesAmt": 10041
+      }
+    ]
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000010655475",
+    "mode": "id",
+    "breakdown": "ageTp",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 39300,
+        "clkCnt": 19,
+        "dateStart": "2026-05-29",
+        "ccnt": 5,
+        "dateEnd": "2026-05-29",
+        "impCnt": 5289,
+        "salesAmt": 10041
+      }
+    ]
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000010655475",
+    "mode": "ids",
+    "breakdown": "ageTp",
+    "status": 200,
+    "sample": [
+      {
+        "ccnt": 5,
+        "convAmt": 39300,
+        "id": "cmp-a001-02-000000010655475",
+        "clkCnt": 19,
+        "impCnt": 5289,
+        "salesAmt": 10041
+      }
+    ]
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000010655475",
+    "mode": "id",
+    "breakdown": "ageType",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 39300,
+        "clkCnt": 19,
+        "dateStart": "2026-05-29",
+        "ccnt": 5,
+        "dateEnd": "2026-05-29",
+        "impCnt": 5289,
+        "salesAmt": 10041
+      }
+    ]
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000010655475",
+    "mode": "ids",
+    "breakdown": "ageType",
+    "status": 200,
+    "sample": [
+      {
+        "ccnt": 5,
+        "convAmt": 39300,
+        "id": "cmp-a001-02-000000010655475",
+        "clkCnt": 19,
+        "impCnt": 5289,
+        "salesAmt": 10041
+      }
+    ]
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000010655475",
+    "mode": "id",
+    "breakdown": "genderNm",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 39300,
+        "clkCnt": 19,
+        "dateStart": "2026-05-29",
+        "ccnt": 5,
+        "dateEnd": "2026-05-29",
+        "impCnt": 5289,
+        "salesAmt": 10041
+      }
+    ]
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000010655475",
+    "mode": "ids",
+    "breakdown": "genderNm",
+    "status": 200,
+    "sample": [
+      {
+        "ccnt": 5,
+        "convAmt": 39300,
+        "id": "cmp-a001-02-000000010655475",
+        "clkCnt": 19,
+        "impCnt": 5289,
+        "salesAmt": 10041
+      }
+    ]
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000067511541",
+    "mode": "id",
+    "breakdown": "ageRangeNm",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 2,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000067511541",
+    "mode": "ids",
+    "breakdown": "ageRangeNm",
+    "status": 200,
+    "sample": [
+      {
+        "ccnt": 0,
+        "convAmt": 0,
+        "id": "grp-a001-02-000000067511541",
+        "clkCnt": 0,
+        "impCnt": 2,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000067511541",
+    "mode": "id",
+    "breakdown": "ageRange",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 2,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000067511541",
+    "mode": "ids",
+    "breakdown": "ageRange",
+    "status": 200,
+    "sample": [
+      {
+        "ccnt": 0,
+        "convAmt": 0,
+        "id": "grp-a001-02-000000067511541",
+        "clkCnt": 0,
+        "impCnt": 2,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000067511541",
+    "mode": "id",
+    "breakdown": "age",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 2,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000067511541",
+    "mode": "ids",
+    "breakdown": "age",
+    "status": 200,
+    "sample": [
+      {
+        "ccnt": 0,
+        "convAmt": 0,
+        "id": "grp-a001-02-000000067511541",
+        "clkCnt": 0,
+        "impCnt": 2,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000067511541",
+    "mode": "id",
+    "breakdown": "ageRangeCd",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 2,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000067511541",
+    "mode": "ids",
+    "breakdown": "ageRangeCd",
+    "status": 200,
+    "sample": [
+      {
+        "ccnt": 0,
+        "convAmt": 0,
+        "id": "grp-a001-02-000000067511541",
+        "clkCnt": 0,
+        "impCnt": 2,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000067511541",
+    "mode": "id",
+    "breakdown": "ageTp",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 2,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000067511541",
+    "mode": "ids",
+    "breakdown": "ageTp",
+    "status": 200,
+    "sample": [
+      {
+        "ccnt": 0,
+        "convAmt": 0,
+        "id": "grp-a001-02-000000067511541",
+        "clkCnt": 0,
+        "impCnt": 2,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000067511541",
+    "mode": "id",
+    "breakdown": "ageType",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 2,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000067511541",
+    "mode": "ids",
+    "breakdown": "ageType",
+    "status": 200,
+    "sample": [
+      {
+        "ccnt": 0,
+        "convAmt": 0,
+        "id": "grp-a001-02-000000067511541",
+        "clkCnt": 0,
+        "impCnt": 2,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000067511541",
+    "mode": "id",
+    "breakdown": "genderNm",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 2,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000067511541",
+    "mode": "ids",
+    "breakdown": "genderNm",
+    "status": 200,
+    "sample": [
+      {
+        "ccnt": 0,
+        "convAmt": 0,
+        "id": "grp-a001-02-000000067511541",
+        "clkCnt": 0,
+        "impCnt": 2,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000527516644",
+    "mode": "id",
+    "breakdown": "ageRangeNm",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000527516644",
+    "mode": "ids",
+    "breakdown": "ageRangeNm",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000527516644",
+    "mode": "id",
+    "breakdown": "ageRange",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000527516644",
+    "mode": "ids",
+    "breakdown": "ageRange",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000527516644",
+    "mode": "id",
+    "breakdown": "age",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000527516644",
+    "mode": "ids",
+    "breakdown": "age",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000527516644",
+    "mode": "id",
+    "breakdown": "ageRangeCd",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000527516644",
+    "mode": "ids",
+    "breakdown": "ageRangeCd",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000527516644",
+    "mode": "id",
+    "breakdown": "ageTp",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000527516644",
+    "mode": "ids",
+    "breakdown": "ageTp",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000527516644",
+    "mode": "id",
+    "breakdown": "ageType",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000527516644",
+    "mode": "ids",
+    "breakdown": "ageType",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000527516644",
+    "mode": "id",
+    "breakdown": "genderNm",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000527516644",
+    "mode": "ids",
+    "breakdown": "genderNm",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000009314903",
+    "mode": "id",
+    "breakdown": "ageRangeNm",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000009314903",
+    "mode": "ids",
+    "breakdown": "ageRangeNm",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000009314903",
+    "mode": "id",
+    "breakdown": "ageRange",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000009314903",
+    "mode": "ids",
+    "breakdown": "ageRange",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000009314903",
+    "mode": "id",
+    "breakdown": "age",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000009314903",
+    "mode": "ids",
+    "breakdown": "age",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000009314903",
+    "mode": "id",
+    "breakdown": "ageRangeCd",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000009314903",
+    "mode": "ids",
+    "breakdown": "ageRangeCd",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000009314903",
+    "mode": "id",
+    "breakdown": "ageTp",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000009314903",
+    "mode": "ids",
+    "breakdown": "ageTp",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000009314903",
+    "mode": "id",
+    "breakdown": "ageType",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000009314903",
+    "mode": "ids",
+    "breakdown": "ageType",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000009314903",
+    "mode": "id",
+    "breakdown": "genderNm",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000009314903",
+    "mode": "ids",
+    "breakdown": "genderNm",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000049650887",
+    "mode": "id",
+    "breakdown": "ageRangeNm",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000049650887",
+    "mode": "ids",
+    "breakdown": "ageRangeNm",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000049650887",
+    "mode": "id",
+    "breakdown": "ageRange",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000049650887",
+    "mode": "ids",
+    "breakdown": "ageRange",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000049650887",
+    "mode": "id",
+    "breakdown": "age",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000049650887",
+    "mode": "ids",
+    "breakdown": "age",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000049650887",
+    "mode": "id",
+    "breakdown": "ageRangeCd",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000049650887",
+    "mode": "ids",
+    "breakdown": "ageRangeCd",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000049650887",
+    "mode": "id",
+    "breakdown": "ageTp",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000049650887",
+    "mode": "ids",
+    "breakdown": "ageTp",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000049650887",
+    "mode": "id",
+    "breakdown": "ageType",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000049650887",
+    "mode": "ids",
+    "breakdown": "ageType",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000049650887",
+    "mode": "id",
+    "breakdown": "genderNm",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000049650887",
+    "mode": "ids",
+    "breakdown": "genderNm",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000375994654",
+    "mode": "id",
+    "breakdown": "ageRangeNm",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000375994654",
+    "mode": "ids",
+    "breakdown": "ageRangeNm",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000375994654",
+    "mode": "id",
+    "breakdown": "ageRange",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000375994654",
+    "mode": "ids",
+    "breakdown": "ageRange",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000375994654",
+    "mode": "id",
+    "breakdown": "age",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000375994654",
+    "mode": "ids",
+    "breakdown": "age",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000375994654",
+    "mode": "id",
+    "breakdown": "ageRangeCd",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000375994654",
+    "mode": "ids",
+    "breakdown": "ageRangeCd",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000375994654",
+    "mode": "id",
+    "breakdown": "ageTp",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000375994654",
+    "mode": "ids",
+    "breakdown": "ageTp",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000375994654",
+    "mode": "id",
+    "breakdown": "ageType",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000375994654",
+    "mode": "ids",
+    "breakdown": "ageType",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000375994654",
+    "mode": "id",
+    "breakdown": "genderNm",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000375994654",
+    "mode": "ids",
+    "breakdown": "genderNm",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000009314903",
+    "mode": "id",
+    "breakdown": "ageRangeNm",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000009314903",
+    "mode": "ids",
+    "breakdown": "ageRangeNm",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000009314903",
+    "mode": "id",
+    "breakdown": "ageRange",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000009314903",
+    "mode": "ids",
+    "breakdown": "ageRange",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000009314903",
+    "mode": "id",
+    "breakdown": "age",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000009314903",
+    "mode": "ids",
+    "breakdown": "age",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000009314903",
+    "mode": "id",
+    "breakdown": "ageRangeCd",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000009314903",
+    "mode": "ids",
+    "breakdown": "ageRangeCd",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000009314903",
+    "mode": "id",
+    "breakdown": "ageTp",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000009314903",
+    "mode": "ids",
+    "breakdown": "ageTp",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000009314903",
+    "mode": "id",
+    "breakdown": "ageType",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000009314903",
+    "mode": "ids",
+    "breakdown": "ageType",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000009314903",
+    "mode": "id",
+    "breakdown": "genderNm",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "campaign",
+    "id": "cmp-a001-02-000000009314903",
+    "mode": "ids",
+    "breakdown": "genderNm",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000049650887",
+    "mode": "id",
+    "breakdown": "ageRangeNm",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000049650887",
+    "mode": "ids",
+    "breakdown": "ageRangeNm",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000049650887",
+    "mode": "id",
+    "breakdown": "ageRange",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000049650887",
+    "mode": "ids",
+    "breakdown": "ageRange",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000049650887",
+    "mode": "id",
+    "breakdown": "age",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000049650887",
+    "mode": "ids",
+    "breakdown": "age",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000049650887",
+    "mode": "id",
+    "breakdown": "ageRangeCd",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000049650887",
+    "mode": "ids",
+    "breakdown": "ageRangeCd",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000049650887",
+    "mode": "id",
+    "breakdown": "ageTp",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000049650887",
+    "mode": "ids",
+    "breakdown": "ageTp",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000049650887",
+    "mode": "id",
+    "breakdown": "ageType",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000049650887",
+    "mode": "ids",
+    "breakdown": "ageType",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000049650887",
+    "mode": "id",
+    "breakdown": "genderNm",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "adgroup",
+    "id": "grp-a001-02-000000049650887",
+    "mode": "ids",
+    "breakdown": "genderNm",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000375996290",
+    "mode": "id",
+    "breakdown": "ageRangeNm",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000375996290",
+    "mode": "ids",
+    "breakdown": "ageRangeNm",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000375996290",
+    "mode": "id",
+    "breakdown": "ageRange",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000375996290",
+    "mode": "ids",
+    "breakdown": "ageRange",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000375996290",
+    "mode": "id",
+    "breakdown": "age",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000375996290",
+    "mode": "ids",
+    "breakdown": "age",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000375996290",
+    "mode": "id",
+    "breakdown": "ageRangeCd",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000375996290",
+    "mode": "ids",
+    "breakdown": "ageRangeCd",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000375996290",
+    "mode": "id",
+    "breakdown": "ageTp",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000375996290",
+    "mode": "ids",
+    "breakdown": "ageTp",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000375996290",
+    "mode": "id",
+    "breakdown": "ageType",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000375996290",
+    "mode": "ids",
+    "breakdown": "ageType",
+    "status": 200,
+    "sample": []
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000375996290",
+    "mode": "id",
+    "breakdown": "genderNm",
+    "status": 200,
+    "sample": [
+      {
+        "convAmt": 0,
+        "clkCnt": 0,
+        "dateStart": "2026-05-29",
+        "ccnt": 0,
+        "dateEnd": "2026-05-29",
+        "impCnt": 0,
+        "salesAmt": 0
+      }
+    ]
+  },
+  {
+    "entity": "ad",
+    "id": "nad-a001-02-000000375996290",
+    "mode": "ids",
+    "breakdown": "genderNm",
+    "status": 200,
+    "sample": []
+  }
+]

@@ -404,6 +404,7 @@ def get_stats_breakdown_range(
 def _build_rows_from_breakdown(raw_rows: List[dict], customer_id: str, target_date: date, breakdown: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     agg: Dict[Tuple[str, Any], Dict[str, Any]] = {}
     rejected = {"missing_id": 0, "missing_breakdown": 0, "bad_hour": 0, "zero_metric": 0}
+    samples = {"missing_breakdown": [], "bad_hour": [], "zero_metric": []}
 
     for row in raw_rows or []:
         cid = _extract_id(row)
@@ -413,11 +414,15 @@ def _build_rows_from_breakdown(raw_rows: List[dict], customer_id: str, target_da
         bd_value = _extract_breakdown_value(row, breakdown)
         if not bd_value:
             rejected["missing_breakdown"] += 1
+            if len(samples["missing_breakdown"]) < 3:
+                samples["missing_breakdown"].append({k: row.get(k) for k in list(row.keys())[:12]})
             continue
         if breakdown == "hh24":
             bucket_value = normalize_hour_value(bd_value)
             if bucket_value is None:
                 rejected["bad_hour"] += 1
+                if len(samples["bad_hour"]) < 3:
+                    samples["bad_hour"].append({k: row.get(k) for k in list(row.keys())[:12]})
                 continue
         else:
             bucket_value = normalize_age_range(bd_value)
@@ -429,6 +434,8 @@ def _build_rows_from_breakdown(raw_rows: List[dict], customer_id: str, target_da
         sales = int(_extract_metric(row, "sales") or 0)
         if imp == 0 and clk == 0 and cost == 0 and conv == 0 and sales == 0:
             rejected["zero_metric"] += 1
+            if len(samples["zero_metric"]) < 3:
+                samples["zero_metric"].append({k: row.get(k) for k in list(row.keys())[:12]})
             continue
 
         key = (cid, bucket_value)
@@ -465,6 +472,7 @@ def _build_rows_from_breakdown(raw_rows: List[dict], customer_id: str, target_da
         "raw_rows": len(raw_rows or []),
         "parsed_rows": len(rows),
         **rejected,
+        "samples": samples,
     }
     return rows, meta
 

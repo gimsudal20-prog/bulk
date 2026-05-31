@@ -453,6 +453,74 @@ def _query_adgroup_age(engine, d1, d2, cids: tuple, type_sel: tuple) -> pd.DataF
     return sql_read(engine, sql, {"d1": str(d1), "d2": str(d2)})
 
 
+def _query_device(engine, d1, d2, cids: tuple, type_sel: tuple, by_campaign: bool = False) -> pd.DataFrame:
+    if not table_exists(engine, "fact_campaign_device_daily"):
+        return pd.DataFrame()
+    where_cid = f"AND CAST(f.customer_id AS TEXT) IN ({_sql_in_str_list(cids)})" if cids else ""
+    type_filter = _type_filter_sql(engine, "c", type_sel)
+    cp_col = _campaign_type_column(engine)
+    group_select = ""
+    group_by = "COALESCE(NULLIF(TRIM(f.device_name), ''), 'UNSEGMENTED')"
+    order_by = "cost DESC"
+    if by_campaign:
+        group_select = f"""
+            COALESCE(NULLIF(TRIM(c.campaign_name), ''), f.campaign_id) AS campaign_name,
+            COALESCE(NULLIF(TRIM(CAST(c.{cp_col} AS TEXT)), ''), '미분류') AS campaign_type,
+        """
+        group_by = f"COALESCE(NULLIF(TRIM(f.device_name), ''), 'UNSEGMENTED'), COALESCE(NULLIF(TRIM(c.campaign_name), ''), f.campaign_id), COALESCE(NULLIF(TRIM(CAST(c.{cp_col} AS TEXT)), ''), '미분류')"
+    sql = f"""
+        SELECT
+            COALESCE(NULLIF(TRIM(f.device_name), ''), 'UNSEGMENTED') AS device_name,
+            {group_select}
+            {_metric_expr('f')}
+        FROM fact_campaign_device_daily f
+        LEFT JOIN dim_campaign c
+          ON CAST(f.customer_id AS TEXT)=CAST(c.customer_id AS TEXT)
+         AND CAST(f.campaign_id AS TEXT)=CAST(c.campaign_id AS TEXT)
+        WHERE f.dt BETWEEN :d1 AND :d2
+          {where_cid}
+          {type_filter}
+        GROUP BY {group_by}
+        HAVING SUM(CAST(COALESCE(f.imp,0) AS NUMERIC)) + SUM(CAST(COALESCE(f.clk,0) AS NUMERIC)) + SUM(CAST(COALESCE(f.cost,0) AS NUMERIC)) > 0
+        ORDER BY {order_by}
+    """
+    return sql_read(engine, sql, {"d1": str(d1), "d2": str(d2)})
+
+
+def _query_ad_device(engine, d1, d2, cids: tuple, type_sel: tuple) -> pd.DataFrame:
+    if not table_exists(engine, "fact_ad_device_daily"):
+        return pd.DataFrame()
+    where_cid = f"AND CAST(f.customer_id AS TEXT) IN ({_sql_in_str_list(cids)})" if cids else ""
+    type_filter = _type_filter_sql(engine, "c", type_sel)
+    cp_col = _campaign_type_column(engine)
+    sql = f"""
+        SELECT
+            COALESCE(NULLIF(TRIM(f.device_name), ''), 'UNSEGMENTED') AS device_name,
+            COALESCE(NULLIF(TRIM(CAST(c.{cp_col} AS TEXT)), ''), '미분류') AS campaign_type,
+            COALESCE(NULLIF(TRIM(c.campaign_name), ''), g.campaign_id, '미분류') AS campaign_name,
+            COALESCE(NULLIF(TRIM(g.adgroup_name), ''), a.adgroup_id, '미분류') AS adgroup_name,
+            COALESCE(NULLIF(TRIM(a.ad_name), ''), f.ad_id, '미분류') AS ad_name,
+            {_metric_expr('f')}
+        FROM fact_ad_device_daily f
+        LEFT JOIN dim_ad a
+          ON CAST(f.customer_id AS TEXT)=CAST(a.customer_id AS TEXT)
+         AND CAST(f.ad_id AS TEXT)=CAST(a.ad_id AS TEXT)
+        LEFT JOIN dim_adgroup g
+          ON CAST(a.customer_id AS TEXT)=CAST(g.customer_id AS TEXT)
+         AND CAST(a.adgroup_id AS TEXT)=CAST(g.adgroup_id AS TEXT)
+        LEFT JOIN dim_campaign c
+          ON CAST(f.customer_id AS TEXT)=CAST(c.customer_id AS TEXT)
+         AND CAST(g.campaign_id AS TEXT)=CAST(c.campaign_id AS TEXT)
+        WHERE f.dt BETWEEN :d1 AND :d2
+          {where_cid}
+          {type_filter}
+        GROUP BY COALESCE(NULLIF(TRIM(f.device_name), ''), 'UNSEGMENTED'), COALESCE(NULLIF(TRIM(CAST(c.{cp_col} AS TEXT)), ''), '미분류'), COALESCE(NULLIF(TRIM(c.campaign_name), ''), g.campaign_id, '미분류'), COALESCE(NULLIF(TRIM(g.adgroup_name), ''), a.adgroup_id, '미분류'), COALESCE(NULLIF(TRIM(a.ad_name), ''), f.ad_id, '미분류')
+        HAVING SUM(CAST(COALESCE(f.imp,0) AS NUMERIC)) + SUM(CAST(COALESCE(f.clk,0) AS NUMERIC)) + SUM(CAST(COALESCE(f.cost,0) AS NUMERIC)) > 0
+        ORDER BY cost DESC
+    """
+    return sql_read(engine, sql, {"d1": str(d1), "d2": str(d2)})
+
+
 def _prepare_hour_frame(df: pd.DataFrame) -> pd.DataFrame:
     work = df.copy()
     work["hour_of_day"] = pd.to_numeric(work["hour_of_day"], errors="coerce").fillna(0).astype(int)
@@ -465,6 +533,29 @@ def _prepare_age_frame(df: pd.DataFrame) -> pd.DataFrame:
     work["age_range"] = work["age_range"].map(_normalize_age_label)
     work["_age_sort"] = work["age_range"].map(lambda x: AGE_SORT_ORDER.get(str(x), 50))
     return work.sort_values(["_age_sort", "age_range"]).drop(columns=["_age_sort"], errors="ignore")
+
+
+def _normalize_device_label(value) -> str:
+    raw = str(value or "").strip()
+    upper = raw.upper()
+    mapping = {
+        "PC": "PC",
+        "P": "PC",
+        "MOBILE": "모바일",
+        "MO": "모바일",
+        "M": "모바일",
+        "UNSEGMENTED": "미분리 합계",
+        "UNKNOWN": "알 수 없음",
+    }
+    return mapping.get(upper, raw or "미분류")
+
+
+def _prepare_device_frame(df: pd.DataFrame) -> pd.DataFrame:
+    work = df.copy()
+    work["device_name"] = work["device_name"].map(_normalize_device_label)
+    order = {"PC": 0, "모바일": 1, "미분리 합계": 2, "알 수 없음": 3, "미분류": 4}
+    work["_device_sort"] = work["device_name"].map(lambda x: order.get(str(x), 50))
+    return work.sort_values(["_device_sort", "cost"], ascending=[True, False]).drop(columns=["_device_sort"], errors="ignore")
 
 
 def _render_hour_tab(engine, f: Dict) -> None:
@@ -538,6 +629,81 @@ def _render_hour_tab(engine, f: Dict) -> None:
             if selected_groups:
                 desc = f"선택 그룹 {len(selected_groups):,}개 기준입니다."
             _render_section_title("그룹별 시간대 상세", desc)
+            _render_table(disp3)
+
+
+def _render_device_tab(engine, f: Dict) -> None:
+    cids = tuple(f.get("selected_customer_ids", []))
+    type_sel = tuple(f.get("type_sel", []))
+
+    by_camp_all = _query_device(engine, f["start"], f["end"], cids, type_sel, by_campaign=True)
+    by_ad_all = _query_ad_device(engine, f["start"], f["end"], cids, type_sel)
+    if by_camp_all.empty and by_ad_all.empty:
+        st.info("기기별 성과 데이터가 아직 없습니다. 수집기를 sa_with_device 또는 device_only 모드로 다시 실행하면 표시됩니다.")
+        return
+
+    filter_base = by_ad_all if not by_ad_all.empty else by_camp_all
+    filtered, selected_campaigns, selected_groups = _filter_campaign_and_group(
+        filter_base,
+        campaign_key="ta_device_campaign_filter_v10",
+        group_key="ta_device_adgroup_filter_v10",
+        desc="캠페인과 광고그룹을 선택하면 기기별 요약, 캠페인별, 소재별 표가 같은 조건으로 바뀝니다.",
+    )
+    if filtered.empty:
+        st.info("선택한 캠페인/광고그룹 조건에 해당하는 기기별 데이터가 없습니다.")
+        return
+
+    device = _aggregate_metrics(filtered, ["device_name"])
+    if device.empty:
+        st.info("선택 조건에 해당하는 기기별 데이터가 없습니다.")
+        return
+
+    summary = device[_metric_columns()].sum().to_frame().T
+    _kpi_row(summary)
+
+    chart = _prepare_device_frame(_add_calc_cols(device))
+    chart = chart.rename(columns={"device_name": "기기"})
+    _render_section_title("기기별 광고비", "PC/모바일 분리 데이터가 없으면 미분리 합계로 표시해 총합 누락을 막습니다.")
+    _render_static_bar_chart(chart, "기기", "cost")
+
+    tab_summary, tab_campaign, tab_ad = st.tabs(["기기별 요약", "캠페인별", "소재별"])
+    with tab_summary:
+        _render_section_title("기기별 상세", "PC, 모바일, 미분리 합계를 같은 표에서 확인합니다.")
+        disp = _format_display(chart, ["기기"])
+        _render_table(disp)
+
+    with tab_campaign:
+        if not by_ad_all.empty:
+            camp_src = _aggregate_metrics(filtered, ["campaign_type", "campaign_name", "device_name"])
+        else:
+            camp_src = filtered.copy()
+        camp_src = _prepare_device_frame(camp_src)
+        camp_src["campaign_type"] = camp_src["campaign_type"].map(_normalize_type_label)
+        camp_src = camp_src.rename(columns={"device_name": "기기", "campaign_type": "유형", "campaign_name": "캠페인"})
+        camp_src = camp_src.sort_values("cost", ascending=False)
+        disp2 = _format_display(camp_src, ["유형", "캠페인", "기기"])
+        desc = "상단 캠페인/광고그룹 필터가 적용된 캠페인별 기기 성과입니다."
+        if selected_campaigns:
+            desc = f"선택 캠페인 {len(selected_campaigns):,}개 기준입니다."
+        if selected_groups:
+            desc += f" 선택 그룹 {len(selected_groups):,}개만 반영했습니다."
+        _render_section_title("캠페인별 기기 상세", desc)
+        _render_table(disp2)
+
+    with tab_ad:
+        if by_ad_all.empty:
+            st.info("소재별 기기 데이터가 아직 없습니다. AD 리포트에서 기기 컬럼이 확인되면 표시됩니다.")
+        else:
+            ad_src = _aggregate_metrics(filtered, ["campaign_type", "campaign_name", "adgroup_name", "ad_name", "device_name"])
+            ad_src = _prepare_device_frame(ad_src)
+            ad_src["campaign_type"] = ad_src["campaign_type"].map(_normalize_type_label)
+            ad_src = ad_src.rename(columns={"device_name": "기기", "campaign_type": "유형", "campaign_name": "캠페인", "adgroup_name": "광고그룹", "ad_name": "소재"})
+            ad_src = ad_src.sort_values("cost", ascending=False)
+            disp3 = _format_display(ad_src, ["유형", "캠페인", "광고그룹", "소재", "기기"])
+            desc = "AD 리포트 기준 소재별 PC/모바일 성과입니다."
+            if selected_groups:
+                desc = f"선택 그룹 {len(selected_groups):,}개 기준입니다."
+            _render_section_title("소재별 기기 상세", desc)
             _render_table(disp3)
 
 
@@ -633,14 +799,16 @@ def page_time_age(meta: pd.DataFrame, engine, f: Dict) -> None:
         """,
         unsafe_allow_html=True,
     )
-    st.caption("시간대는 /stats hh24 breakdown, 연령대는 쇼핑 캠페인 /stats ageRangeNm breakdown 기반으로 표시됩니다. 시간 표시는 00시~01시 형식입니다.")
+    st.caption("시간대는 /stats hh24, 연령대는 쇼핑 캠페인 /stats ageRangeNm, 기기별은 AD/CRITERION PC·모바일 리포트 기반으로 표시됩니다.")
 
-    if not table_exists(engine, "fact_campaign_hourly_daily") and not table_exists(engine, "fact_campaign_age_daily"):
-        st.info("시간대/연령대 수집 테이블이 아직 없습니다. 패치 적용 후 수집기를 한 번 실행하면 자동 생성됩니다.")
+    if not any(table_exists(engine, table) for table in ["fact_campaign_hourly_daily", "fact_campaign_age_daily", "fact_campaign_device_daily", "fact_ad_device_daily"]):
+        st.info("시간대/연령대/기기별 수집 테이블이 아직 없습니다. 패치 적용 후 수집기를 한 번 실행하면 자동 생성됩니다.")
         return
 
-    tab_hour, tab_age = st.tabs(["시간대별", "연령대별"])
+    tab_hour, tab_age, tab_device = st.tabs(["시간대별", "연령대별", "기기별"])
     with tab_hour:
         _render_hour_tab(engine, f)
     with tab_age:
         _render_age_tab(engine, f)
+    with tab_device:
+        _render_device_tab(engine, f)

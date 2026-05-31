@@ -11,16 +11,21 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 
-DEVICE_PARSER_VERSION = "pcm_v20260528_criterion1"
+DEVICE_PARSER_VERSION = "pcm_v20260531_alias2"
 UNSEGMENTED_DEVICE_NAME = "UNSEGMENTED"
 
 DEVICE_HEADER_CANDIDATES = [
     "pc mobile type", "pc_mobile_type", "pc/mobile type", "pcmobiletype",
-    "device", "device_name", "devicename", "platform", "platform type",
-    "기기", "디바이스", "노출기기", "노출 기기", "단말기", "플랫폼",
+    "pc mobile tp", "pc_mobile_tp", "pc/mobile tp", "pcmobiletp",
+    "pc mobile", "pc_mobile", "pc/mobile", "pcmobile", "pc m",
+    "device", "device_name", "devicename", "device type", "devicetype",
+    "platform", "platform type", "delivery device", "deliverydevice",
+    "기기", "디바이스", "노출기기", "노출 기기", "노출매체", "노출 매체",
+    "단말기", "플랫폼", "PC모바일", "PC/모바일", "PC 모바일", "PC/모바일 구분",
+    "모바일구분", "모바일 구분",
 ]
-AD_HEADER_CANDIDATES = ["광고id", "소재id", "adid"]
-CAMPAIGN_HEADER_CANDIDATES = ["캠페인id", "campaignid"]
+AD_HEADER_CANDIDATES = ["광고id", "광고 id", "소재id", "소재 id", "adid", "ad id", "nccadid"]
+CAMPAIGN_HEADER_CANDIDATES = ["캠페인id", "캠페인 id", "campaignid", "campaign id", "ncccampaignid"]
 IMP_HEADER_CANDIDATES = ["노출수", "impression", "impressions", "imp", "impcnt"]
 CLK_HEADER_CANDIDATES = ["클릭수", "click", "clicks", "clk", "clkcnt"]
 COST_HEADER_CANDIDATES = ["총비용", "비용", "광고비", "cost", "salesamt"]
@@ -28,8 +33,9 @@ CONV_HEADER_CANDIDATES = ["전환수", "conversions", "ccnt"]
 SALES_HEADER_CANDIDATES = ["전환매출액", "conversionvalue", "sales", "convamt"]
 RANK_HEADER_CANDIDATES = ["평균노출순위", "averageposition", "avgrnk"]
 CRITERION_HEADER_CANDIDATES = [
-    "criterion id", "criterionid", "criterion_id", "타게팅id", "타겟팅id",
-    "타게팅 id", "타겟팅 id", "criterion",
+    "criterion id", "criterionid", "criterion_id", "targeting id", "targetingid",
+    "target id", "targetid", "타게팅id", "타겟팅id", "타게팅 id", "타겟팅 id",
+    "타겟 id", "타겟ID", "criterion",
 ]
 CONV_COUNT_HEADER_CANDIDATES = ["전환수", "conversion count", "conversioncount", "conversions", "ccnt"]
 CONV_SALES_HEADER_CANDIDATES = ["전환매출", "전환매출액", "sales by conversion", "salesbyconversion", "conversionvalue", "convamt", "sales"]
@@ -82,15 +88,19 @@ def normalize_device_name(v: Any) -> str:
     raw_upper = raw.upper().strip()
     norm = _normalize_header(raw)
 
-    if raw_upper in {"UNSEGMENTED", "UNKNOWN", "TOTAL"} or raw in {"미분리", "전체"}:
+    unsegmented_tokens = {
+        "UNSEGMENTED", "UNKNOWN", "TOTAL", "ALL", "PC/MOBILE", "PC+MOBILE", "PC_MOBILE",
+        "PC AND MOBILE", "PC & MOBILE",
+    }
+    if raw_upper in unsegmented_tokens or raw in {"미분리", "전체", "전체기기", "전체 기기", "통합"}:
         return UNSEGMENTED_DEVICE_NAME
-    if raw_upper in {"P", "PC"} or norm in {"p", "pc", "desktop"} or "desktop" in norm:
+    if raw_upper in {"P", "PC", "DESKTOP"} or norm in {"p", "pc", "desktop", "computer"} or "desktop" in norm:
         return "PC"
-    if raw_upper in {"M", "MO", "MOBILE"} or norm in {"m", "mo", "mobile"}:
+    if raw_upper in {"M", "MO", "MOBILE", "MOBILE_WEB", "MOBILEWEB"} or norm in {"m", "mo", "mobile", "mobileweb"}:
         return "MOBILE"
-    if any(k in raw for k in ["모바일", "휴대폰"]) or any(k in norm for k in ["mobile", "phone", "app", "mobileweb"]):
+    if any(k in raw for k in ["모바일", "휴대폰", "스마트폰"]) or any(k in norm for k in ["mobile", "phone", "smartphone", "app", "mobileweb"]):
         return "MOBILE"
-    if "pc" in norm:
+    if "pc" in norm or "desktop" in norm:
         return "PC"
     return ""
 

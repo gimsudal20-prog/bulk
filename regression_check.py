@@ -210,6 +210,29 @@ def check_overview_keyword_purchase_contract(root: Path) -> list[str]:
     return ['ok | overview 키워드 상세 구매완료/총전환 분리 계약 유지']
 
 
+def check_device_breakdown_contract(root: Path) -> list[str]:
+    device_path = root / 'device_collector_helpers.py'
+    view_path = root / 'view_time_age.py'
+    if not device_path.exists() or not view_path.exists():
+        raise RegressionFailure('device_collector_helpers.py 또는 view_time_age.py 가 없습니다')
+
+    device_text = device_path.read_text(encoding='utf-8')
+    view_text = view_path.read_text(encoding='utf-8')
+    required = {
+        'device parser alias version 갱신': 'pcm_v20260531_alias2' in device_text,
+        'pcMobileTp 헤더 alias': 'pcmobiletp' in device_text and 'PC/모바일 구분' in device_text,
+        'criterion targeting id alias': 'targeting id' in device_text and '타겟팅 id' in device_text,
+        '미분리 device total 유지': 'UNSEGMENTED' in device_text and 'PC/MOBILE' in device_text,
+        'time_age 기기별 탭 추가': '_render_device_tab' in view_text and '기기별' in view_text,
+        'time_age campaign/ad device 조회': '_query_device' in view_text and '_query_ad_device' in view_text,
+        'time_age device 테이블 체크': 'fact_campaign_device_daily' in view_text and 'fact_ad_device_daily' in view_text,
+    }
+    missing = [name for name, ok in required.items() if not ok]
+    if missing:
+        raise RegressionFailure(f'기기별 breakdown 계약 누락: {", ".join(missing)}')
+    return ['ok | 기기별 breakdown 수집/UI 계약 유지']
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description='Run minimal regression checks.')
     parser.add_argument('--repo', default='.', help='repository root path')
@@ -229,6 +252,7 @@ def main() -> int:
         check_sa_scope_contract,
         check_targeting_breakdown_contract,
         check_overview_keyword_purchase_contract,
+        check_device_breakdown_contract,
     ]
     for fn in checks:
         try:

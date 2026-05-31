@@ -524,8 +524,78 @@ def _build_overview_campaign_frames(cur_camp: pd.DataFrame, base_camp: pd.DataFr
         camp_disp = _build_comparison_df(cur_camp, base_camp, camp_col, '캠페인명')
     return df_display, df_type_display, camp_disp
 
-def _build_overview_keyword_frames(cur_kw: pd.DataFrame, base_kw: pd.DataFrame):
+
+def _overview_is_naver_keyword_scope(df: pd.DataFrame) -> pd.Series:
+    if df is None or df.empty:
+        return pd.Series(dtype=bool)
+    type_col = next((c for c in ["campaign_type_label", "campaign_type", "campaign_tp"] if c in df.columns), None)
+    if not type_col:
+        return pd.Series([False] * len(df.index), index=df.index)
+    labels = {
+        "WEB_SITE", "SHOPPING", "POWER_CONTENT", "POWER_CONTENTS", "BRAND_SEARCH", "PLACE",
+        "파워링크", "쇼핑검색", "파워컨텐츠", "브랜드검색", "플레이스",
+    }
+    return df[type_col].astype(str).str.strip().str.upper().isin({x.upper() for x in labels})
+
+
+def _sum_numeric_metric(df: pd.DataFrame, col: str) -> float:
+    if df is None or df.empty or col not in df.columns:
+        return 0.0
+    return float(pd.to_numeric(df[col], errors="coerce").fillna(0).sum())
+
+
+def _append_unmapped_keyword_conversion_row(kw_df: pd.DataFrame, camp_df: pd.DataFrame) -> pd.DataFrame:
+    if camp_df is None or camp_df.empty:
+        return pd.DataFrame() if kw_df is None else kw_df
+
+    camp_scope = camp_df[_overview_is_naver_keyword_scope(camp_df)].copy()
+    if camp_scope.empty:
+        return pd.DataFrame() if kw_df is None else kw_df
+
+    kw_scope = kw_df[_overview_is_naver_keyword_scope(kw_df)].copy() if kw_df is not None and not kw_df.empty else pd.DataFrame()
+    residual = {
+        "conv": max(_sum_numeric_metric(camp_scope, "conv") - _sum_numeric_metric(kw_scope, "conv"), 0.0),
+        "sales": max(_sum_numeric_metric(camp_scope, "sales") - _sum_numeric_metric(kw_scope, "sales"), 0.0),
+        "tot_conv": max(_sum_numeric_metric(camp_scope, "tot_conv") - _sum_numeric_metric(kw_scope, "tot_conv"), 0.0),
+        "tot_sales": max(_sum_numeric_metric(camp_scope, "tot_sales") - _sum_numeric_metric(kw_scope, "tot_sales"), 0.0),
+        "cart_conv": max(_sum_numeric_metric(camp_scope, "cart_conv") - _sum_numeric_metric(kw_scope, "cart_conv"), 0.0),
+        "cart_sales": max(_sum_numeric_metric(camp_scope, "cart_sales") - _sum_numeric_metric(kw_scope, "cart_sales"), 0.0),
+        "wishlist_conv": max(_sum_numeric_metric(camp_scope, "wishlist_conv") - _sum_numeric_metric(kw_scope, "wishlist_conv"), 0.0),
+        "wishlist_sales": max(_sum_numeric_metric(camp_scope, "wishlist_sales") - _sum_numeric_metric(kw_scope, "wishlist_sales"), 0.0),
+    }
+    residual["tot_conv"] = max(residual["tot_conv"], residual["conv"])
+    residual["tot_sales"] = max(residual["tot_sales"], residual["sales"])
+    if not any(v > 0 for v in residual.values()):
+        return pd.DataFrame() if kw_df is None else kw_df
+
+    row = {
+        "keyword": "(키워드 미매핑 전환)",
+        "campaign_type_label": "네이버",
+        "campaign_type": "네이버",
+        "imp": 0,
+        "clk": 0,
+        "cost": 0,
+        **residual,
+    }
+    if "customer_id" in camp_scope.columns:
+        ids = [str(x) for x in camp_scope["customer_id"].dropna().astype(str).unique()]
+        row["customer_id"] = ids[0] if len(ids) == 1 else "multiple"
+    if "campaign_name" in camp_scope.columns:
+        row["campaign_name"] = "(키워드 미매핑 전환)"
+    if "adgroup_name" in camp_scope.columns:
+        row["adgroup_name"] = "(키워드 미매핑 전환)"
+
+    parts = []
+    if kw_df is not None and not kw_df.empty:
+        parts.append(kw_df)
+    parts.append(pd.DataFrame([row]))
+    return pd.concat(parts, ignore_index=True, sort=False)
+
+
+def _build_overview_keyword_frames(cur_kw: pd.DataFrame, base_kw: pd.DataFrame, cur_camp: pd.DataFrame | None = None, base_camp: pd.DataFrame | None = None):
     kw_disp = pd.DataFrame()
+    cur_kw = _append_unmapped_keyword_conversion_row(cur_kw, cur_camp)
+    base_kw = _append_unmapped_keyword_conversion_row(base_kw, base_camp)
     if cur_kw.empty and base_kw.empty:
         return kw_disp
     
@@ -1525,7 +1595,7 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
         except Exception as e:
             base_kw = pd.DataFrame()
             _diag_add(diag, "키워드 번들(비교/전체)", "error", 0, "query_keyword_bundle", f"{type(e).__name__}: {e}")
-        kw_disp = _build_overview_keyword_frames(cur_kw, base_kw)
+        kw_disp = _build_overview_keyword_frames(cur_kw, base_kw, cur_camp, base_camp)
 
     if detail_panel == "기간별 상세":
         if base_daily_ts is None or base_daily_ts.empty:
@@ -1598,7 +1668,7 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
             styled_kw_df = disp_kw.style.format(fmt_dict_standard)
             styled_kw_df = _apply_overview_delta_styles(styled_kw_df, disp_kw)
             _render_overview_sticky_table(styled_kw_df, "키워드", height=460, hide_index=True)
-            st.caption(f"총 {len(disp_kw):,}개 키워드 전체를 기준으로 정렬했습니다. 헤더 클릭 정렬보다 상단 정렬 컨트롤을 우선 사용하세요.")
+            st.caption(f"총 {len(disp_kw):,}개 키워드 전체를 기준으로 정렬했습니다. 키워드 ID로 귀속되지 않은 전환은 '(키워드 미매핑 전환)' 행에 합산됩니다.")
         else:
             st.info("조건에 맞는 데이터가 없습니다.")
 

@@ -39,6 +39,71 @@ NAV_CONFIG = [
 NAV_LABELS = {page_key: short_label for page_key, short_label, _icon in NAV_CONFIG}
 
 
+def _latest_status(latest: dict | None) -> tuple[str, str]:
+    if not latest:
+        return "동기화 대기", "수집된 데이터 날짜가 없습니다"
+    values = [v for v in latest.values() if v is not None]
+    if not values:
+        return "동기화 대기", "수집된 데이터 날짜가 없습니다"
+    newest = max(values, key=lambda x: str(x))
+    return str(newest), f"{len(values):,}개 테이블 기준"
+
+
+def _page_action(nav: str) -> tuple[str, str]:
+    actions = {
+        "요약": ("성과 이상 신호부터 확인", "광고비, 전환, ROAS의 변화가 큰 계정부터 훑어보세요."),
+        "예산 및 잔액": ("소진 위험 우선 점검", "잔액과 월 예산 페이스가 어긋난 계정을 먼저 조정하세요."),
+        "성과 분석 · 캠페인": ("캠페인 단위 병목 탐색", "비용은 크지만 전환 효율이 낮은 캠페인을 드릴다운하세요."),
+        "성과 분석 · 키워드": ("키워드 낭비 구간 정리", "클릭은 많고 전환이 약한 키워드를 빠르게 찾으세요."),
+        "성과 분석 · 소재": ("소재별 승자/패자 비교", "CTR과 전환 효율이 갈리는 소재를 같은 기준으로 비교하세요."),
+        "쇼핑 검색어 분석": ("검색어 기회 발굴", "구매완료와 장바구니 신호가 있는 검색어를 분리해서 보세요."),
+        "시간·연령 분석": ("타깃 시간대 재배분", "요일, 시간, 연령대별 효율 차이를 예산 조정에 연결하세요."),
+        "설정 및 연결": ("데이터 연결 상태 확인", "계정 연결, 매체 매핑, 수집 상태를 먼저 정리하세요."),
+    }
+    return actions.get(nav, ("현재 화면 점검", "필터를 좁힌 뒤 표와 차트를 함께 확인하세요."))
+
+
+def _render_command_center(nav: str, latest: dict | None, f: dict | None) -> None:
+    latest_date, latest_note = _latest_status(latest)
+    action_title, action_body = _page_action(nav)
+    date_range = "-"
+    scope = "전체 계정"
+    media_count = "전체 매체"
+    if f:
+        date_range = f"{f.get('start')} ~ {f.get('end')}"
+        scope = str(f.get("scope_label") or "전체 계정")
+        media_sel = list(f.get("media_sel") or [])
+        media_count = f"{len(media_sel):,}개 매체" if media_sel else "전체 매체"
+    st.markdown(
+        f"""
+        <div class='nv-command-center'>
+            <div class='nv-command-card primary'>
+                <div class='nv-command-label'>조회 컨텍스트</div>
+                <div class='nv-command-value'>{escape(scope)}</div>
+                <div class='nv-command-note'>{escape(date_range)} · {escape(media_count)}</div>
+            </div>
+            <div class='nv-command-card'>
+                <div class='nv-command-label'>데이터 신선도</div>
+                <div class='nv-command-value'>{escape(latest_date)}</div>
+                <div class='nv-command-note'>{escape(latest_note)}</div>
+            </div>
+            <div class='nv-command-card action'>
+                <div class='nv-command-label'>추천 액션</div>
+                <div class='nv-command-value'>{escape(action_title)}</div>
+                <div class='nv-command-note'>{escape(action_body)}</div>
+            </div>
+        </div>
+        <div class='nv-workflow-strip'>
+            <span class='active'>1. 필터 고정</span>
+            <span>2. KPI 스캔</span>
+            <span>3. 상세 드릴다운</span>
+            <span>4. 조치/공유</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _render_page_header(nav: str, latest: dict | None, f: dict | None = None) -> None:
     subtitle = PAGE_DESCRIPTIONS.get(nav, "")
     chips = []
@@ -139,6 +204,17 @@ def main():
                 st.rerun()
         nav = st.session_state.get("nav_page", nav_items[0])
 
+        st.markdown(
+            """
+            <div class='sidebar-status-card'>
+                <div class='sidebar-status-kicker'>Lazyweb refresh</div>
+                <div class='sidebar-status-title'>운영 흐름 중심 UI</div>
+                <div class='sidebar-status-body'>필터는 고정하고, 상단에서 맥락과 다음 액션을 먼저 확인합니다.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
     f = None
     if nav == "설정 및 연결":
         st.session_state["_show_perf_diag"] = False
@@ -151,6 +227,7 @@ def main():
         reset_perf_events()
 
     _render_page_header(nav, latest, f)
+    _render_command_center(nav, latest, f)
 
     requires_selection_pages = {
         "요약",

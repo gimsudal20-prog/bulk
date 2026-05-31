@@ -87,9 +87,15 @@ def render_empty_state(message: str = "조회된 데이터가 없습니다.", he
     safe_msg = html.escape(str(message))
     safe_detail = html.escape(str(detail or "조건을 변경하거나 동기화를 확인해주세요."))
     empty_html = f"""
-    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: {height}px; width: 100%; background-color: {THEME['bg']}; border: 1px dashed {THEME['line']}; border-radius: 12px; color: {THEME['muted']}; text-align: center; padding: 18px;">
-        <div style="font-size: 14px; font-weight: 750; color:{THEME['text']};">{safe_msg}</div>
-        <div style="font-size: 12px; margin-top: 5px; opacity: 0.75; line-height:1.5;">{safe_detail}</div>
+    <div class="nv-empty-state" style="min-height: {height}px;">
+        <div class="nv-empty-icon">⌕</div>
+        <div class="nv-empty-title">{safe_msg}</div>
+        <div class="nv-empty-detail">{safe_detail}</div>
+        <div class="nv-empty-hints">
+            <span>필터 범위 확인</span>
+            <span>동기화 상태 확인</span>
+            <span>표시 한도 조정</span>
+        </div>
     </div>
     """
     st.markdown(empty_html, unsafe_allow_html=True)
@@ -140,10 +146,6 @@ def render_connection_error(message: str) -> None:
     st.markdown(
         f"""
         <div class="nv-setup-state">
-          <div class="nv-setup-visual">
-            <div class="nv-setup-icon">!</div>
-            <div class="nv-setup-pulse"></div>
-          </div>
           <div class="nv-setup-content">
             <div class="nv-setup-kicker">Setup required</div>
             <h2>데이터베이스 연결이 필요합니다</h2>
@@ -155,6 +157,28 @@ def render_connection_error(message: str) -> None:
             <div class="nv-setup-steps">
               <div><span>1</span><strong>DATABASE_URL</strong> 환경변수를 설정합니다.</div>
               <div><span>2</span>앱을 다시 실행한 뒤 설정 메뉴에서 계정 동기화를 확인합니다.</div>
+            </div>
+          </div>
+          <div class="nv-setup-preview" aria-hidden="true">
+            <div class="nv-preview-top">
+              <div>
+                <div class="nv-preview-kicker">Bulk dashboard</div>
+                <div class="nv-preview-title">운영 현황 미리보기</div>
+              </div>
+              <span>DB 연결 대기</span>
+            </div>
+            <div class="nv-preview-kpis">
+              <div><b>광고비</b><strong>-</strong></div>
+              <div><b>ROAS</b><strong>-</strong></div>
+              <div><b>전환</b><strong>-</strong></div>
+            </div>
+            <div class="nv-preview-chart">
+              <i style="height:34%"></i><i style="height:58%"></i><i style="height:45%"></i><i style="height:72%"></i><i style="height:52%"></i>
+            </div>
+            <div class="nv-preview-table">
+              <span></span><span></span><span></span>
+              <span></span><span></span><span></span>
+              <span></span><span></span><span></span>
             </div>
           </div>
         </div>

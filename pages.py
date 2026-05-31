@@ -9,7 +9,7 @@ import streamlit as st
 import streamlit_compat  # noqa: F401
 
 from data import *
-from ui import render_hero, media_badge_html
+from ui import render_hero, media_badge_html, render_connection_error
 from page_helpers import BUILD_TAG, build_filters
 from perf_utils import render_perf_panel, reset_perf_events
 
@@ -85,7 +85,7 @@ def main():
         latest = get_latest_dates(engine)
     except Exception as e:
         render_hero(None, BUILD_TAG)
-        st.error(str(e))
+        render_connection_error(str(e))
         return
 
     try:
@@ -101,6 +101,18 @@ def main():
     meta_ready = (meta is not None) and (not meta.empty)
 
     with st.sidebar:
+        st.markdown(
+            f"""
+            <div class='sidebar-brand-card'>
+                <div class='sidebar-brand-mark'>B</div>
+                <div class='sidebar-brand-copy'>
+                    <div class='sidebar-brand-title'>Bulk</div>
+                    <div class='sidebar-build-tag'>{escape(BUILD_TAG or 'Ad ops console')}</div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
         st.markdown("<div class='nav-sidebar-title'>메뉴</div>", unsafe_allow_html=True)
 
         if not meta_ready:

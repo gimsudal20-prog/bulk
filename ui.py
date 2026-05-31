@@ -135,6 +135,34 @@ def render_hero(latest_dates: dict | None, build_tag: str, dashboard_title: str 
     return None
 
 
+def render_connection_error(message: str) -> None:
+    safe_message = html.escape(str(message or "데이터 소스를 불러오지 못했습니다."))
+    st.markdown(
+        f"""
+        <div class="nv-setup-state">
+          <div class="nv-setup-visual">
+            <div class="nv-setup-icon">!</div>
+            <div class="nv-setup-pulse"></div>
+          </div>
+          <div class="nv-setup-content">
+            <div class="nv-setup-kicker">Setup required</div>
+            <h2>데이터베이스 연결이 필요합니다</h2>
+            <p>
+              대시보드를 표시하려면 먼저 운영 DB 연결 문자열을 설정해야 합니다.
+              현재는 데이터 조회 전 단계에서 안전하게 중단된 상태입니다.
+            </p>
+            <div class="nv-setup-message">{safe_message}</div>
+            <div class="nv-setup-steps">
+              <div><span>1</span><strong>DATABASE_URL</strong> 환경변수를 설정합니다.</div>
+              <div><span>2</span>앱을 다시 실행한 뒤 설정 메뉴에서 계정 동기화를 확인합니다.</div>
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _delta_class_and_text(cur_val, base_val, improve_when_up: bool = True) -> tuple[str, str]:
     try:
         cur = float(cur_val or 0)

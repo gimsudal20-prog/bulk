@@ -9,11 +9,13 @@ import streamlit_compat  # noqa: F401
 from typing import Dict
 from datetime import date
 from html import escape
+from io import BytesIO
 
 from data import (
     query_campaign_bundle,
     query_keyword_bundle,
     query_ad_bundle,
+    query_shopping_query_adgroup_purchase_summary,
     query_campaign_off_log,
     load_dim_campaign,
     sql_read,
@@ -148,6 +150,90 @@ def _render_campaign_sticky_table(df: pd.DataFrame, first_col: str, apply_delta_
     if apply_delta_styles:
         styled = _apply_delta_styles(styled, df)
     st.dataframe(styled, width="stretch", hide_index=True, column_config=_campaign_sticky_cfg(first_col))
+
+
+def _campaign_excel_bytes(df: pd.DataFrame, sheet_name: str = "data") -> bytes:
+    buffer = BytesIO()
+    safe_sheet = str(sheet_name or "data")[:31]
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name=safe_sheet)
+    return buffer.getvalue()
+
+
+def _render_campaign_downloads(df: pd.DataFrame, key_prefix: str, label: str = "성과 데이터") -> None:
+    if df is None or df.empty:
+        return
+    export_df = df.copy()
+    col1, col2, _ = st.columns([0.16, 0.18, 0.66], gap="small")
+    with col1:
+        st.download_button(
+            f"{label} CSV",
+            data=export_df.to_csv(index=False).encode("utf-8-sig"),
+            file_name=f"{key_prefix}.csv",
+            mime="text/csv",
+            key=f"{key_prefix}_csv",
+        )
+    with col2:
+        st.download_button(
+            f"{label} 엑셀",
+            data=_campaign_excel_bytes(export_df, sheet_name=label),
+            file_name=f"{key_prefix}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key=f"{key_prefix}_xlsx",
+        )
+
+
+def _campaign_selection_is_shopping_only(type_sel: tuple) -> bool:
+    labels = {str(x or "").strip().upper() for x in (type_sel or ()) if str(x or "").strip()}
+    if not labels:
+        return False
+    shopping_aliases = {"쇼핑검색", "SHOPPING"}
+    return labels.issubset(shopping_aliases)
+
+
+def _campaign_is_shopping_rows(df: pd.DataFrame, type_col: str = "campaign_type_label") -> pd.Series:
+    if df is None or df.empty or type_col not in df.columns:
+        return pd.Series(False, index=df.index if df is not None else None)
+    raw = df[type_col].fillna("").astype(str).str.strip().str.upper()
+    return raw.isin({"SHOPPING", "쇼핑검색"}) | raw.str.contains("쇼핑", na=False)
+
+
+def _apply_shopping_adgroup_purchase_override(group_df: pd.DataFrame, engine, d1, d2, cids: tuple, type_sel: tuple) -> pd.DataFrame:
+    if group_df is None or group_df.empty:
+        return group_df
+    try:
+        summary = query_shopping_query_adgroup_purchase_summary(engine, d1, d2, cids, type_sel)
+    except Exception:
+        summary = pd.DataFrame()
+    if summary is None or summary.empty:
+        return group_df
+    keys = [k for k in ["customer_id", "campaign_id", "adgroup_id"] if k in group_df.columns and k in summary.columns]
+    if not keys:
+        return group_df
+    out = group_df.copy()
+    summary = summary.copy()
+    for k in keys:
+        out[k] = out[k].astype(str)
+        summary[k] = summary[k].astype(str)
+    metric_cols = ["conv", "sales", "tot_conv", "tot_sales", "cart_conv", "cart_sales", "wishlist_conv", "wishlist_sales"]
+    merged = out.merge(summary[keys + [c for c in metric_cols if c in summary.columns]].drop_duplicates(subset=keys), on=keys, how="left", suffixes=("", "__shopping_query"))
+    shopping_mask = _campaign_is_shopping_rows(merged, "campaign_type_label")
+    source_available = pd.Series(False, index=merged.index)
+    for c in metric_cols:
+        sq_col = f"{c}__shopping_query"
+        if sq_col in merged.columns:
+            source_available = source_available | pd.to_numeric(merged[sq_col], errors="coerce").notna()
+    mask = shopping_mask & source_available
+    for c in metric_cols:
+        sq_col = f"{c}__shopping_query"
+        if sq_col in merged.columns:
+            if c not in merged.columns:
+                merged[c] = 0
+            replacement = pd.to_numeric(merged[sq_col], errors="coerce")
+            merged.loc[mask & replacement.notna(), c] = replacement[mask & replacement.notna()]
+    drop_cols = [c for c in merged.columns if c.endswith("__shopping_query")]
+    return merged.drop(columns=drop_cols)
+
 
 def _format_avg_rank(value):
     num = pd.to_numeric(value, errors="coerce")
@@ -814,6 +900,7 @@ def _render_campaign_summary_tab(view: pd.DataFrame, engine, f: Dict, diag: list
         [{"label": f"{len(disp_main_show):,}행 표시", "tone": "info"}, {"label": "선택 상세", "tone": "primary"}],
     )
     event = st.dataframe(disp_main_show, width="stretch", hide_index=True, selection_mode="single-row", on_select="rerun", column_config=_campaign_fast_col_config(disp_main_show, "캠페인"))
+    _render_campaign_downloads(disp_main_show, "campaign_performance", "캠페인 성과")
     selected_rows = event.selection.rows
     if not selected_rows:
         return
@@ -882,6 +969,7 @@ def _render_campaign_group_tab(meta: pd.DataFrame, engine, f: Dict, cids: tuple,
         st.info("광고그룹 성과 데이터가 없습니다.")
         return
     grp = detail_bundle_grp.groupby(grp_cols, as_index=False)[val_cols].sum()
+    grp = _apply_shopping_adgroup_purchase_override(grp, engine, f["start"], f["end"], cids, type_sel)
     rank_grp = _keyword_rank_by_keys(detail_bundle_grp, grp_cols)
     if not rank_grp.empty:
         grp = grp.merge(rank_grp, on=grp_cols, how="left")
@@ -899,6 +987,7 @@ def _render_campaign_group_tab(meta: pd.DataFrame, engine, f: Dict, cids: tuple,
         if not base_detail_bundle_grp.empty and valid_keys_grp:
             b_grp_cols = [c for c in valid_keys_grp if c in base_detail_bundle_grp.columns]
             b_grp = base_detail_bundle_grp.groupby(b_grp_cols, as_index=False)[val_cols].sum()
+            b_grp = _apply_shopping_adgroup_purchase_override(b_grp, engine, b1_grp, b2_grp, cids, type_sel)
             b_rank_grp = _keyword_rank_by_keys(base_detail_bundle_grp, b_grp_cols)
             if not b_rank_grp.empty:
                 b_grp = b_grp.merge(b_rank_grp, on=b_grp_cols, how="left")
@@ -922,6 +1011,7 @@ def _render_campaign_group_tab(meta: pd.DataFrame, engine, f: Dict, cids: tuple,
     cols_grp = [c for c in base_cols_grp + metrics_cols_grp if c in grouped.columns]
     disp_grp = grouped[cols_grp].sort_values("광고비", ascending=False).head(top_n).copy()
     _render_campaign_sticky_table(disp_grp, "광고그룹", apply_delta_styles=show_deltas_grp)
+    _render_campaign_downloads(disp_grp, "campaign_adgroup_performance", "그룹 성과")
 
 
 def _compare_mode_columns(show_deltas: bool, show_mode: str) -> list[str]:
@@ -970,6 +1060,7 @@ def _render_campaign_compare_tab(view: pd.DataFrame, engine, f: Dict, cids: tupl
     final_cols_cmp = [c for c in base_cols_cmp + metrics_cols_cmp if c in view_cmp.columns]
     disp_cmp = view_cmp[final_cols_cmp].sort_values("광고비", ascending=False).head(top_n).copy()
     st.dataframe(disp_cmp, width="stretch", height=560, hide_index=True, column_config=_campaign_fast_col_config(disp_cmp, "캠페인"))
+    _render_campaign_downloads(disp_cmp, "campaign_compare_performance", "기간 비교")
 
 
 def _render_campaign_off_tab(view: pd.DataFrame, meta: pd.DataFrame, engine, f: Dict, cids: tuple) -> None:
@@ -1007,6 +1098,7 @@ def _render_campaign_off_tab(view: pd.DataFrame, meta: pd.DataFrame, engine, f: 
         cols.insert(2, cols.pop(cols.index('통합 ROAS(%)')))
         pivot_df = pivot_df[cols]
     st.dataframe(pivot_df, width="stretch", hide_index=True)
+    _render_campaign_downloads(pivot_df, "campaign_off_log", "꺼짐 기록")
 
 
 @st.fragment
@@ -1049,8 +1141,20 @@ def page_perf_campaign(meta: pd.DataFrame, engine, f: Dict) -> None:
                 view["평균순위"] = view["avg_rank"].apply(_format_avg_rank)
             total_cost = float(safe_numeric_col(view, "광고비").sum())
             total_clk = float(safe_numeric_col(view, "클릭").sum())
-            total_sales_col = "총 전환매출" if "총 전환매출" in view.columns else "구매완료 매출"
-            total_conv_col = "총 전환수" if "총 전환수" in view.columns else "구매완료수"
+            type_values = {str(x or "").strip().upper() for x in view.get("캠페인유형", pd.Series(dtype=str)).dropna().unique()}
+            shopping_only_view = bool(type_values) and type_values.issubset({"쇼핑검색", "SHOPPING"})
+            if shopping_only_view and not has_pre_patch_cur:
+                total_sales_col = "구매완료 매출"
+                total_conv_col = "구매완료수"
+                kpi_conv_label = "구매완료"
+                kpi_roas_label = "구매 ROAS"
+                kpi_sub = "검색어상세 기준"
+            else:
+                total_sales_col = "총 전환매출" if "총 전환매출" in view.columns else "구매완료 매출"
+                total_conv_col = "총 전환수" if "총 전환수" in view.columns else "구매완료수"
+                kpi_conv_label = "총 전환"
+                kpi_roas_label = "통합 ROAS"
+                kpi_sub = "전환 합계"
             total_sales = float(safe_numeric_col(view, total_sales_col).sum())
             total_conv = float(safe_numeric_col(view, total_conv_col).sum())
             total_roas = (total_sales / total_cost * 100.0) if total_cost > 0 else 0.0
@@ -1060,8 +1164,8 @@ def page_perf_campaign(meta: pd.DataFrame, engine, f: Dict) -> None:
                 {"label": "광고비", "value": format_currency(total_cost), "sub": "집행 합계", "tone": "neu"},
                 {"label": "클릭", "value": f"{total_clk:,.0f}", "sub": "유입 합계", "tone": "neu"},
                 {"label": "CPC", "value": format_currency(total_cpc), "sub": "평균 비용", "tone": "neu"},
-                {"label": "총 전환", "value": f"{total_conv:,.0f}", "sub": "전환 합계", "tone": "neu"},
-                {"label": "통합 ROAS", "value": f"{total_roas:,.1f}%", "sub": "수익성", "tone": "neu"},
+                {"label": kpi_conv_label, "value": f"{total_conv:,.0f}", "sub": kpi_sub, "tone": "neu"},
+                {"label": kpi_roas_label, "value": f"{total_roas:,.1f}%", "sub": "수익성", "tone": "neu"},
             ])
     else:
         _diag_add(diag, '캠페인집계', 'warn', 0, 'lazy_skip', '선택 탭에서는 요약 bundle 조회를 생략했습니다.')

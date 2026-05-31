@@ -1827,6 +1827,215 @@ def get_entity_totals(_engine, entity: str, d1: date, d2: date, cids: tuple, typ
     row["tot_sales"] = row.get("tot_sales", 0)
     return _compute_total_ratio_metrics(row)
 
+
+
+def _type_selection_includes_shopping(type_sel) -> bool:
+    """Return True when the current campaign type filter can include shopping campaigns."""
+    normalized = _normalize_filter_values(type_sel)
+    if not normalized:
+        return True
+    expanded = {str(v).strip().upper() for v in _expand_campaign_type_filter_values(normalized)}
+    shopping_aliases = {str(v).strip().upper() for v in _CAMPAIGN_TYPE_ALIASES.get("쇼핑검색", ["SHOPPING", "쇼핑검색"])}
+    return bool(expanded.intersection(shopping_aliases))
+
+
+def _shopping_query_metric_expr(sq_cols: set[str], candidates: list[str], alias: str, table_alias: str = "f") -> str:
+    pieces = []
+    for col in candidates:
+        if col in sq_cols:
+            pieces.append(f"COALESCE({table_alias}.{col}, 0)")
+    if not pieces:
+        return f"0 as {alias}"
+    # Use the max of compatible columns so old/new schemas do not double-count the same value.
+    if len(pieces) == 1:
+        expr = pieces[0]
+    else:
+        expr = f"GREATEST({', '.join(pieces)})"
+    return f"SUM({expr}) as {alias}"
+
+
+def _shopping_query_total_expr(sq_cols: set[str], kind: str, table_alias: str = "f") -> str:
+    if kind == "conv":
+        explicit = [c for c in ["total_conv", "tot_conv"] if c in sq_cols]
+        parts = [c for c in ["purchase_conv", "primary_conv", "conv", "cart_conv", "wishlist_conv"] if c in sq_cols]
+    else:
+        explicit = [c for c in ["total_sales", "tot_sales"] if c in sq_cols]
+        parts = [c for c in ["purchase_sales", "primary_sales", "sales", "cart_sales", "wishlist_sales"] if c in sq_cols]
+    explicit_expr = "0"
+    if explicit:
+        exps = [f"COALESCE({table_alias}.{c}, 0)" for c in explicit]
+        explicit_expr = exps[0] if len(exps) == 1 else f"GREATEST({', '.join(exps)})"
+    parts_expr = "0"
+    if parts:
+        # purchase/primary/conv are compatible purchase candidates; do not add them together.
+        purchase_candidates = [c for c in (["purchase_conv", "primary_conv", "conv"] if kind == "conv" else ["purchase_sales", "primary_sales", "sales"]) if c in sq_cols]
+        purchase_expr = "0"
+        if purchase_candidates:
+            pcs = [f"COALESCE({table_alias}.{c}, 0)" for c in purchase_candidates]
+            purchase_expr = pcs[0] if len(pcs) == 1 else f"GREATEST({', '.join(pcs)})"
+        add_cols = ["cart_conv", "wishlist_conv"] if kind == "conv" else ["cart_sales", "wishlist_sales"]
+        add_exprs = [f"COALESCE({table_alias}.{c}, 0)" for c in add_cols if c in sq_cols]
+        parts_expr = " + ".join([purchase_expr] + add_exprs) if add_exprs else purchase_expr
+    return f"SUM(GREATEST({explicit_expr}, {parts_expr}))"
+
+
+@st.cache_data(ttl=DASHBOARD_DATA_CACHE_TTL, max_entries=40, show_spinner=False)
+def query_shopping_query_campaign_purchase_summary(_engine, d1: date, d2: date, cids: tuple, type_sel: tuple = ()) -> pd.DataFrame:
+    """Campaign-level shopping purchase summary from SHOPPINGKEYWORD_CONVERSION_DETAIL storage.
+
+    fact_campaign_daily can contain campaign-summary conversion numbers that are not the
+    shopping purchase-complete split.  For shopping purchase metrics, this query is the
+    authoritative dashboard source because it is built from fact_shopping_query_daily.
+    """
+    if not _type_selection_includes_shopping(type_sel):
+        return pd.DataFrame()
+    if not table_exists(_engine, "fact_shopping_query_daily"):
+        return pd.DataFrame()
+    sq_cols = set(get_table_columns(_engine, "fact_shopping_query_daily"))
+    if "campaign_id" not in sq_cols:
+        return pd.DataFrame()
+    cids_tuple = _normalize_filter_values(cids)
+    where_cid, cid_params = _build_in_filter("f.customer_id", cids_tuple, "shop_campaign_purchase_cid")
+
+    type_where_sql = ""
+    type_params = {}
+    if table_exists(_engine, "dim_campaign"):
+        dim_cols = get_table_columns(_engine, "dim_campaign")
+        cp_col = "campaign_tp" if "campaign_tp" in dim_cols else ("campaign_type_label" if "campaign_type_label" in dim_cols else "campaign_type")
+        if cp_col in dim_cols:
+            raw_type_where, type_params = _build_in_filter(f"c.{cp_col}", _CAMPAIGN_TYPE_ALIASES.get("쇼핑검색", ["SHOPPING", "쇼핑검색"]), "shop_campaign_purchase_type")
+            if raw_type_where:
+                type_where_sql = raw_type_where.replace("AND ", f"AND (c.{cp_col} IS NULL OR ", 1) + ")"
+
+    purchase_conv_sql = _shopping_query_metric_expr(sq_cols, ["purchase_conv", "primary_conv", "conv"], "conv")
+    purchase_sales_sql = _shopping_query_metric_expr(sq_cols, ["purchase_sales", "primary_sales", "sales"], "sales")
+    cart_conv_sql = _shopping_query_metric_expr(sq_cols, ["cart_conv"], "cart_conv")
+    cart_sales_sql = _shopping_query_metric_expr(sq_cols, ["cart_sales"], "cart_sales")
+    wish_conv_sql = _shopping_query_metric_expr(sq_cols, ["wishlist_conv"], "wishlist_conv")
+    wish_sales_sql = _shopping_query_metric_expr(sq_cols, ["wishlist_sales"], "wishlist_sales")
+    total_conv_expr = _shopping_query_total_expr(sq_cols, "conv")
+    total_sales_expr = _shopping_query_total_expr(sq_cols, "sales")
+
+    sql = f"""
+        SELECT
+            f.customer_id,
+            f.campaign_id,
+            {purchase_conv_sql},
+            {purchase_sales_sql},
+            {total_conv_expr} as tot_conv,
+            {total_sales_expr} as tot_sales,
+            {cart_conv_sql},
+            {cart_sales_sql},
+            {wish_conv_sql},
+            {wish_sales_sql},
+            TRUE as shopping_query_purchase_source
+        FROM fact_shopping_query_daily f
+        LEFT JOIN dim_campaign c ON f.campaign_id = c.campaign_id AND f.customer_id = c.customer_id
+        WHERE f.dt BETWEEN :d1 AND :d2 {where_cid} {type_where_sql}
+        GROUP BY f.customer_id, f.campaign_id
+        HAVING {total_conv_expr} > 0 OR {total_sales_expr} > 0
+    """
+    return sql_read(_engine, sql, {"d1": str(d1), "d2": str(d2), **cid_params, **type_params})
+
+
+@st.cache_data(ttl=DASHBOARD_DATA_CACHE_TTL, max_entries=40, show_spinner=False)
+def query_shopping_query_adgroup_purchase_summary(_engine, d1: date, d2: date, cids: tuple, type_sel: tuple = ()) -> pd.DataFrame:
+    """Adgroup-level shopping purchase summary from fact_shopping_query_daily."""
+    if not _type_selection_includes_shopping(type_sel):
+        return pd.DataFrame()
+    if not table_exists(_engine, "fact_shopping_query_daily"):
+        return pd.DataFrame()
+    sq_cols = set(get_table_columns(_engine, "fact_shopping_query_daily"))
+    if not {"campaign_id", "adgroup_id"}.issubset(sq_cols):
+        return pd.DataFrame()
+    cids_tuple = _normalize_filter_values(cids)
+    where_cid, cid_params = _build_in_filter("f.customer_id", cids_tuple, "shop_adgroup_purchase_cid")
+
+    type_where_sql = ""
+    type_params = {}
+    if table_exists(_engine, "dim_campaign"):
+        dim_cols = get_table_columns(_engine, "dim_campaign")
+        cp_col = "campaign_tp" if "campaign_tp" in dim_cols else ("campaign_type_label" if "campaign_type_label" in dim_cols else "campaign_type")
+        if cp_col in dim_cols:
+            raw_type_where, type_params = _build_in_filter(f"c.{cp_col}", _CAMPAIGN_TYPE_ALIASES.get("쇼핑검색", ["SHOPPING", "쇼핑검색"]), "shop_adgroup_purchase_type")
+            if raw_type_where:
+                type_where_sql = raw_type_where.replace("AND ", f"AND (c.{cp_col} IS NULL OR ", 1) + ")"
+
+    purchase_conv_sql = _shopping_query_metric_expr(sq_cols, ["purchase_conv", "primary_conv", "conv"], "conv")
+    purchase_sales_sql = _shopping_query_metric_expr(sq_cols, ["purchase_sales", "primary_sales", "sales"], "sales")
+    cart_conv_sql = _shopping_query_metric_expr(sq_cols, ["cart_conv"], "cart_conv")
+    cart_sales_sql = _shopping_query_metric_expr(sq_cols, ["cart_sales"], "cart_sales")
+    wish_conv_sql = _shopping_query_metric_expr(sq_cols, ["wishlist_conv"], "wishlist_conv")
+    wish_sales_sql = _shopping_query_metric_expr(sq_cols, ["wishlist_sales"], "wishlist_sales")
+    total_conv_expr = _shopping_query_total_expr(sq_cols, "conv")
+    total_sales_expr = _shopping_query_total_expr(sq_cols, "sales")
+
+    sql = f"""
+        SELECT
+            f.customer_id,
+            f.campaign_id,
+            f.adgroup_id,
+            {purchase_conv_sql},
+            {purchase_sales_sql},
+            {total_conv_expr} as tot_conv,
+            {total_sales_expr} as tot_sales,
+            {cart_conv_sql},
+            {cart_sales_sql},
+            {wish_conv_sql},
+            {wish_sales_sql},
+            TRUE as shopping_query_purchase_source
+        FROM fact_shopping_query_daily f
+        LEFT JOIN dim_campaign c ON f.campaign_id = c.campaign_id AND f.customer_id = c.customer_id
+        WHERE f.dt BETWEEN :d1 AND :d2 {where_cid} {type_where_sql}
+        GROUP BY f.customer_id, f.campaign_id, f.adgroup_id
+        HAVING {total_conv_expr} > 0 OR {total_sales_expr} > 0
+    """
+    return sql_read(_engine, sql, {"d1": str(d1), "d2": str(d2), **cid_params, **type_params})
+
+
+def _is_shopping_campaign_rows(df: pd.DataFrame, campaign_type_col: str = "campaign_type") -> pd.Series:
+    if df is None or df.empty or campaign_type_col not in df.columns:
+        return pd.Series(False, index=df.index if df is not None else None)
+    raw = df[campaign_type_col].fillna("").astype(str).str.strip().str.upper()
+    return raw.isin({"SHOPPING", "쇼핑검색"}) | raw.str.contains("쇼핑", na=False)
+
+
+def _override_with_shopping_query_purchase(df: pd.DataFrame, summary: pd.DataFrame, keys: list[str], campaign_type_col: str = "campaign_type") -> pd.DataFrame:
+    if df is None or df.empty or summary is None or summary.empty:
+        return df
+    usable_keys = [k for k in keys if k in df.columns and k in summary.columns]
+    if not usable_keys:
+        return df
+    out = df.copy()
+    summary = summary.copy()
+    for k in usable_keys:
+        out[k] = out[k].astype(str)
+        summary[k] = summary[k].astype(str)
+    metric_cols = ["conv", "sales", "tot_conv", "tot_sales", "cart_conv", "cart_sales", "wishlist_conv", "wishlist_sales"]
+    keep_cols = usable_keys + [c for c in metric_cols if c in summary.columns]
+    merged = out.merge(summary[keep_cols].drop_duplicates(subset=usable_keys), on=usable_keys, how="left", suffixes=("", "__shopping_query"))
+    shopping_mask = _is_shopping_campaign_rows(merged, campaign_type_col)
+    source_available = pd.Series(False, index=merged.index)
+    for c in metric_cols:
+        sq_col = f"{c}__shopping_query"
+        if sq_col in merged.columns:
+            source_available = source_available | pd.to_numeric(merged[sq_col], errors="coerce").notna()
+    mask = shopping_mask & source_available
+    for c in metric_cols:
+        sq_col = f"{c}__shopping_query"
+        if sq_col in merged.columns:
+            if c not in merged.columns:
+                merged[c] = 0
+            current = pd.to_numeric(merged[c], errors="coerce").fillna(0)
+            replacement = pd.to_numeric(merged[sq_col], errors="coerce")
+            merged.loc[mask & replacement.notna(), c] = replacement[mask & replacement.notna()]
+    if "shopping_purchase_source" not in merged.columns:
+        merged["shopping_purchase_source"] = ""
+    merged.loc[mask, "shopping_purchase_source"] = "검색어상세 구매완료"
+    drop_cols = [c for c in merged.columns if c.endswith("__shopping_query")]
+    return merged.drop(columns=drop_cols)
+
+
 @st.cache_data(ttl=DASHBOARD_DATA_CACHE_TTL, max_entries=40, show_spinner=False)
 def query_campaign_bundle(_engine, d1: date, d2: date, cids: tuple, type_sel: tuple, topn_cost: int = 0) -> pd.DataFrame:
     if not table_exists(_engine, "fact_campaign_daily"):
@@ -1863,7 +2072,10 @@ def query_campaign_bundle(_engine, d1: date, d2: date, cids: tuple, type_sel: tu
     sql += _bundle_limit_clause(topn_cost)
 
     df = sql_read(_engine, sql, {"d1": str(d1), "d2": str(d2), **cid_params, **type_params})
-    return _finalize_bundle_df(df, "campaign_type")
+    df = _finalize_bundle_df(df, "campaign_type")
+    shopping_summary = query_shopping_query_campaign_purchase_summary(_engine, d1, d2, cids_tuple, type_sel)
+    df = _override_with_shopping_query_purchase(df, shopping_summary, ["customer_id", "campaign_id"], "campaign_type")
+    return df
 
 @st.cache_data(ttl=DASHBOARD_DATA_CACHE_TTL, max_entries=40, show_spinner=False)
 def query_keyword_bundle(_engine, d1: date, d2: date, cids, type_sel: tuple, topn_cost: int = 0, include_dt: bool = False) -> pd.DataFrame:

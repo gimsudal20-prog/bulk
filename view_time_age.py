@@ -10,7 +10,7 @@ import pandas as pd
 import streamlit as st
 
 from data import get_table_columns, sql_read, table_exists
-from ui import render_echarts_dual_axis
+from ui import THEME, render_empty_state
 from targeting_collector_helpers import AGE_BUCKETS
 
 
@@ -300,6 +300,144 @@ def _kpi_row(summary: pd.DataFrame) -> None:
             )
 
 
+def _chart_values(df: pd.DataFrame, col: str) -> list[float]:
+    return pd.to_numeric(df.get(col, 0), errors="coerce").fillna(0).astype(float).round(2).tolist()
+
+
+def _render_time_age_dual_axis(
+    title: str,
+    desc: str,
+    df: pd.DataFrame,
+    x_col: str,
+    y1_col: str,
+    y1_name: str,
+    y2_col: str,
+    y2_name: str,
+    *,
+    key: str,
+    height: int = 370,
+) -> None:
+    """Render a roomy overview-style bar+line chart for the time/age/device tabs."""
+    if df is None or df.empty or x_col not in df.columns:
+        render_empty_state("차트를 그릴 데이터가 부족합니다.", height, "기간이나 필터 조건을 변경해보세요.")
+        return
+
+    chart_df = df.copy()
+    x_data = chart_df[x_col].astype(str).tolist()
+    y1_data = _chart_values(chart_df, y1_col)
+    y2_data = _chart_values(chart_df, y2_col)
+    dense_x = len(x_data) >= 18
+
+    options = {
+        "backgroundColor": "#FFFFFF",
+        "animation": True,
+        "color": [THEME["primary_soft"], THEME["primary"]],
+        "tooltip": {
+            "trigger": "axis",
+            "axisPointer": {"type": "cross", "crossStyle": {"color": THEME["line"]}},
+            "backgroundColor": "#FFFFFF",
+            "borderColor": THEME["line"],
+            "borderWidth": 1,
+            "textStyle": {"color": THEME["text"], "fontSize": 12},
+            "padding": [10, 12],
+        },
+        "legend": {
+            "data": [y1_name, y2_name],
+            "top": 8,
+            "right": 18,
+            "itemWidth": 10,
+            "itemHeight": 10,
+            "itemGap": 16,
+            "textStyle": {"color": THEME["muted"], "fontSize": 12, "fontWeight": 600},
+        },
+        "grid": {
+            "left": 64,
+            "right": 72,
+            "bottom": 54,
+            "top": 58,
+            "containLabel": False,
+        },
+        "xAxis": [{
+            "type": "category",
+            "data": x_data,
+            "axisPointer": {"type": "shadow"},
+            "axisLine": {"lineStyle": {"color": THEME["line"]}},
+            "axisTick": {"show": False},
+            "axisLabel": {
+                "color": THEME["muted"],
+                "fontSize": 11,
+                "fontWeight": 600,
+                "margin": 15,
+                "hideOverlap": True,
+                **({"interval": 1} if dense_x else {"interval": 0}),
+            },
+        }],
+        "yAxis": [
+            {
+                "type": "value",
+                "name": y1_name,
+                "nameGap": 16,
+                "nameTextStyle": {"color": THEME["muted"], "fontSize": 11, "fontWeight": 700, "padding": [0, 0, 4, 0]},
+                "axisLabel": {"color": THEME["muted"], "fontSize": 11, "margin": 12},
+                "splitLine": {"lineStyle": {"type": "solid", "color": "#EEF2F7"}},
+            },
+            {
+                "type": "value",
+                "name": y2_name,
+                "nameGap": 16,
+                "nameTextStyle": {"color": THEME["muted"], "fontSize": 11, "fontWeight": 700, "padding": [0, 0, 4, 0]},
+                "axisLabel": {"color": THEME["muted"], "fontSize": 11, "margin": 12},
+                "splitLine": {"show": False},
+            },
+        ],
+        "series": [
+            {
+                "name": y1_name,
+                "type": "bar",
+                "data": y1_data,
+                "barMaxWidth": 28,
+                "barCategoryGap": "46%",
+                "itemStyle": {"color": THEME["primary_soft"], "borderRadius": [7, 7, 0, 0]},
+                "emphasis": {"focus": "series"},
+            },
+            {
+                "name": y2_name,
+                "type": "line",
+                "yAxisIndex": 1,
+                "data": y2_data,
+                "smooth": True,
+                "showSymbol": True,
+                "symbol": "circle",
+                "symbolSize": 6,
+                "itemStyle": {"color": THEME["primary"]},
+                "lineStyle": {"width": 2.7},
+                "emphasis": {"focus": "series"},
+            },
+        ],
+    }
+
+    with st.container(border=True):
+        st.markdown(
+            f"""
+            <div class='ta-chart-header'>
+                <div class='ta-chart-title'>{escape(title)}</div>
+                <div class='ta-chart-desc'>{escape(desc)}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        echarts_renderer = None
+        try:
+            from streamlit_echarts import st_echarts as echarts_renderer
+        except Exception:
+            echarts_renderer = None
+        if echarts_renderer:
+            echarts_renderer(options=options, height=f"{height}px", key=f"{key}_chart")
+        else:
+            fallback = pd.DataFrame({x_col: x_data, y1_name: y1_data, y2_name: y2_data}).set_index(x_col)
+            st.line_chart(fallback, height=height)
+
+
 def _render_overview_like_chart(df: pd.DataFrame, label_col: str, *, key: str, title_prefix: str) -> None:
     """Render the time/age/device chart in the same bar+line style as overview trend charts."""
     if df is None or df.empty or label_col not in df.columns:
@@ -311,6 +449,7 @@ def _render_overview_like_chart(df: pd.DataFrame, label_col: str, *, key: str, t
         chart_df[col] = pd.to_numeric(chart_df.get(col, 0), errors="coerce").fillna(0)
     chart_df[label_col] = chart_df[label_col].astype(str)
 
+    st.markdown("<div class='ta-chart-toolbar-gap'></div>", unsafe_allow_html=True)
     trend_view = st.segmented_control(
         "추이 보기",
         ["비용 및 매출 추이", "유입 지표 추이"],
@@ -318,36 +457,33 @@ def _render_overview_like_chart(df: pd.DataFrame, label_col: str, *, key: str, t
         key=key,
         label_visibility="collapsed",
     )
+    st.markdown("<div class='ta-chart-after-toolbar'></div>", unsafe_allow_html=True)
 
     if trend_view == "유입 지표 추이":
-        _render_section_title(
+        _render_time_age_dual_axis(
             f"{title_prefix} 노출 및 클릭 추이",
-            "오버뷰의 일자별 성과 추이와 동일한 막대+라인 형식입니다.",
-        )
-        render_echarts_dual_axis(
-            f"{title_prefix} 노출 및 클릭 추이",
+            "막대는 노출수, 라인은 클릭수입니다. 라벨과 축 여백을 넓혀 시간대별 흐름을 보기 쉽게 정리했습니다.",
             chart_df,
             label_col,
             "imp",
             "노출수",
             "clk",
             "클릭수",
-            height=320,
+            key=f"{key}_traffic",
+            height=370,
         )
     else:
-        _render_section_title(
+        _render_time_age_dual_axis(
             f"{title_prefix} 비용 및 매출 추이",
-            "오버뷰의 일자별 성과 추이와 동일한 막대+라인 형식입니다.",
-        )
-        render_echarts_dual_axis(
-            f"{title_prefix} 비용 및 매출 추이",
+            "막대는 광고비, 라인은 매출입니다. 오버뷰 차트와 같은 형식으로 비교하되 여백을 더 넓게 잡았습니다.",
             chart_df,
             label_col,
             "cost",
             "광고비",
             "sales",
             "매출",
-            height=320,
+            key=f"{key}_cost_sales",
+            height=370,
         )
 
 def _filter_campaign_and_group(

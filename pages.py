@@ -83,7 +83,7 @@ def _render_command_center(nav: str, latest: dict | None, f: dict | None) -> Non
                 <div class='nv-command-note'>{escape(date_range)} · {escape(media_count)}</div>
             </div>
             <div class='nv-command-card'>
-                <div class='nv-command-label'>데이터 신선도</div>
+                <div class='nv-command-label'>최근 수집일</div>
                 <div class='nv-command-value'>{escape(latest_date)}</div>
                 <div class='nv-command-note'>{escape(latest_note)}</div>
             </div>
@@ -94,10 +94,11 @@ def _render_command_center(nav: str, latest: dict | None, f: dict | None) -> Non
             </div>
         </div>
         <div class='nv-workflow-strip'>
-            <span class='active'>1. 필터 고정</span>
-            <span>2. KPI 스캔</span>
-            <span>3. 상세 드릴다운</span>
-            <span>4. 조치/공유</span>
+            <strong>조회 흐름</strong>
+            <span><b>1</b> 필터 고정</span>
+            <span><b>2</b> KPI 스캔</span>
+            <span><b>3</b> 상세 드릴다운</span>
+            <span><b>4</b> 조치/공유</span>
         </div>
         """,
         unsafe_allow_html=True,
@@ -203,17 +204,6 @@ def main():
                 st.session_state["nav_page"] = page_key
                 st.rerun()
         nav = st.session_state.get("nav_page", nav_items[0])
-
-        st.markdown(
-            """
-            <div class='sidebar-status-card'>
-                <div class='sidebar-status-kicker'>Lazyweb refresh</div>
-                <div class='sidebar-status-title'>운영 흐름 중심 UI</div>
-                <div class='sidebar-status-body'>필터는 고정하고, 상단에서 맥락과 다음 액션을 먼저 확인합니다.</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
 
     f = None
     if nav == "설정 및 연결":

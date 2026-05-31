@@ -941,10 +941,17 @@ def _build_rank_metric_sql(rank_col: str | None) -> tuple[str, str]:
     return rank_agg_sql, rank_select_sql
 
 
-def _build_bundle_metric_sql(fact_cols: list) -> dict:
+def _build_bundle_metric_sql(fact_cols: list, *, purchase_fallback: bool = True) -> dict:
     expr = _strict_conv_selects(fact_cols)
+    if purchase_fallback:
+        purchase_conv_expr = expr["purchase_conv_expr"]
+        purchase_sales_expr = expr["purchase_sales_expr"]
+    else:
+        scoped_cols = set(fact_cols or [])
+        purchase_conv_expr = "COALESCE(purchase_conv, 0)" if "purchase_conv" in scoped_cols else "0"
+        purchase_sales_expr = "COALESCE(purchase_sales, 0)" if "purchase_sales" in scoped_cols else "0"
     return {
-        "conv_agg_sql": f", SUM({expr['purchase_conv_expr']}) as conv, SUM({expr['purchase_sales_expr']}) as sales, SUM({expr['total_conv_expr']}) as tot_conv, SUM({expr['total_sales_expr']}) as tot_sales",
+        "conv_agg_sql": f", SUM({purchase_conv_expr}) as conv, SUM({purchase_sales_expr}) as sales, SUM({expr['total_conv_expr']}) as tot_conv, SUM({expr['total_sales_expr']}) as tot_sales",
         "cart_agg_sql": f", SUM({expr['cart_conv_expr']}) as cart_conv, SUM({expr['cart_sales_expr']}) as cart_sales",
         "wish_agg_sql": f", SUM({expr['wish_conv_expr']}) as wishlist_conv, SUM({expr['wish_sales_expr']}) as wishlist_sales",
         "cart_select_sql": ", agg.cart_conv, agg.cart_sales",
@@ -1466,7 +1473,7 @@ def query_keyword_bundle(_engine, d1: date, d2: date, cids, type_sel: tuple, top
 
     kw_fact_cols = get_table_columns(_engine, "fact_keyword_daily")
     rank_agg_sql, rank_select_sql = _build_rank_metric_sql(_resolve_rank_column(_engine, "fact_keyword_daily"))
-    metric_sql = _build_bundle_metric_sql(kw_fact_cols)
+    metric_sql = _build_bundle_metric_sql(kw_fact_cols, purchase_fallback=False)
     dt_group, dt_select = _build_dt_sql(include_dt)
 
     sql = f"""

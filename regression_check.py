@@ -171,6 +171,25 @@ def check_targeting_breakdown_contract(root: Path) -> list[str]:
     return ['ok | 시간대/연령대 breakdown 수집 계약 유지']
 
 
+def check_overview_keyword_purchase_contract(root: Path) -> list[str]:
+    data_path = root / 'data.py'
+    overview_path = root / 'view_overview.py'
+    if not data_path.exists() or not overview_path.exists():
+        raise RegressionFailure('data.py 또는 view_overview.py 가 없습니다')
+
+    data_text = data_path.read_text(encoding='utf-8')
+    overview_text = overview_path.read_text(encoding='utf-8')
+    required = {
+        'keyword bundle 구매완료 fallback 비활성': '_build_bundle_metric_sql(kw_fact_cols, purchase_fallback=False)' in data_text,
+        'bundle metric fallback 옵션 유지': 'purchase_fallback: bool = True' in data_text,
+        'overview keyword cache version 갱신': 'cache_version = 2' in overview_text,
+    }
+    missing = [name for name, ok in required.items() if not ok]
+    if missing:
+        raise RegressionFailure(f'overview keyword 구매완료 계약 누락: {", ".join(missing)}')
+    return ['ok | overview 키워드 상세 구매완료/총전환 분리 계약 유지']
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description='Run minimal regression checks.')
     parser.add_argument('--repo', default='.', help='repository root path')
@@ -188,6 +207,7 @@ def main() -> int:
         check_backfill_stage_logging,
         check_sa_scope_contract,
         check_targeting_breakdown_contract,
+        check_overview_keyword_purchase_contract,
     ]
     for fn in checks:
         try:

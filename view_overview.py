@@ -231,6 +231,7 @@ def _cached_campaign_bundle(_engine, start_dt, end_dt, cids: tuple, type_sel: tu
 
 @st.cache_data(ttl=43200, max_entries=10, show_spinner=False)
 def _cached_keyword_bundle(_engine, start_dt, end_dt, cids: tuple, type_sel: tuple) -> pd.DataFrame:
+    cache_version = 2  # 구매완료수는 keyword purchase_conv만 사용하도록 캐시 갱신
     # 오버뷰 최초 로딩/리포트용 경량 번들입니다.
     # 화면 상세 표는 아래 _cached_keyword_full_bundle()을 별도로 사용해 정렬 누락을 막습니다.
     try:
@@ -242,6 +243,7 @@ def _cached_keyword_bundle(_engine, start_dt, end_dt, cids: tuple, type_sel: tup
 
 @st.cache_data(ttl=43200, max_entries=6, show_spinner=False)
 def _cached_keyword_full_bundle(_engine, start_dt, end_dt, cids: tuple, type_sel: tuple) -> pd.DataFrame:
+    cache_version = 2  # 구매완료수와 총 전환수 분리 로직 반영
     # st.dataframe의 정렬은 브라우저에 전달된 행 안에서만 동작합니다.
     # 따라서 키워드 상세/엑셀용 데이터는 광고비 상위 제한을 걸지 않고 전체를 가져옵니다.
     try:

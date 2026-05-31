@@ -82,6 +82,21 @@ def get_col_idx(headers: List[str], candidates: List[str]) -> int:
     return -1
 
 
+def get_text_col_idx(headers: List[str], candidates: List[str], exclude_tokens: List[str] | None = None) -> int:
+    norm_headers = [normalize_header(h) for h in headers]
+    norm_candidates = [normalize_header(c) for c in candidates]
+    excludes = [normalize_header(x) for x in (exclude_tokens or [])]
+    for c in norm_candidates:
+        for i, h in enumerate(norm_headers):
+            if c == h and not any(x and x in h for x in excludes):
+                return i
+    for c in norm_candidates:
+        for i, h in enumerate(norm_headers):
+            if c in h and not any(x and x in h for x in excludes):
+                return i
+    return -1
+
+
 def safe_float(v) -> float:
     if pd.isna(v):
         return 0.0
@@ -425,7 +440,9 @@ def _conv_extract_header_rows(df: pd.DataFrame) -> tuple[int, list[str]]:
 def _conv_resolve_header_indexes(headers: list[str]) -> dict[str, int]:
     return {
         'cid_idx': get_col_idx(headers, ['캠페인id', 'campaignid', 'ncccampaignid']),
+        'gid_idx': get_col_idx(headers, ['광고그룹id', 'adgroupid', 'nccadgroupid']),
         'kid_idx': get_col_idx(headers, ['키워드id', 'keywordid', 'ncckeywordid']),
+        'kw_text_idx': get_text_col_idx(headers, ['키워드', 'keyword', '키워드명', 'keywordname'], ['id']),
         'adid_idx': get_col_idx(headers, ['광고id', '소재id', 'adid', 'nccadid']),
         'type_idx': get_col_idx(headers, ['전환유형', 'conversiontype', 'convtp']),
         'cnt_idx': get_col_idx(headers, ['총전환수', '전환수', 'conversions', 'conversioncount', 'ccnt']),
@@ -434,6 +451,7 @@ def _conv_resolve_header_indexes(headers: list[str]) -> dict[str, int]:
 
 
 def _conv_try_header_mode(df: pd.DataFrame, allowed_campaign_ids: set[str], report_hint: str,
+                          keyword_lookup: dict, keyword_unique_lookup: dict, live_keyword_resolver,
                           debug_account_name: str, debug_target_date: str, *, fast_mode: bool = False) -> tuple[dict, dict, dict, dict] | None:
     camp_map, kw_map, ad_map, summary = _conv_empty_maps_and_summary()
     debug_rows: list[dict] = []
@@ -452,8 +470,10 @@ def _conv_try_header_mode(df: pd.DataFrame, allowed_campaign_ids: set[str], repo
         need_max = max(type_idx, cnt_idx, sales_idx if sales_idx != -1 else -1)
         if len(r) <= need_max:
             continue
-        row_campaign_id = r.iloc[idxs['cid_idx']] if idxs['cid_idx'] != -1 and len(r) > idxs['cid_idx'] else ''
         vals = [str(x) for x in r.tolist()]
+        row_campaign_id = str(r.iloc[idxs['cid_idx']]).strip() if idxs['cid_idx'] != -1 and len(r) > idxs['cid_idx'] else ''
+        if not row_campaign_id:
+            row_campaign_id = extract_prefixed_token(vals, "cmp-")
         if not _conv_row_allowed(row_campaign_id, allowed_campaign_ids):
             _conv_add_debug_row(debug_rows, report_hint, debug_account_name, debug_target_date, vals, "", 0, 0, False, "campaign_filtered_header")
             continue
@@ -463,16 +483,48 @@ def _conv_try_header_mode(df: pd.DataFrame, allowed_campaign_ids: set[str], repo
         c_val = safe_float(r.iloc[cnt_idx])
         s_val = int(safe_float(r.iloc[sales_idx])) if sales_idx != -1 else 0
         add_split_summary(summary, is_purchase, is_cart, is_wishlist, c_val, s_val)
-        _conv_add_debug_row(
-            debug_rows, report_hint, debug_account_name, debug_target_date, vals,
-            "purchase" if is_purchase else ("cart" if is_cart else "wishlist"), c_val, s_val, True, "header_keep"
+        row_cid = str(r.iloc[idxs['cid_idx']]).strip() if idxs['cid_idx'] != -1 and len(r) > idxs['cid_idx'] else ""
+        row_gid = str(r.iloc[idxs['gid_idx']]).strip() if idxs['gid_idx'] != -1 and len(r) > idxs['gid_idx'] else ""
+        row_kid = str(r.iloc[idxs['kid_idx']]).strip() if idxs['kid_idx'] != -1 and len(r) > idxs['kid_idx'] else ""
+        row_adid = str(r.iloc[idxs['adid_idx']]).strip() if idxs['adid_idx'] != -1 and len(r) > idxs['adid_idx'] else ""
+        if not row_cid:
+            row_cid = extract_prefixed_token(vals, "cmp-")
+        if not row_gid:
+            row_gid = extract_prefixed_token(vals, "grp-")
+        if row_kid in {"", "-"}:
+            row_kid = extract_prefixed_token(vals, "nkw-")
+        if not row_adid:
+            row_adid = extract_prefixed_token(vals, "nad-")
+
+        kw_obj_id, kw_text, row_kid_s = _conv_resolve_keyword_object_id(
+            row_kid, row_gid, idxs['kw_text_idx'], vals, keyword_lookup, keyword_unique_lookup, live_keyword_resolver
         )
-        if idxs['cid_idx'] != -1 and len(r) > idxs['cid_idx']:
-            _conv_apply_row(camp_map, r.iloc[idxs['cid_idx']], is_purchase, is_cart, is_wishlist, c_val, s_val)
-        if idxs['kid_idx'] != -1 and len(r) > idxs['kid_idx']:
-            _conv_apply_row(kw_map, r.iloc[idxs['kid_idx']], is_purchase, is_cart, is_wishlist, c_val, s_val)
-        if idxs['adid_idx'] != -1 and len(r) > idxs['adid_idx']:
-            _conv_apply_row(ad_map, r.iloc[idxs['adid_idx']], is_purchase, is_cart, is_wishlist, c_val, s_val)
+
+        if row_cid.lower().startswith("cmp-"):
+            _conv_apply_row(camp_map, row_cid, is_purchase, is_cart, is_wishlist, c_val, s_val)
+        if kw_obj_id:
+            _conv_apply_row(kw_map, kw_obj_id, is_purchase, is_cart, is_wishlist, c_val, s_val)
+        if row_adid.lower().startswith("nad-"):
+            _conv_apply_row(ad_map, row_adid, is_purchase, is_cart, is_wishlist, c_val, s_val)
+
+        _conv_add_debug_row(
+            debug_rows,
+            report_hint,
+            debug_account_name,
+            debug_target_date,
+            vals,
+            "purchase" if is_purchase else ("cart" if is_cart else "wishlist"),
+            c_val,
+            s_val,
+            True,
+            "header_keep",
+            row_cid=row_cid,
+            row_gid=row_gid,
+            row_kid=row_kid_s,
+            row_adid=row_adid,
+            kw_text=kw_text,
+            kw_obj_id=kw_obj_id,
+        )
 
     if camp_map or kw_map or ad_map:
         _conv_flush_debug_rows(debug_rows, report_hint, debug_account_name, debug_target_date, fast_mode=fast_mode)
@@ -561,13 +613,13 @@ def _conv_pick_numeric_payload(vals: list[str], type_hits: list[tuple[int, bool,
 
 
 def _conv_resolve_keyword_object_id(row_kid: str, row_gid: str, kw_text_idx: int, vals: list[str],
-                                    keyword_lookup: dict, live_keyword_resolver) -> tuple[str, str, str]:
+                                    keyword_lookup: dict, keyword_unique_lookup: dict, live_keyword_resolver) -> tuple[str, str, str]:
     kw_obj_id = ""
     kw_text = ""
     row_kid_s = str(row_kid).strip()
     if row_kid_s not in {"", "-"} and row_kid_s.lower().startswith("nkw-"):
         kw_obj_id = row_kid_s
-    elif kw_text_idx != -1 and kw_text_idx < len(vals) and row_gid:
+    elif kw_text_idx != -1 and kw_text_idx < len(vals) and row_gid and row_gid != "-":
         kw_text = str(vals[kw_text_idx]).strip()
         kw_norm = normalize_keyword_text(kw_text)
         kw_obj_id = (
@@ -586,11 +638,17 @@ def _conv_resolve_keyword_object_id(row_kid: str, row_gid: str, kw_text_idx: int
             except Exception as e:
                 _log_best_effort_failure("live keyword resolve", e, ctx=f"row_gid={row_gid} kw_text={kw_text[:40]}")
                 kw_obj_id = ""
+    elif kw_text_idx != -1 and kw_text_idx < len(vals):
+        kw_text = str(vals[kw_text_idx]).strip()
+        kw_norm = normalize_keyword_text(kw_text)
+        cands = keyword_unique_lookup.get(kw_norm, []) if kw_norm else []
+        if len(cands) == 1:
+            kw_obj_id = cands[0]
     return kw_obj_id, kw_text, row_kid_s
 
 
 def _conv_try_heuristic_mode(df: pd.DataFrame, allowed_campaign_ids: set[str], report_hint: str,
-                             keyword_lookup: dict, live_keyword_resolver,
+                             keyword_lookup: dict, keyword_unique_lookup: dict, live_keyword_resolver,
                              debug_account_name: str, debug_target_date: str, *, fast_mode: bool = False) -> tuple[dict, dict, dict, dict]:
     camp_map, kw_map, ad_map, summary = _conv_empty_maps_and_summary()
     debug_rows: list[dict] = []
@@ -630,7 +688,7 @@ def _conv_try_heuristic_mode(df: pd.DataFrame, allowed_campaign_ids: set[str], r
             _conv_apply_row(camp_map, row_cid, is_purchase, is_cart, is_wishlist, c_val, s_val)
 
         kw_obj_id, kw_text, row_kid_s = _conv_resolve_keyword_object_id(
-            row_kid, row_gid, idxs['kw_text_idx'], vals, keyword_lookup, live_keyword_resolver
+            row_kid, row_gid, idxs['kw_text_idx'], vals, keyword_lookup, keyword_unique_lookup, live_keyword_resolver
         )
         if kw_obj_id:
             _conv_apply_row(kw_map, kw_obj_id, is_purchase, is_cart, is_wishlist, c_val, s_val)
@@ -672,6 +730,9 @@ def process_conversion_report(df: pd.DataFrame, allowed_campaign_ids: set[str] |
         df,
         allowed_campaign_ids=allowed_campaign_ids,
         report_hint=report_hint,
+        keyword_lookup=keyword_lookup,
+        keyword_unique_lookup=keyword_unique_lookup,
+        live_keyword_resolver=live_keyword_resolver,
         debug_account_name=debug_account_name,
         debug_target_date=debug_target_date,
         fast_mode=fast_mode,
@@ -684,6 +745,7 @@ def process_conversion_report(df: pd.DataFrame, allowed_campaign_ids: set[str] |
         allowed_campaign_ids=allowed_campaign_ids,
         report_hint=report_hint,
         keyword_lookup=keyword_lookup,
+        keyword_unique_lookup=keyword_unique_lookup,
         live_keyword_resolver=live_keyword_resolver,
         debug_account_name=debug_account_name,
         debug_target_date=debug_target_date,

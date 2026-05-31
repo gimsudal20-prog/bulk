@@ -115,6 +115,22 @@ def check_backfill_parser_contract(root: Path) -> list[str]:
     return [f"ok | backfill 파서 helper 유지 ({', '.join(sorted(required))})"]
 
 
+def check_conversion_keyword_mapping_contract(root: Path) -> list[str]:
+    path = root / 'collector_parsers.py'
+    if not path.exists():
+        raise RegressionFailure('collector_parsers.py 가 없습니다')
+    text = path.read_text(encoding='utf-8')
+    required = {
+        'header keyword text index': 'kw_text_idx' in text and 'get_text_col_idx' in text,
+        'header keyword lookup mapping': '_conv_resolve_keyword_object_id(' in text and 'keyword_unique_lookup' in text,
+        'header campaign token fallback': 'row_campaign_id = extract_prefixed_token(vals, "cmp-")' in text,
+    }
+    missing = [name for name, ok in required.items() if not ok]
+    if missing:
+        raise RegressionFailure(f'conversion keyword mapping 계약 누락: {", ".join(missing)}')
+    return ['ok | 전환 리포트 키워드명→키워드ID 매핑 계약 유지']
+
+
 def check_backfill_stage_logging(root: Path) -> list[str]:
     path = root / 'collector_backfill_recent_sa.py'
     if not path.exists():
@@ -206,6 +222,7 @@ def main() -> int:
         check_budget_cache_helpers,
         check_backfill_public_contract,
         check_backfill_parser_contract,
+        check_conversion_keyword_mapping_contract,
         check_backfill_stage_logging,
         check_sa_scope_contract,
         check_targeting_breakdown_contract,

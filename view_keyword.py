@@ -25,7 +25,10 @@ FMT_DICT = {
     "전환매출": "{:,.0f}원", "전환매출 증감": "{:+.1f}%", "전환매출 차이": "{:+,.0f}원",
     "구매완료 매출": "{:,.0f}원", "구매완료 매출 증감": "{:+.1f}%", "구매완료 매출 차이": "{:+,.0f}원",
     "ROAS(%)": "{:,.1f}%", "ROAS 증감": "{:+.1f}%",
-    "순위 변화": lambda x: f"{x:+.0f}" if pd.notna(x) else "-"
+    "순위 변화": lambda x: f"{x:+.0f}" if pd.notna(x) else "-",
+    "검색어 매핑 전환": "{:,.0f}", "검색어 미제공 전환": "{:,.0f}", "전체 전환": "{:,.0f}",
+    "검색어 매핑 매출": "{:,.0f}원", "검색어 미제공 매출": "{:,.0f}원", "전체 매출": "{:,.0f}원",
+    "미제공 전환 비중(%)": "{:,.1f}%", "미제공 매출 비중(%)": "{:,.1f}%",
 }
 
 
@@ -209,7 +212,7 @@ def _prefer_total_conversion_for_keyword(df: pd.DataFrame) -> pd.DataFrame:
 _KEYWORD_SUM_METRICS = ["노출", "클릭", "광고비", "전환", "구매완료", "전환매출", "구매완료 매출"]
 _KEYWORD_DERIVED_METRICS = ["CTR(%)", "CPC(원)", "CPA(원)", "ROAS(%)"]
 _KEYWORD_PERIOD_GROUP_COLS = [
-    "customer_id", "매체", "업체명", "담당자", "캠페인유형", "구분",
+    "customer_id", "매체", "업체명", "담당자", "캠페인유형", "구분", "전환출처",
     "campaign_id", "캠페인", "adgroup_id", "광고그룹",
     "keyword_id", "ad_id", "키워드",
 ]
@@ -279,6 +282,7 @@ def _build_shopping_terms_keyword_view(shop_terms: pd.DataFrame, meta: pd.DataFr
     }).copy()
     view["캠페인유형"] = "쇼핑검색"
     view["구분"] = "쇼핑 검색어"
+    view["전환출처"] = "검색어 상세"
     for col in ["노출", "클릭", "광고비"]:
         view[col] = 0
     total_conv = safe_numeric_col(view, "total_conv")
@@ -312,6 +316,7 @@ def _build_shopping_terms_base_bundle(shop_terms: pd.DataFrame) -> pd.DataFrame:
     out["clk"] = 0
     out["cost"] = 0
     out["구분"] = "쇼핑 검색어"
+    out["전환출처"] = "검색어 상세"
     return out
 
 
@@ -335,6 +340,8 @@ def _conversion_metric_cols(df: pd.DataFrame) -> tuple[str | None, str | None]:
 def _shopping_residual_group_cols(base: pd.DataFrame, detail: pd.DataFrame) -> list[str]:
     candidates = [
         "customer_id",
+        "campaign_id",
+        "adgroup_id",
         "업체명",
         "account_name",
         "캠페인",
@@ -402,8 +409,9 @@ def _build_shopping_unmapped_conversion_rows(base: pd.DataFrame, detail: pd.Data
     if rows.empty:
         return pd.DataFrame()
 
-    rows["키워드"] = "(검색어 미매핑 전환)"
-    rows["구분"] = "미매핑 전환"
+    rows["키워드"] = "(검색어 미제공 영역)"
+    rows["구분"] = "검색어 미제공 영역"
+    rows["전환출처"] = "검색어 미제공/콘텐츠·기타"
     if "캠페인유형" not in rows.columns:
         rows["캠페인유형"] = "쇼핑검색"
     for col in ["노출", "클릭", "광고비"]:
@@ -592,6 +600,7 @@ def compute_keyword_view(kw_bundle, ad_bundle, meta, _engine=None):
         if "dt" in df_kw.columns: rename_dict["dt"] = "일자"
         view_kw = df_kw.rename(columns=rename_dict)
         view_kw["구분"] = "키워드"
+        view_kw["전환출처"] = "키워드 성과"
         if "일자" in view_kw.columns: view_kw["일자"] = pd.to_datetime(view_kw["일자"]).dt.strftime('%Y-%m-%d')
         
     if not df_ad.empty:
@@ -601,8 +610,10 @@ def compute_keyword_view(kw_bundle, ad_bundle, meta, _engine=None):
         view_ad = _filter_shopping_general_ads(view_ad, allow_unknown_type=True)
         if "캠페인유형" in view_ad.columns:
             view_ad["구분"] = np.where(_is_shopping_campaign_type(view_ad["캠페인유형"]), "쇼핑 소재", "소재")
+            view_ad["전환출처"] = np.where(_is_shopping_campaign_type(view_ad["캠페인유형"]), "쇼핑 전체 성과", "소재 성과")
         else:
             view_ad["구분"] = "소재"
+            view_ad["전환출처"] = "소재 성과"
         if "일자" in view_ad.columns: view_ad["일자"] = pd.to_datetime(view_ad["일자"]).dt.strftime('%Y-%m-%d')
         
     if view_kw.empty and view_ad.empty: return pd.DataFrame()
@@ -634,6 +645,85 @@ def _render_sticky_table(df, first_col: str, height: int = 550, col_config: dict
     cfg = col_config.copy() if col_config else {}
     cfg[first_col] = st.column_config.TextColumn(first_col, pinned=True, width="medium")
     st.dataframe(_build_table_styler(df), use_container_width=True, height=calc_height, hide_index=True, column_config=cfg)
+
+
+def _build_search_term_mapping_summary(view: pd.DataFrame) -> pd.DataFrame:
+    """Summarize shopping conversions by search-term mapped vs no-search-term area."""
+    if view is None or view.empty or "구분" not in view.columns:
+        return pd.DataFrame()
+    work = view.copy()
+    if "캠페인유형" in work.columns:
+        shop_mask = _is_shopping_campaign_type(work["캠페인유형"])
+    else:
+        shop_mask = work["구분"].astype(str).isin(["쇼핑 검색어", "검색어 미제공 영역"])
+    work = work.loc[shop_mask].copy()
+    if work.empty:
+        return pd.DataFrame()
+
+    bucket = work["구분"].astype(str)
+    mapped_mask = bucket.eq("쇼핑 검색어")
+    no_query_mask = bucket.eq("검색어 미제공 영역")
+    work = work.loc[mapped_mask | no_query_mask].copy()
+    if work.empty:
+        return pd.DataFrame()
+
+    work["__bucket__"] = np.where(work["구분"].astype(str).eq("쇼핑 검색어"), "검색어 매핑", "검색어 미제공")
+    group_cols = _present_unique_cols(work, ["업체명", "캠페인", "광고그룹"])
+    if not group_cols:
+        group_cols = ["__all__"]
+        work["__all__"] = "전체"
+
+    conv = safe_numeric_col(work, "구매완료")
+    sales = safe_numeric_col(work, "구매완료 매출")
+    # 구매완료 split이 없는 기간/테이블이면 총 전환 기준으로 안전하게 fallback
+    work["__conv__"] = conv.where(conv > 0, safe_numeric_col(work, "전환"))
+    work["__sales__"] = sales.where(sales > 0, safe_numeric_col(work, "전환매출"))
+
+    mapped = (
+        work.loc[work["__bucket__"].eq("검색어 매핑")]
+        .groupby(group_cols, as_index=False, dropna=False)[["__conv__", "__sales__"]]
+        .sum()
+        .rename(columns={"__conv__": "검색어 매핑 전환", "__sales__": "검색어 매핑 매출"})
+    )
+    no_query = (
+        work.loc[work["__bucket__"].eq("검색어 미제공")]
+        .groupby(group_cols, as_index=False, dropna=False)[["__conv__", "__sales__"]]
+        .sum()
+        .rename(columns={"__conv__": "검색어 미제공 전환", "__sales__": "검색어 미제공 매출"})
+    )
+    keys = work[group_cols].drop_duplicates().copy()
+    out = keys.merge(mapped, on=group_cols, how="left").merge(no_query, on=group_cols, how="left")
+    for col in ["검색어 매핑 전환", "검색어 매핑 매출", "검색어 미제공 전환", "검색어 미제공 매출"]:
+        out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0)
+    out["전체 전환"] = out["검색어 매핑 전환"] + out["검색어 미제공 전환"]
+    out["전체 매출"] = out["검색어 매핑 매출"] + out["검색어 미제공 매출"]
+    out["미제공 전환 비중(%)"] = np.where(out["전체 전환"] > 0, out["검색어 미제공 전환"] / out["전체 전환"] * 100.0, 0.0)
+    out["미제공 매출 비중(%)"] = np.where(out["전체 매출"] > 0, out["검색어 미제공 매출"] / out["전체 매출"] * 100.0, 0.0)
+    out["해석"] = np.where(
+        out["검색어 미제공 전환"] > 0,
+        "검색어 없는 콘텐츠/기타 영역 가능",
+        "검색어 상세로 매핑됨",
+    )
+    if "__all__" in out.columns:
+        out = out.drop(columns=["__all__"])
+    sort_cols = [c for c in ["검색어 미제공 전환", "검색어 미제공 매출", "전체 전환"] if c in out.columns]
+    if sort_cols:
+        out = out.sort_values(sort_cols, ascending=[False] * len(sort_cols))
+    return out.reset_index(drop=True)
+
+
+def _render_search_term_mapping_summary(view: pd.DataFrame) -> None:
+    summary = _build_search_term_mapping_summary(view)
+    if summary.empty:
+        return
+    st.markdown("<div style='font-size:14px; font-weight:700; margin-bottom:6px; margin-top:16px;'>쇼핑검색 검색어 매핑 진단</div>", unsafe_allow_html=True)
+    st.caption("검색어 상세 리포트로 매핑된 구매완료와 검색어가 제공되지 않은 영역의 잔여 구매완료를 분리해서 봅니다. 미제공 영역은 콘텐츠/제휴/추천 등 검색어가 없는 지면 전환 가능성이 높습니다.")
+    show_cols = [c for c in [
+        "업체명", "캠페인", "광고그룹",
+        "검색어 매핑 전환", "검색어 미제공 전환", "전체 전환", "미제공 전환 비중(%)",
+        "검색어 매핑 매출", "검색어 미제공 매출", "전체 매출", "미제공 매출 비중(%)", "해석",
+    ] if c in summary.columns]
+    st.dataframe(_build_table_styler(summary[show_cols]), use_container_width=True, height=min(360, max(130, 48 + len(summary.index) * 35)), hide_index=True)
 
 
 def _keyword_fast_col_config(df: pd.DataFrame, first_col: str = "키워드") -> dict:
@@ -682,15 +772,19 @@ def render_keyword_main(view, top_n):
     agg_period = col4.checkbox("선택 기간 합산 (일자 통합)", key="kw_agg_period_main", help="조회된 여러 날짜의 데이터를 기간 전체 성과로 합산하여 보여줍니다.", value=False)
     agg_kw = col4.checkbox("동일 키워드 합산 (PC/MO 통합)", key="kw_agg_main", help="캠페인·광고그룹이 달라도 이름이 같은 키워드의 성과를 하나로 합산합니다.")
     
-    disp = filtered_for_grp.copy()
-    if sel_grp != "전체": disp = disp[disp["광고그룹"] == sel_grp]
+    mapping_summary_source = filtered_for_grp.copy()
+    if sel_grp != "전체":
+        mapping_summary_source = mapping_summary_source[mapping_summary_source["광고그룹"] == sel_grp]
+    _render_search_term_mapping_summary(mapping_summary_source)
+
+    disp = mapping_summary_source.copy()
     if search_kw:
         if exact_match_main:
             disp = disp[disp["키워드"].astype(str).str.lower() == search_kw.strip().lower()]
         else:
             disp = disp[disp["키워드"].astype(str).str.contains(search_kw, case=False, na=False)]
 
-    base_cols = ["일자", "키워드", "구분", "매체", "캠페인", "광고그룹", "업체명", "담당자", "캠페인유형"]
+    base_cols = ["일자", "키워드", "구분", "전환출처", "매체", "캠페인", "광고그룹", "업체명", "담당자", "캠페인유형"]
     if "일자" not in disp.columns:
         base_cols.remove("일자")
     if "평균순위" in disp.columns: base_cols.append("평균순위")
@@ -709,7 +803,7 @@ def render_keyword_main(view, top_n):
         if "일자" in disp.columns: grp_cols.insert(1, "일자")
         
         disp = _aggregate_keyword_rows(disp, grp_cols, include_rank=True)
-        base_cols = ["일자", "키워드", "구분", "매체", "업체명"] if "일자" in disp.columns else ["키워드", "구분", "매체", "업체명"]
+        base_cols = ["일자", "키워드", "구분", "전환출처", "매체", "업체명"] if "일자" in disp.columns else ["키워드", "구분", "전환출처", "매체", "업체명"]
         if "평균순위" in disp.columns:
             base_cols.append("평균순위")
 
@@ -800,12 +894,12 @@ def render_keyword_cmp(view_orig, engine, cids, type_sel, top_n, start_dt, end_d
                 base_bundle = base_bundle.merge(base_rank_grp, on=base_grp_cols, how="left")
         
         valid_keys = [k for k in ["customer_id", "키워드"] if k in disp.columns and k in base_bundle.columns]
-        base_cols_cmp = ["키워드", "구분", "매체", "업체명"]
+        base_cols_cmp = ["키워드", "구분", "전환출처", "매체", "업체명"]
         if "평균순위" in disp.columns:
             base_cols_cmp.append("평균순위")
     else:
         valid_keys = [k for k in ["customer_id", "adgroup_id", "키워드"] if k in disp.columns and k in base_bundle.columns]
-        base_cols_cmp = ["키워드", "구분", "매체", "캠페인", "광고그룹", "업체명", "담당자", "캠페인유형"]
+        base_cols_cmp = ["키워드", "구분", "전환출처", "매체", "캠페인", "광고그룹", "업체명", "담당자", "캠페인유형"]
         if "평균순위" in disp.columns: base_cols_cmp.append("평균순위")
 
     if not base_bundle.empty:
@@ -909,7 +1003,8 @@ def page_perf_keyword(meta: pd.DataFrame, engine, f: Dict) -> None:
         total_clk = float(safe_numeric_col(view, "클릭").sum())
         total_conv = float(safe_numeric_col(view, "전환").sum()) if "전환" in view.columns else 0.0
         total_sales = float(safe_numeric_col(view, "전환매출").sum()) if "전환매출" in view.columns else 0.0
-        purchase_conv = float(safe_numeric_col(view, "구매완료수").sum()) if "구매완료수" in view.columns else 0.0
+        purchase_col = "구매완료" if "구매완료" in view.columns else ("구매완료수" if "구매완료수" in view.columns else None)
+        purchase_conv = float(safe_numeric_col(view, purchase_col).sum()) if purchase_col else 0.0
         purchase_sales = float(safe_numeric_col(view, "구매완료 매출").sum()) if "구매완료 매출" in view.columns else 0.0
         if total_conv <= 0 and purchase_conv > 0:
             total_conv = purchase_conv
@@ -924,7 +1019,7 @@ def page_perf_keyword(meta: pd.DataFrame, engine, f: Dict) -> None:
             {"label": "CPC", "value": format_currency(total_cpc), "sub": "평균 비용", "tone": "neu"},
             {"label": "총 전환", "value": f"{total_conv:,.0f}", "sub": "전체 전환", "tone": "neu"},
         ]
-        if "구매완료수" in view.columns:
+        if purchase_col:
             kpi_items.append({"label": "구매완료", "value": f"{purchase_conv:,.0f}", "sub": "구매 기준", "tone": "neu", "accent": "green"})
         kpi_items.append({"label": "ROAS", "value": f"{total_roas:,.1f}%", "sub": "수익성", "tone": "neu"})
         render_kpi_strip(kpi_items)

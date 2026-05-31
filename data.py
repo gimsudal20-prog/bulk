@@ -2090,7 +2090,8 @@ def query_shopping_search_terms(_engine, d1: date, d2: date, cids: tuple) -> pd.
 
     sql = f"""
         SELECT
-            f.customer_id, c.campaign_name, a.adgroup_name, f.query_text,
+            f.customer_id, f.campaign_id, f.adgroup_id,
+            c.campaign_name, a.adgroup_name, f.query_text,
             {_sum_metric("total_conv", "total_conv")},
             {_sum_metric("total_sales", "total_sales")},
             {_sum_metric("purchase_conv", "purchase_conv")},
@@ -2104,7 +2105,7 @@ def query_shopping_search_terms(_engine, d1: date, d2: date, cids: tuple) -> pd.
         LEFT JOIN dim_campaign c ON f.campaign_id = c.campaign_id AND f.customer_id = c.customer_id
         LEFT JOIN dim_adgroup a ON f.adgroup_id = a.adgroup_id AND f.customer_id = a.customer_id
         WHERE f.dt BETWEEN :d1 AND :d2 {where_cid} {type_where_sql}
-        GROUP BY f.customer_id, c.campaign_name, a.adgroup_name, f.query_text
+        GROUP BY f.customer_id, f.campaign_id, f.adgroup_id, c.campaign_name, a.adgroup_name, f.query_text
         -- 성과가 있는 검색어 우선 정렬 및 로드 수 제한 최적화
         HAVING {_sum_expr("total_sales")} > 0
             OR {_sum_expr("total_conv")} > 0

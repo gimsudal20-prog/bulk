@@ -387,52 +387,6 @@ h1, h2, h3, h4, h5, h6 {
   font-weight: 650;
   margin-top: 6px;
 }
-.nv-workflow-strip {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-  margin: 0 0 17px;
-  padding: 10px 12px;
-  border: 1px solid var(--nv-line);
-  border-radius: var(--nv-radius-lg);
-  background: #FFFFFF;
-}
-.nv-workflow-strip strong {
-  color: var(--nv-text);
-  font-size: 12px;
-  font-weight: 900;
-  margin-right: 2px;
-}
-.nv-workflow-strip span {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 24px;
-  color: var(--nv-muted);
-  font-size: 12px;
-  font-weight: 850;
-  cursor: default;
-}
-.nv-workflow-strip span:not(:last-child)::after {
-  content: "";
-  width: 18px;
-  height: 1px;
-  margin-left: 2px;
-  background: var(--nv-line-strong);
-}
-.nv-workflow-strip b {
-  width: 20px;
-  height: 20px;
-  display: inline-grid;
-  place-items: center;
-  border-radius: 999px;
-  background: var(--nv-primary-soft);
-  color: var(--nv-primary);
-  font-size: 11px;
-  font-weight: 900;
-}
-
 .nv-empty-state {
   display: flex;
   flex-direction: column;
@@ -1010,47 +964,6 @@ h1, h2, h3, h4, h5, h6 {
   margin-bottom: 3px !important;
 }
 
-.sidebar-brand-card {
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
-  gap: 9px;
-  align-items: center;
-  padding: 9px;
-  margin: 2px 0 10px;
-  border: 1px solid var(--nv-line);
-  border-radius: var(--nv-radius-lg);
-  background: #FFFFFF;
-  box-shadow: var(--nv-shadow-soft);
-}
-.sidebar-brand-mark {
-  width: 34px;
-  height: 34px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 8px;
-  background: linear-gradient(135deg, var(--nv-primary), #10B981);
-  color: #fff;
-  font-size: 16px;
-  line-height: 1;
-  font-weight: 900;
-}
-.sidebar-brand-copy { min-width: 0; }
-.sidebar-brand-title {
-  color: var(--nv-text);
-  font-size: 15px;
-  line-height: 1.1;
-  font-weight: 900;
-}
-.sidebar-build-tag {
-  margin-top: 4px;
-  color: var(--nv-muted-light);
-  font-size: 10px;
-  font-weight: 800;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 [data-testid="stSidebar"] [data-testid="stButton"] {
   margin-bottom: 3px !important;
 }

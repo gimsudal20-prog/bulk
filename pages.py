@@ -93,13 +93,6 @@ def _render_command_center(nav: str, latest: dict | None, f: dict | None) -> Non
                 <div class='nv-command-note'>{escape(action_body)}</div>
             </div>
         </div>
-        <div class='nv-workflow-strip'>
-            <strong>조회 흐름</strong>
-            <span><b>1</b> 필터 고정</span>
-            <span><b>2</b> KPI 스캔</span>
-            <span><b>3</b> 상세 드릴다운</span>
-            <span><b>4</b> 조치/공유</span>
-        </div>
         """,
         unsafe_allow_html=True,
     )
@@ -167,18 +160,6 @@ def main():
     meta_ready = (meta is not None) and (not meta.empty)
 
     with st.sidebar:
-        st.markdown(
-            f"""
-            <div class='sidebar-brand-card'>
-                <div class='sidebar-brand-mark'>B</div>
-                <div class='sidebar-brand-copy'>
-                    <div class='sidebar-brand-title'>Bulk</div>
-                    <div class='sidebar-build-tag'>{escape(BUILD_TAG or 'Ad ops console')}</div>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
         st.markdown("<div class='nav-sidebar-title'>메뉴</div>", unsafe_allow_html=True)
 
         if not meta_ready:

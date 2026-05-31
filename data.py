@@ -1470,6 +1470,17 @@ def query_keyword_bundle(_engine, d1: date, d2: date, cids, type_sel: tuple, top
 
     _, cp_col = _resolve_campaign_type_column(_engine)
     type_filter_sql, type_params = _build_campaign_type_filter(cp_col, type_sel, "keyword_bundle_type")
+    shopping_exclude_values = _CAMPAIGN_TYPE_ALIASES.get("SHOPPING", ["SHOPPING", "쇼핑검색"])
+    shopping_placeholders = []
+    shopping_params = {}
+    for idx, value in enumerate(shopping_exclude_values):
+        key = f"keyword_bundle_exclude_shopping_{idx}"
+        shopping_placeholders.append(f":{key}")
+        shopping_params[key] = value
+    shopping_exclude_sql = (
+        f"AND COALESCE(CAST(c.{cp_col} AS TEXT), '') NOT IN ({', '.join(shopping_placeholders)})"
+        if shopping_placeholders else ""
+    )
 
     kw_fact_cols = get_table_columns(_engine, "fact_keyword_daily")
     rank_agg_sql, rank_select_sql = _build_rank_metric_sql(_resolve_rank_column(_engine, "fact_keyword_daily"))
@@ -1494,11 +1505,11 @@ def query_keyword_bundle(_engine, d1: date, d2: date, cids, type_sel: tuple, top
         JOIN dim_keyword k ON agg.keyword_id = k.keyword_id AND agg.customer_id = k.customer_id
         JOIN dim_adgroup a ON k.adgroup_id = a.adgroup_id AND agg.customer_id = a.customer_id
         JOIN dim_campaign c ON a.campaign_id = c.campaign_id AND agg.customer_id = c.customer_id
-        WHERE 1=1 {type_filter_sql}
+        WHERE 1=1 {type_filter_sql} {shopping_exclude_sql}
     """
     sql += _bundle_limit_clause(topn_cost)
 
-    df = sql_read(_engine, sql, {"d1": str(d1), "d2": str(d2), **cid_params, **type_params})
+    df = sql_read(_engine, sql, {"d1": str(d1), "d2": str(d2), **cid_params, **type_params, **shopping_params})
     return _finalize_bundle_df(df, "campaign_type_label")
 
 @st.cache_data(ttl=DASHBOARD_DATA_CACHE_TTL, max_entries=40, show_spinner=False)

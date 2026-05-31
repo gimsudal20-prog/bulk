@@ -231,24 +231,24 @@ def _cached_campaign_bundle(_engine, start_dt, end_dt, cids: tuple, type_sel: tu
 
 @st.cache_data(ttl=43200, max_entries=10, show_spinner=False)
 def _cached_keyword_bundle(_engine, start_dt, end_dt, cids: tuple, type_sel: tuple) -> pd.DataFrame:
-    cache_version = 2  # 구매완료수는 keyword purchase_conv만 사용하도록 캐시 갱신
+    cache_version = 3  # 쇼핑검색어를 키워드 상세에서 제외하고 keyword purchase_conv만 사용
     # 오버뷰 최초 로딩/리포트용 경량 번들입니다.
     # 화면 상세 표는 아래 _cached_keyword_full_bundle()을 별도로 사용해 정렬 누락을 막습니다.
     try:
         bundle = query_keyword_bundle(_engine, start_dt, end_dt, cids, type_sel, topn_cost=300)
-        return _merge_overview_keyword_bundle_with_shopping_terms(_engine, start_dt, end_dt, cids, type_sel, bundle)
+        return _filter_overview_keyword_rows(bundle)
     except Exception:
         return pd.DataFrame()
 
 
 @st.cache_data(ttl=43200, max_entries=6, show_spinner=False)
 def _cached_keyword_full_bundle(_engine, start_dt, end_dt, cids: tuple, type_sel: tuple) -> pd.DataFrame:
-    cache_version = 2  # 구매완료수와 총 전환수 분리 로직 반영
+    cache_version = 3  # 쇼핑검색어를 키워드 상세에서 제외하고 전체 키워드를 조회
     # st.dataframe의 정렬은 브라우저에 전달된 행 안에서만 동작합니다.
     # 따라서 키워드 상세/엑셀용 데이터는 광고비 상위 제한을 걸지 않고 전체를 가져옵니다.
     try:
         bundle = query_keyword_bundle(_engine, start_dt, end_dt, cids, type_sel, topn_cost=-1)
-        return _merge_overview_keyword_bundle_with_shopping_terms(_engine, start_dt, end_dt, cids, type_sel, bundle)
+        return _filter_overview_keyword_rows(bundle)
     except Exception:
         return pd.DataFrame()
 
@@ -532,23 +532,33 @@ def _overview_is_naver_keyword_scope(df: pd.DataFrame) -> pd.Series:
     if df is None or df.empty:
         return pd.Series(dtype=bool)
     labels = {
-        "WEB_SITE", "SHOPPING", "POWER_CONTENT", "POWER_CONTENTS", "BRAND_SEARCH", "PLACE",
-        "파워링크", "쇼핑검색", "파워컨텐츠", "브랜드검색", "플레이스", "네이버", "NAVER",
+        "WEB_SITE", "POWER_CONTENT", "POWER_CONTENTS", "BRAND_SEARCH", "PLACE",
+        "파워링크", "파워컨텐츠", "브랜드검색", "플레이스",
     }
     normalized_labels = {x.upper() for x in labels}
     mask = pd.Series([False] * len(df.index), index=df.index)
-    for col in ["platform", "campaign_type_label", "campaign_type", "campaign_tp"]:
+    for col in ["campaign_type_label", "campaign_type", "campaign_tp"]:
         if col in df.columns:
             mask = mask | df[col].astype(str).str.strip().str.upper().isin(normalized_labels)
     return mask
 
 
-def _filter_keyword_scope_for_campaigns(kw_df: pd.DataFrame, camp_scope: pd.DataFrame) -> pd.DataFrame:
+def _filter_overview_keyword_rows(kw_df: pd.DataFrame) -> pd.DataFrame:
     if kw_df is None or kw_df.empty:
-        return pd.DataFrame()
+        return pd.DataFrame() if kw_df is None else kw_df
     out = kw_df.copy()
     if "keyword" in out.columns:
         out = out[out["keyword"].astype(str) != _UNMAPPED_KEYWORD_LABEL].copy()
+    type_col = next((c for c in ["campaign_type_label", "campaign_type", "campaign_tp"] if c in out.columns), None)
+    if type_col:
+        out = out[~_overview_is_shopping_series(out[type_col])].copy()
+    return out
+
+
+def _filter_keyword_scope_for_campaigns(kw_df: pd.DataFrame, camp_scope: pd.DataFrame) -> pd.DataFrame:
+    if kw_df is None or kw_df.empty:
+        return pd.DataFrame()
+    out = _filter_overview_keyword_rows(kw_df)
     if out.empty:
         return out
 
@@ -584,8 +594,7 @@ def _sum_numeric_metric(df: pd.DataFrame, col: str) -> float:
 
 
 def _append_unmapped_keyword_conversion_row(kw_df: pd.DataFrame, camp_df: pd.DataFrame) -> pd.DataFrame:
-    if kw_df is not None and not kw_df.empty and "keyword" in kw_df.columns:
-        kw_df = kw_df[kw_df["keyword"].astype(str) != _UNMAPPED_KEYWORD_LABEL].copy()
+    kw_df = _filter_overview_keyword_rows(kw_df)
     if camp_df is None or camp_df.empty:
         return pd.DataFrame() if kw_df is None else kw_df
 

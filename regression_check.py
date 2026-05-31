@@ -117,13 +117,17 @@ def check_backfill_parser_contract(root: Path) -> list[str]:
 
 def check_conversion_keyword_mapping_contract(root: Path) -> list[str]:
     path = root / 'collector_parsers.py'
-    if not path.exists():
-        raise RegressionFailure('collector_parsers.py 가 없습니다')
+    runner_path = root / 'collector_runner.py'
+    if not path.exists() or not runner_path.exists():
+        raise RegressionFailure('collector_parsers.py 또는 collector_runner.py 가 없습니다')
     text = path.read_text(encoding='utf-8')
+    runner_text = runner_path.read_text(encoding='utf-8')
     required = {
         'header keyword text index': 'kw_text_idx' in text and 'get_text_col_idx' in text,
         'header keyword lookup mapping': '_conv_resolve_keyword_object_id(' in text and 'keyword_unique_lookup' in text,
         'header campaign token fallback': 'row_campaign_id = extract_prefixed_token(vals, "cmp-")' in text,
+        'AD_CONVERSION은 쇼핑 없이도 수집': 'split_enabled_for_date_fn(target_date) and collect_sa' in runner_text and 'split_candidate_reports = ["AD_CONVERSION"]' in runner_text,
+        '쇼핑검색어는 keyword split 제외': 'raw_kw_map = ad_kw_map' in runner_text and 'SHOPPINGKEYWORD_CONVERSION_DETAIL is a search-term report' in runner_text,
     }
     missing = [name for name, ok in required.items() if not ok]
     if missing:
@@ -198,7 +202,8 @@ def check_overview_keyword_purchase_contract(root: Path) -> list[str]:
     required = {
         'keyword bundle 구매완료 fallback 비활성': '_build_bundle_metric_sql(kw_fact_cols, purchase_fallback=False)' in data_text,
         'bundle metric fallback 옵션 유지': 'purchase_fallback: bool = True' in data_text,
-        'overview keyword cache version 갱신': 'cache_version = 2' in overview_text,
+        'overview keyword cache version 갱신': 'cache_version = 3' in overview_text,
+        'keyword bundle 쇼핑검색 제외': 'keyword_bundle_exclude_shopping' in data_text and 'NOT IN' in data_text,
         'overview keyword 전체 기준 정렬 컨트롤': '_render_overview_keyword_sort_controls' in overview_text and '_sort_overview_detail_frame' in overview_text,
         'overview keyword 미매핑 전환 행': '_append_unmapped_keyword_conversion_row' in overview_text and '키워드 미매핑 전환' in overview_text,
         'overview keyword 미매핑 중복 제거': '_UNMAPPED_KEYWORD_LABEL' in overview_text and '!= _UNMAPPED_KEYWORD_LABEL' in overview_text,
@@ -219,7 +224,8 @@ def check_device_breakdown_contract(root: Path) -> list[str]:
     device_text = device_path.read_text(encoding='utf-8')
     view_text = view_path.read_text(encoding='utf-8')
     required = {
-        'device parser alias version 갱신': 'pcm_v20260531_alias2' in device_text,
+        'device parser metric version 갱신': 'pcm_v20260531_metric2' in device_text,
+        'device metric 상대 위치 추론': '_infer_metric_indices_relative' in device_text and 'relative_metrics' in device_text,
         'pcMobileTp 헤더 alias': 'pcmobiletp' in device_text and 'PC/모바일 구분' in device_text,
         'criterion targeting id alias': 'targeting id' in device_text and '타겟팅 id' in device_text,
         '미분리 device total 유지': 'UNSEGMENTED' in device_text and 'PC/MOBILE' in device_text,

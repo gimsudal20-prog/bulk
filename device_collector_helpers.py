@@ -11,7 +11,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 
-DEVICE_PARSER_VERSION = "pcm_v20260531_alias2"
+DEVICE_PARSER_VERSION = "pcm_v20260531_metric2"
 UNSEGMENTED_DEVICE_NAME = "UNSEGMENTED"
 
 DEVICE_HEADER_CANDIDATES = [
@@ -67,6 +67,15 @@ def _get_col_idx(headers: List[str], candidates: List[str]) -> int:
             if c and c in h:
                 return i
     return -1
+
+
+def _has_header_candidate(row_vals: List[str], candidates: List[str]) -> bool:
+    norm_candidates = [_normalize_header(c) for c in candidates]
+    for h in row_vals:
+        for c in norm_candidates:
+            if c and (c == h or c in h):
+                return True
+    return False
 
 
 def _safe_float(v) -> float:
@@ -131,9 +140,13 @@ def _nonempty_headers(row: pd.Series) -> List[str]:
 
 
 def _score_header_row(row_vals: List[str]) -> int:
-    pk_score = 2 if any(x in row_vals for x in [_normalize_header(x) for x in AD_HEADER_CANDIDATES]) else 0
-    device_score = 2 if any(x in row_vals for x in [_normalize_header(x) for x in DEVICE_HEADER_CANDIDATES]) else 0
-    metric_hits = sum(1 for x in [_normalize_header(x) for x in IMP_HEADER_CANDIDATES + CLK_HEADER_CANDIDATES + COST_HEADER_CANDIDATES] if x in row_vals)
+    pk_score = 2 if _has_header_candidate(row_vals, AD_HEADER_CANDIDATES + CRITERION_HEADER_CANDIDATES + CAMPAIGN_HEADER_CANDIDATES) else 0
+    device_score = 2 if _has_header_candidate(row_vals, DEVICE_HEADER_CANDIDATES) else 0
+    metric_hits = sum(
+        1
+        for candidates in [IMP_HEADER_CANDIDATES, CLK_HEADER_CANDIDATES, COST_HEADER_CANDIDATES, CONV_HEADER_CANDIDATES, SALES_HEADER_CANDIDATES]
+        if _has_header_candidate(row_vals, candidates)
+    )
     metric_score = min(metric_hits, 3)
     return pk_score + device_score + metric_score
 
@@ -177,7 +190,14 @@ def _infer_value_based_indices(df: pd.DataFrame) -> dict:
         if c_hits > camp_hits:
             camp_hits, camp_idx = c_hits, idx
 
-    metrics = {
+    if ad_hits <= 0:
+        ad_idx = DEFAULT_AD_IDX if ncols > DEFAULT_AD_IDX else -1
+    if device_hits <= 0:
+        device_idx = DEFAULT_DEVICE_IDX if ncols > DEFAULT_DEVICE_IDX else -1
+    if camp_hits <= 0:
+        camp_idx = DEFAULT_CAMP_IDX if ncols > DEFAULT_CAMP_IDX else -1
+
+    default_metrics = {
         "imp_idx": DEFAULT_IMP_IDX if ncols > DEFAULT_IMP_IDX else -1,
         "clk_idx": DEFAULT_CLK_IDX if ncols > DEFAULT_CLK_IDX else -1,
         "cost_idx": DEFAULT_COST_IDX if ncols > DEFAULT_COST_IDX else -1,
@@ -185,13 +205,16 @@ def _infer_value_based_indices(df: pd.DataFrame) -> dict:
         "sales_idx": DEFAULT_SALES_IDX if ncols > DEFAULT_SALES_IDX else -1,
         "rank_idx": DEFAULT_RANK_IDX if ncols > DEFAULT_RANK_IDX else -1,
     }
-
-    if ad_hits <= 0:
-        ad_idx = DEFAULT_AD_IDX if ncols > DEFAULT_AD_IDX else -1
-    if device_hits <= 0:
-        device_idx = DEFAULT_DEVICE_IDX if ncols > DEFAULT_DEVICE_IDX else -1
-    if camp_hits <= 0:
-        camp_idx = DEFAULT_CAMP_IDX if ncols > DEFAULT_CAMP_IDX else -1
+    relative_metrics = _infer_metric_indices_relative(
+        sample,
+        anchor_idx=device_idx,
+        used_indices={idx for idx in [ad_idx, camp_idx, device_idx] if idx != -1},
+        is_conversion=False,
+    )
+    metrics = {
+        key: relative_metrics.get(key, -1) if relative_metrics.get(key, -1) != -1 else default_value
+        for key, default_value in default_metrics.items()
+    }
 
     return {
         "ad_idx": ad_idx,
@@ -201,6 +224,89 @@ def _infer_value_based_indices(df: pd.DataFrame) -> dict:
         "device_hits": device_hits,
         "camp_hits": camp_hits,
         **metrics,
+    }
+
+
+def _looks_like_criterion_value(v: Any) -> bool:
+    owner = _extract_owner_id_from_criterion_id(v)
+    return bool(owner and (owner.lower().startswith("grp-") or owner.lower().startswith("cmp-")))
+
+
+def _looks_like_numeric_column(col: pd.Series) -> bool:
+    vals = [v for v in col.fillna("").tolist() if str(v or "").strip()]
+    if not vals:
+        return False
+    sample = vals[:80]
+    numeric_hits = sum(1 for v in sample if _looks_like_metric_value(v))
+    return numeric_hits >= max(2, int(len(sample) * 0.6))
+
+
+def _infer_metric_indices_relative(
+    sample: pd.DataFrame,
+    *,
+    anchor_idx: int,
+    used_indices: set[int],
+    is_conversion: bool = False,
+) -> dict:
+    ncols = 0 if sample is None else len(sample.columns)
+    if anchor_idx < 0 or ncols <= 0:
+        return {}
+    numeric_indices: List[int] = []
+    for idx in range(anchor_idx + 1, ncols):
+        if idx in used_indices:
+            continue
+        if _looks_like_numeric_column(sample.iloc[:, idx]):
+            numeric_indices.append(idx)
+
+    if is_conversion:
+        return {
+            "conv_idx": numeric_indices[0] if len(numeric_indices) > 0 else -1,
+            "sales_idx": numeric_indices[1] if len(numeric_indices) > 1 else -1,
+        }
+
+    return {
+        "imp_idx": numeric_indices[0] if len(numeric_indices) > 0 else -1,
+        "clk_idx": numeric_indices[1] if len(numeric_indices) > 1 else -1,
+        "cost_idx": numeric_indices[2] if len(numeric_indices) > 2 else -1,
+        "conv_idx": numeric_indices[3] if len(numeric_indices) > 3 else -1,
+        "sales_idx": numeric_indices[4] if len(numeric_indices) > 4 else -1,
+        "rank_idx": numeric_indices[5] if len(numeric_indices) > 5 else -1,
+    }
+
+
+def _infer_criterion_value_based_indices(df: pd.DataFrame, *, is_conversion: bool = False) -> dict:
+    if df is None or df.empty:
+        return {}
+    sample = df.head(min(120, len(df))).copy()
+    ncols = len(sample.columns)
+    criterion_idx = -1
+    criterion_hits = -1
+    device_idx = -1
+    device_hits = -1
+    for idx in range(ncols):
+        col = sample.iloc[:, idx].fillna("")
+        c_hits = int(sum(1 for v in col if _looks_like_criterion_value(v)))
+        d_hits = int(sum(1 for v in col if normalize_device_name(v)))
+        if c_hits > criterion_hits:
+            criterion_hits, criterion_idx = c_hits, idx
+        if d_hits > device_hits:
+            device_hits, device_idx = d_hits, idx
+    if criterion_hits <= 0:
+        criterion_idx = 2 if ncols > 2 else -1
+    if device_hits <= 0:
+        device_idx = 3 if ncols > 3 else -1
+    metric_idxs = _infer_metric_indices_relative(
+        sample,
+        anchor_idx=device_idx,
+        used_indices={idx for idx in [criterion_idx, device_idx] if idx != -1},
+        is_conversion=is_conversion,
+    )
+    return {
+        "criterion_idx": criterion_idx,
+        "device_idx": device_idx,
+        "criterion_hits": criterion_hits,
+        "device_hits": device_hits,
+        **metric_idxs,
     }
 
 
@@ -674,13 +780,25 @@ def _parse_criterion_metric_report(
         sales_idx = _get_col_idx(headers, CONV_SALES_HEADER_CANDIDATES)
     else:
         data_df = raw_df
-        criterion_idx = 2 if len(raw_df.columns) > 2 else -1
-        device_idx = 3 if len(raw_df.columns) > 3 else -1
-        imp_idx = 4 if len(raw_df.columns) > 4 else -1
-        clk_idx = 5 if len(raw_df.columns) > 5 else -1
-        cost_idx = 6 if len(raw_df.columns) > 6 else -1
-        conv_idx = 6 if is_conversion and len(raw_df.columns) > 6 else -1
-        sales_idx = 7 if is_conversion and len(raw_df.columns) > 7 else -1
+        criterion_idx = device_idx = imp_idx = clk_idx = cost_idx = conv_idx = sales_idx = -1
+
+    inferred = _infer_criterion_value_based_indices(data_df if not data_df.empty else raw_df, is_conversion=is_conversion)
+    if criterion_idx == -1:
+        criterion_idx = inferred.get("criterion_idx", -1)
+    if device_idx == -1:
+        device_idx = inferred.get("device_idx", -1)
+    if is_conversion:
+        if conv_idx == -1:
+            conv_idx = inferred.get("conv_idx", -1)
+        if sales_idx == -1:
+            sales_idx = inferred.get("sales_idx", -1)
+    else:
+        if imp_idx == -1:
+            imp_idx = inferred.get("imp_idx", -1)
+        if clk_idx == -1:
+            clk_idx = inferred.get("clk_idx", -1)
+        if cost_idx == -1:
+            cost_idx = inferred.get("cost_idx", -1)
 
     if criterion_idx == -1 or device_idx == -1:
         return {}, {
@@ -689,6 +807,8 @@ def _parse_criterion_metric_report(
             "criterion_idx": criterion_idx,
             "device_idx": device_idx,
             "sample_headers": raw_headers[:16],
+            "infer_criterion_hits": inferred.get("criterion_hits"),
+            "infer_device_hits": inferred.get("device_hits"),
         }
 
     stats: Dict[Tuple[str, str], dict] = {}
@@ -776,6 +896,8 @@ def _parse_criterion_metric_report(
         "campaign_rows": len(stats),
         "sample_headers": raw_headers[:16],
         "preview_rows": preview_rows,
+        "infer_criterion_hits": inferred.get("criterion_hits"),
+        "infer_device_hits": inferred.get("device_hits"),
     }
     return stats, meta
 

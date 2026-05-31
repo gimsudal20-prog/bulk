@@ -417,15 +417,6 @@ def _render_time_age_dual_axis(
     }
 
     with st.container(border=True):
-        st.markdown(
-            f"""
-            <div class='ta-chart-header'>
-                <div class='ta-chart-title'>{escape(title)}</div>
-                <div class='ta-chart-desc'>{escape(desc)}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
         echarts_renderer = None
         try:
             from streamlit_echarts import st_echarts as echarts_renderer
@@ -461,8 +452,8 @@ def _render_overview_like_chart(df: pd.DataFrame, label_col: str, *, key: str, t
 
     if trend_view == "유입 지표 추이":
         _render_time_age_dual_axis(
-            f"{title_prefix} 노출 및 클릭 추이",
-            "막대는 노출수, 라인은 클릭수입니다. 라벨과 축 여백을 넓혀 시간대별 흐름을 보기 쉽게 정리했습니다.",
+            "",
+            "",
             chart_df,
             label_col,
             "imp",
@@ -474,8 +465,8 @@ def _render_overview_like_chart(df: pd.DataFrame, label_col: str, *, key: str, t
         )
     else:
         _render_time_age_dual_axis(
-            f"{title_prefix} 비용 및 매출 추이",
-            "막대는 광고비, 라인은 매출입니다. 오버뷰 차트와 같은 형식으로 비교하되 여백을 더 넓게 잡았습니다.",
+            "",
+            "",
             chart_df,
             label_col,
             "cost",

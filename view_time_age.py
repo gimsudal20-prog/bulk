@@ -198,47 +198,81 @@ def _render_section_title(title: str, desc: str = "") -> None:
 
 
 def _format_display(df: pd.DataFrame, first_cols: List[str]) -> pd.DataFrame:
+    """Return a table layout aligned with the overview period/detail tables."""
     if df is None or df.empty:
         return pd.DataFrame()
     out = _add_calc_cols(df)
+    out["전환율(%)"] = np.where(out["clk"] > 0, out["conv"] / out["clk"] * 100.0, 0.0)
     rename = {
-        "imp": "노출",
-        "clk": "클릭",
+        "imp": "노출수",
+        "clk": "클릭수",
+        "CTR(%)": "클릭률(%)",
         "cost": "광고비",
         "conv": "전환수",
         "sales": "전환매출",
     }
     out = out.rename(columns=rename)
-    metric_cols = ["노출", "클릭", "CTR(%)", "CPC", "광고비", "전환수", "전환매출", "ROAS(%)"]
+    metric_cols = [
+        "노출수", "클릭수", "클릭률(%)", "광고비", "CPC",
+        "전환수", "전환율(%)", "전환매출", "ROAS(%)",
+    ]
     cols = [c for c in first_cols + metric_cols if c in out.columns]
     return out[cols]
 
 
-def _column_config(df: pd.DataFrame) -> dict:
-    cfg = {}
-    for c in df.columns:
-        if c in ["노출", "클릭", "광고비", "전환매출"]:
-            cfg[c] = st.column_config.NumberColumn(c, format="%,.0f")
-        elif c in ["전환수"]:
-            cfg[c] = st.column_config.NumberColumn(c, format="%,.1f")
-        elif c in ["CTR(%)", "ROAS(%)"]:
-            cfg[c] = st.column_config.NumberColumn(c, format="%.1f%%")
-        elif c == "CPC":
-            cfg[c] = st.column_config.NumberColumn("CPC", format="%,.0f원")
-    return cfg
+_TABLE_FORMATS = {
+    "노출수": "{:,.0f}",
+    "클릭수": "{:,.0f}",
+    "클릭률(%)": "{:,.2f}%",
+    "광고비": "{:,.0f}원",
+    "CPC": "{:,.0f}원",
+    "전환수": "{:,.1f}",
+    "전환율(%)": "{:,.2f}%",
+    "전환매출": "{:,.0f}원",
+    "ROAS(%)": "{:,.1f}%",
+}
+
+
+def _auto_table_height(df: pd.DataFrame, default_height: int = 420, min_height: int = 108, max_height: int = 520) -> int:
+    try:
+        rows = len(df.index)
+        if rows <= 0:
+            return min_height
+        calc = 38 + (rows * 35)
+        return max(min_height, min(calc, max_height))
+    except Exception:
+        return default_height
+
+
+def _table_column_config(first_col: str) -> dict:
+    return {first_col: st.column_config.TextColumn(first_col, pinned=True, width="medium")}
 
 
 def _render_table(df: pd.DataFrame) -> None:
-    """Use Streamlit's native dataframe so header click sorting stays available."""
+    """Render tables in the same compact, sortable style as the overview detail tables."""
     if df is None or df.empty:
         st.info("표시할 데이터가 없습니다.")
         return
-    st.dataframe(
-        df.copy(),
-        width="stretch",
-        hide_index=True,
-        column_config=_column_config(df),
-    )
+    view = df.copy()
+    first_col = str(view.columns[0]) if len(view.columns) else ""
+    height = _auto_table_height(view)
+    try:
+        styled = view.style.format(_TABLE_FORMATS)
+        st.dataframe(
+            styled,
+            width="stretch",
+            height=height,
+            hide_index=True,
+            column_config=_table_column_config(first_col) if first_col else None,
+        )
+    except Exception:
+        st.dataframe(
+            view,
+            width="stretch",
+            height=height,
+            hide_index=True,
+            column_config=_table_column_config(first_col) if first_col else None,
+        )
 
 
 def _kpi_row(summary: pd.DataFrame) -> None:

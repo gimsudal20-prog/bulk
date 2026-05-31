@@ -5,6 +5,7 @@ from __future__ import annotations
 from html import escape
 from typing import Dict, Iterable, List
 
+import altair as alt
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -266,15 +267,40 @@ def _kpi_row(summary: pd.DataFrame) -> None:
 
 
 def _render_static_bar_chart(df: pd.DataFrame, label_col: str, value_col: str, *, value_label: str = "광고비") -> None:
-    """Render a native Streamlit bar chart so raw HTML never leaks into the UI."""
+    """Render a fixed, non-scrollable chart that does not capture wheel/zoom gestures."""
     if df is None or df.empty or label_col not in df.columns or value_col not in df.columns:
         st.info("차트로 표시할 데이터가 없습니다.")
         return
+
     work = df[[label_col, value_col]].copy()
     work[value_col] = pd.to_numeric(work[value_col], errors="coerce").fillna(0)
     work[label_col] = work[label_col].astype(str)
-    chart_data = work.rename(columns={value_col: value_label}).set_index(label_col)
-    st.bar_chart(chart_data, height=320)
+    work = work.rename(columns={value_col: value_label})
+
+    chart = (
+        alt.Chart(work)
+        .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
+        .encode(
+            x=alt.X(
+                f"{label_col}:N",
+                title=None,
+                sort=None,
+                axis=alt.Axis(labelAngle=0, labelLimit=80),
+            ),
+            y=alt.Y(
+                f"{value_label}:Q",
+                title=None,
+                axis=alt.Axis(format=",.0f"),
+            ),
+            tooltip=[
+                alt.Tooltip(f"{label_col}:N", title=label_col),
+                alt.Tooltip(f"{value_label}:Q", title=value_label, format=",.0f"),
+            ],
+        )
+        .properties(height=300)
+        .configure_view(strokeWidth=0)
+    )
+    st.altair_chart(chart, use_container_width=True, theme=None)
 
 
 def _render_metric_bar_chart(df: pd.DataFrame, label_col: str, *, key: str, title_prefix: str) -> None:
@@ -816,6 +842,8 @@ def page_time_age(meta: pd.DataFrame, engine, f: Dict) -> None:
         .ta-section-desc{font-size:12px;font-weight:650;color:#64748B;text-align:right;line-height:1.35;}
         [data-baseweb="tab-list"]{margin-top:14px!important;}
         div[data-baseweb="select"]{transform:none!important;transition:none!important;}
+        div[data-testid="stVegaLiteChart"]{overflow:hidden!important;}
+        div[data-testid="stVegaLiteChart"] canvas{max-width:100%!important;}
         </style>
         """,
         unsafe_allow_html=True,

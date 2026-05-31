@@ -844,12 +844,16 @@ def _sq_find_type_hits(vals: List[str]):
         if not (is_purchase or is_cart or is_wishlist):
             continue
         hit = (idx, is_purchase, is_cart, is_wishlist)
-        if s_raw in {'1', '3'}:
+        if s_raw in {'1', '2', '3'}:
+            # 숫자 1/2/3은 전환유형 코드일 수도 있지만, 검색어 상세 리포트에서는
+            # 전환수/매출/순번 같은 일반 숫자와 충돌한다. 헤더 없는 heuristic에서
+            # 숫자를 유형으로 쓰면 총전환이 전부 구매완료로 오분류될 수 있으므로
+            # 여기서는 텍스트 유형(구매완료/장바구니/위시리스트 등)만 split으로 인정한다.
             if idx >= max(0, n - 6):
                 numeric_type_hits.append(hit)
         else:
             text_type_hits.append(hit)
-    return text_type_hits if text_type_hits else numeric_type_hits
+    return text_type_hits
 
 
 def _sq_extract_numeric_right(vals: List[str], anchor_idx: int):

@@ -1600,12 +1600,16 @@ def parse_shopping_query_report(df: pd.DataFrame, target_date: date, customer_id
             is_purchase, is_cart, is_wishlist = classify(v)
             if not (is_purchase or is_cart or is_wishlist):
                 continue
-            if s_raw in {'1', '3'}:
+            if s_raw in {'1', '2', '3'}:
+                # SHOPPINGKEYWORD_CONVERSION_DETAIL의 헤더 없는 파싱에서 숫자 1/2/3은
+                # 전환유형 코드보다 전환수/매출 같은 일반 숫자일 가능성이 높다.
+                # 숫자를 구매완료 유형으로 인정하면 미제공/기타 전환이 전부 구매완료로
+                # 찍히는 문제가 생기므로 텍스트 유형만 split으로 인정한다.
                 if idx >= max(0, n - 6):
                     numeric_type_hits.append((idx, is_purchase, is_cart, is_wishlist))
             else:
                 text_type_hits.append((idx, is_purchase, is_cart, is_wishlist))
-        type_hits = text_type_hits if text_type_hits else numeric_type_hits
+        type_hits = text_type_hits
         if not type_hits:
             continue
 
@@ -1846,9 +1850,11 @@ def merge_and_save_combined(engine: Engine, customer_id: str, target_date: date,
         wishlist_roas = None if wishlist_sales is None or cost <= 0 else (wishlist_sales / cost * 100.0)
 
         # conv/sales/roas 는 네이버 총합(구매+장바구니+위시리스트+기타)을 그대로 유지한다.
-        # 구매완료 중심 운영을 위해 primary_* 는 purchase 가 있으면 purchase 기준, 없으면 총합 기준으로 저장한다.
-        primary_conv = s.get("purchase_conv") if s.get("purchase_conv") is not None else s["conv"]
-        primary_sales = purchase_sales if purchase_sales is not None else total_sales
+        # primary_* 는 구매완료 split이 실제로 있을 때만 저장한다. split이 없을 때 총합을
+        # primary로 fallback하면 모든 전환이 구매완료처럼 보이는 문제가 생긴다.
+        has_purchase_split = s.get("purchase_conv") is not None or s.get("purchase_sales") is not None
+        primary_conv = s.get("purchase_conv") if has_purchase_split else None
+        primary_sales = purchase_sales if has_purchase_split else None
         primary_roas = None if primary_sales is None or cost <= 0 else (primary_sales / cost * 100.0)
 
         row = {

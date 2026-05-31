@@ -311,10 +311,13 @@ def refresh_overview_report_source_cache(engine: Engine, customer_id: str, d1, d
     camp_cols = _get_table_columns(engine, 'dim_campaign')
     cp_col = 'campaign_tp' if 'campaign_tp' in camp_cols else ('campaign_type' if 'campaign_type' in camp_cols else None)
     camp_type_sql = f"COALESCE(c.{cp_col}, 'WEB_SITE')" if cp_col else "'WEB_SITE'"
-    kw_conv_expr = _pick_expr(kw_cols, ['primary_conv', 'purchase_conv', 'conv'], alias='f')
-    kw_sales_expr = _pick_expr(kw_cols, ['primary_sales', 'purchase_sales', 'sales'], alias='f')
-    sq_conv_expr = _pick_expr(sq_cols, ['total_conv', 'purchase_conv'], alias='f')
-    sq_sales_expr = _pick_expr(sq_cols, ['total_sales', 'purchase_sales'], alias='f')
+    kw_conv_expr = _pick_expr(kw_cols, ['purchase_conv', 'primary_conv'], alias='f')
+    kw_sales_expr = _pick_expr(kw_cols, ['purchase_sales', 'primary_sales'], alias='f')
+    if 'split_available' in kw_cols:
+        kw_conv_expr = f"CASE WHEN COALESCE(f.split_available, FALSE) THEN {kw_conv_expr} ELSE 0 END"
+        kw_sales_expr = f"CASE WHEN COALESCE(f.split_available, FALSE) THEN {kw_sales_expr} ELSE 0 END"
+    sq_conv_expr = _pick_expr(sq_cols, ['purchase_conv'], alias='f')
+    sq_sales_expr = _pick_expr(sq_cols, ['purchase_sales'], alias='f')
     ctx = f"customer_id={customer_id} d1={d1} d2={d2}"
     last_err = None
     for attempt in range(1, 4):

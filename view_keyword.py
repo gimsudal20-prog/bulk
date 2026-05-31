@@ -292,7 +292,7 @@ def _includes_shopping_type(type_sel: tuple) -> bool:
 
 
 @st.cache_data(ttl=43200, max_entries=10, show_spinner=False)
-def _cached_keyword_shopping_terms(_engine, d1: date, d2: date, cids: tuple) -> pd.DataFrame:
+def _cached_keyword_shopping_terms(_engine, d1: date, d2: date, cids: tuple, cache_version: int = 2) -> pd.DataFrame:
     try:
         return query_shopping_search_terms(_engine, d1, d2, cids)
     except Exception:
@@ -392,6 +392,22 @@ def _conversion_metric_cols(df: pd.DataFrame) -> tuple[str | None, str | None]:
     return conv_col, sales_col
 
 
+def _purchase_metric_cols(df: pd.DataFrame) -> tuple[str | None, str | None]:
+    """Return strict purchase-complete columns without falling back to total conv/sales.
+
+    쇼핑검색의 검색어 미제공/차액 행은 총전환 기준으로 만들 수 있지만, 그 값을
+    구매완료로 단정하면 장바구니/위시/기타 전환까지 구매완료로 보이는 문제가 생긴다.
+    따라서 구매완료는 명시적인 split 컬럼이 있을 때만 사용한다.
+    """
+    if df is None or df.empty:
+        return None, None
+    conv_candidates = ["구매완료", "purchase_conv", "primary_conv"]
+    sales_candidates = ["구매완료 매출", "purchase_sales", "primary_sales"]
+    conv_col = next((c for c in conv_candidates if c in df.columns), None)
+    sales_col = next((c for c in sales_candidates if c in df.columns), None)
+    return conv_col, sales_col
+
+
 def _shopping_residual_group_cols(base: pd.DataFrame, detail: pd.DataFrame) -> list[str]:
     candidates = [
         "customer_id",
@@ -416,6 +432,8 @@ def _build_shopping_unmapped_conversion_rows(base: pd.DataFrame, detail: pd.Data
 
     base_conv_col, base_sales_col = _conversion_metric_cols(base)
     detail_conv_col, detail_sales_col = _conversion_metric_cols(detail)
+    base_purchase_col, base_purchase_sales_col = _purchase_metric_cols(base)
+    detail_purchase_col, detail_purchase_sales_col = _purchase_metric_cols(detail)
     if not base_conv_col and not base_sales_col:
         return pd.DataFrame()
 
@@ -445,22 +463,31 @@ def _build_shopping_unmapped_conversion_rows(base: pd.DataFrame, detail: pd.Data
     base_sales = _group_sum(shopping_base, base_sales_col, "__base_sales__")
     detail_conv = _group_sum(detail, detail_conv_col, "__detail_conv__")
     detail_sales = _group_sum(detail, detail_sales_col, "__detail_sales__")
+    base_purchase = _group_sum(shopping_base, base_purchase_col, "__base_purchase__")
+    base_purchase_sales = _group_sum(shopping_base, base_purchase_sales_col, "__base_purchase_sales__")
+    detail_purchase = _group_sum(detail, detail_purchase_col, "__detail_purchase__")
+    detail_purchase_sales = _group_sum(detail, detail_purchase_sales_col, "__detail_purchase_sales__")
 
     first_cols = _present_unique_cols(shopping_base, group_cols + ["customer_id", "업체명", "담당자", "캠페인유형", "캠페인", "광고그룹"])
     rows = shopping_base[first_cols].groupby(group_cols, as_index=False, dropna=False).first()
-    rows = rows.merge(base_conv, on=group_cols, how="left")
-    rows = rows.merge(base_sales, on=group_cols, how="left")
-    rows = rows.merge(detail_conv, on=group_cols, how="left")
-    rows = rows.merge(detail_sales, on=group_cols, how="left")
+    for metric_df in [base_conv, base_sales, detail_conv, detail_sales, base_purchase, base_purchase_sales, detail_purchase, detail_purchase_sales]:
+        rows = rows.merge(metric_df, on=group_cols, how="left")
 
-    for col in ["__base_conv__", "__base_sales__", "__detail_conv__", "__detail_sales__"]:
+    numeric_cols = [
+        "__base_conv__", "__base_sales__", "__detail_conv__", "__detail_sales__",
+        "__base_purchase__", "__base_purchase_sales__", "__detail_purchase__", "__detail_purchase_sales__",
+    ]
+    for col in numeric_cols:
         rows[col] = pd.to_numeric(rows[col], errors="coerce").fillna(0)
 
     rows["전환"] = (rows["__base_conv__"] - rows["__detail_conv__"]).clip(lower=0)
-    rows["구매완료"] = rows["전환"]
     rows["전환매출"] = (rows["__base_sales__"] - rows["__detail_sales__"]).clip(lower=0)
-    rows["구매완료 매출"] = rows["전환매출"]
-    rows = rows[(rows["전환"] > 0) | (rows["전환매출"] > 0)].copy()
+
+    # 차액 행은 총전환 잔여분이다. 명시적인 구매완료 split이 있을 때만 구매완료 차액을 계산하고,
+    # split이 없으면 장바구니/위시/기타가 구매완료로 둔갑하지 않도록 0으로 둔다.
+    rows["구매완료"] = (rows["__base_purchase__"] - rows["__detail_purchase__"]).clip(lower=0)
+    rows["구매완료 매출"] = (rows["__base_purchase_sales__"] - rows["__detail_purchase_sales__"]).clip(lower=0)
+    rows = rows[(rows["전환"] > 0) | (rows["전환매출"] > 0) | (rows["구매완료"] > 0) | (rows["구매완료 매출"] > 0)].copy()
     if rows.empty:
         return pd.DataFrame()
 
@@ -471,7 +498,10 @@ def _build_shopping_unmapped_conversion_rows(base: pd.DataFrame, detail: pd.Data
         rows["캠페인유형"] = "쇼핑검색"
     for col in ["노출", "클릭", "광고비"]:
         rows[col] = 0
-    rows = rows.drop(columns=[c for c in ["__base_conv__", "__base_sales__", "__detail_conv__", "__detail_sales__"] if c in rows.columns])
+    rows = rows.drop(columns=[c for c in [
+        "__base_conv__", "__base_sales__", "__detail_conv__", "__detail_sales__",
+        "__base_purchase__", "__base_purchase_sales__", "__detail_purchase__", "__detail_purchase_sales__",
+    ] if c in rows.columns])
     if temp_group and "__shopping_all__" in rows.columns:
         rows = rows.drop(columns=["__shopping_all__"])
     return _add_perf_metrics(rows)
@@ -838,7 +868,7 @@ def render_keyword_cmp(view_orig, engine, cids, type_sel, top_n, start_dt, end_d
     base_ad_bundle = _prefer_total_conversion_for_keyword(base_ad_bundle)
     base_shop_bundle = pd.DataFrame()
     if _includes_shopping_type(type_sel):
-        base_shop_terms = _cached_keyword_shopping_terms(engine, b1, b2, tuple(cids))
+        base_shop_terms = _cached_keyword_shopping_terms(engine, b1, b2, tuple(cids), 2)
         base_shop_bundle = _build_shopping_terms_base_bundle(base_shop_terms)
         base_kw_bundle = _residualize_shopping_fact_conversions(base_kw_bundle, base_shop_bundle)
         base_ad_bundle = _residualize_shopping_fact_conversions(base_ad_bundle, base_shop_bundle)
@@ -964,7 +994,7 @@ def page_perf_keyword(meta: pd.DataFrame, engine, f: Dict) -> None:
     if view is None:
         view = pd.DataFrame()
     if _includes_shopping_type(type_sel):
-        shop_terms = _cached_keyword_shopping_terms(engine, f["start"], f["end"], cids)
+        shop_terms = _cached_keyword_shopping_terms(engine, f["start"], f["end"], cids, 2)
         shop_view = _build_shopping_terms_keyword_view(shop_terms, meta, _engine=engine)
         view = _merge_keyword_view_with_shopping_terms(view, shop_view)
 

@@ -1276,6 +1276,7 @@ def _strict_conv_selects(fact_cols: list, alias: str = "") -> dict:
     fact_col_set = set(fact_cols or [])
     has_cart = "cart_conv" in fact_col_set
     has_wish = "wishlist_conv" in fact_col_set
+    has_split_flag = "split_available" in fact_col_set
 
     def pick_expr(candidates: list[str]) -> str:
         picked = [f"{prefix}{col}" for col in candidates if col in fact_col_set]
@@ -1294,15 +1295,23 @@ def _strict_conv_selects(fact_cols: list, alias: str = "") -> dict:
         safe_picked = [f"COALESCE({col}, 0)" for col in picked]
         return f"GREATEST({', '.join(safe_picked)})"
 
+    purchase_conv_raw = pick_expr(["purchase_conv", "primary_conv"])
+    purchase_sales_raw = pick_expr(["purchase_sales", "primary_sales"])
+    if has_split_flag:
+        purchase_conv_raw = f"CASE WHEN COALESCE({prefix}split_available, FALSE) THEN {purchase_conv_raw} ELSE 0 END"
+        purchase_sales_raw = f"CASE WHEN COALESCE({prefix}split_available, FALSE) THEN {purchase_sales_raw} ELSE 0 END"
+
     return {
-        "purchase_conv_expr": pick_expr(["primary_conv", "purchase_conv", "conv"]),
-        "purchase_sales_expr": pick_expr(["primary_sales", "purchase_sales", "sales"]),
+        # 구매완료는 명시적인 split 컬럼만 사용한다. conv/sales는 네이버 총전환일 수 있어
+        # 구매완료 fallback으로 쓰면 장바구니/위시/기타 전환이 구매완료로 과대 집계된다.
+        "purchase_conv_expr": purchase_conv_raw,
+        "purchase_sales_expr": purchase_sales_raw,
         "cart_conv_expr": f"COALESCE({prefix}cart_conv, 0)" if has_cart else "0",
         "cart_sales_expr": f"COALESCE({prefix}cart_sales, 0)" if has_cart else "0",
         "wish_conv_expr": f"COALESCE({prefix}wishlist_conv, 0)" if has_wish else "0",
         "wish_sales_expr": f"COALESCE({prefix}wishlist_sales, 0)" if has_wish else "0",
-        "total_conv_expr": max_expr(["conv", "primary_conv", "purchase_conv"]),
-        "total_sales_expr": max_expr(["sales", "primary_sales", "purchase_sales"]),
+        "total_conv_expr": max_expr(["total_conv", "tot_conv", "conv", "purchase_conv", "primary_conv"]),
+        "total_sales_expr": max_expr(["total_sales", "tot_sales", "sales", "purchase_sales", "primary_sales"]),
     }
 
 
@@ -1855,28 +1864,32 @@ def _shopping_query_metric_expr(sq_cols: set[str], candidates: list[str], alias:
 
 
 def _shopping_query_total_expr(sq_cols: set[str], kind: str, table_alias: str = "f") -> str:
+    """Return a row-safe total expression for fact_shopping_query_daily.
+
+    total_conv/total_sales가 있으면 그것을 최우선으로 사용한다. explicit total이 없는
+    legacy row만 split 합계 또는 conv/sales를 fallback으로 쓰며, conv를 purchase로 간주한 뒤
+    cart/wishlist를 더하는 방식은 사용하지 않는다.
+    """
     if kind == "conv":
         explicit = [c for c in ["total_conv", "tot_conv"] if c in sq_cols]
-        parts = [c for c in ["purchase_conv", "primary_conv", "conv", "cart_conv", "wishlist_conv"] if c in sq_cols]
+        split_cols = [c for c in ["purchase_conv", "primary_conv", "cart_conv", "wishlist_conv"] if c in sq_cols]
+        legacy = [c for c in ["conv"] if c in sq_cols]
     else:
         explicit = [c for c in ["total_sales", "tot_sales"] if c in sq_cols]
-        parts = [c for c in ["purchase_sales", "primary_sales", "sales", "cart_sales", "wishlist_sales"] if c in sq_cols]
-    explicit_expr = "0"
-    if explicit:
-        exps = [f"COALESCE({table_alias}.{c}, 0)" for c in explicit]
-        explicit_expr = exps[0] if len(exps) == 1 else f"GREATEST({', '.join(exps)})"
-    parts_expr = "0"
-    if parts:
-        # purchase/primary/conv are compatible purchase candidates; do not add them together.
-        purchase_candidates = [c for c in (["purchase_conv", "primary_conv", "conv"] if kind == "conv" else ["purchase_sales", "primary_sales", "sales"]) if c in sq_cols]
-        purchase_expr = "0"
-        if purchase_candidates:
-            pcs = [f"COALESCE({table_alias}.{c}, 0)" for c in purchase_candidates]
-            purchase_expr = pcs[0] if len(pcs) == 1 else f"GREATEST({', '.join(pcs)})"
-        add_cols = ["cart_conv", "wishlist_conv"] if kind == "conv" else ["cart_sales", "wishlist_sales"]
-        add_exprs = [f"COALESCE({table_alias}.{c}, 0)" for c in add_cols if c in sq_cols]
-        parts_expr = " + ".join([purchase_expr] + add_exprs) if add_exprs else purchase_expr
-    return f"SUM(GREATEST({explicit_expr}, {parts_expr}))"
+        split_cols = [c for c in ["purchase_sales", "primary_sales", "cart_sales", "wishlist_sales"] if c in sq_cols]
+        legacy = [c for c in ["sales"] if c in sq_cols]
+
+    def max_or_zero(cols: list[str]) -> str:
+        if not cols:
+            return "0"
+        exprs = [f"COALESCE({table_alias}.{c}, 0)" for c in cols]
+        return exprs[0] if len(exprs) == 1 else f"GREATEST({', '.join(exprs)})"
+
+    explicit_expr = max_or_zero(explicit)
+    split_expr = " + ".join([f"COALESCE({table_alias}.{c}, 0)" for c in split_cols]) if split_cols else "0"
+    legacy_expr = max_or_zero(legacy)
+    # explicit total > split 합계 > legacy total 순서. NULL/0 explicit rows는 split으로 보완한다.
+    return f"SUM(CASE WHEN {explicit_expr} > 0 THEN {explicit_expr} WHEN ({split_expr}) > 0 THEN ({split_expr}) ELSE {legacy_expr} END)"
 
 
 @st.cache_data(ttl=DASHBOARD_DATA_CACHE_TTL, max_entries=40, show_spinner=False)
@@ -1907,8 +1920,8 @@ def query_shopping_query_campaign_purchase_summary(_engine, d1: date, d2: date, 
             if raw_type_where:
                 type_where_sql = raw_type_where.replace("AND ", f"AND (c.{cp_col} IS NULL OR ", 1) + ")"
 
-    purchase_conv_sql = _shopping_query_metric_expr(sq_cols, ["purchase_conv", "primary_conv", "conv"], "conv")
-    purchase_sales_sql = _shopping_query_metric_expr(sq_cols, ["purchase_sales", "primary_sales", "sales"], "sales")
+    purchase_conv_sql = _shopping_query_metric_expr(sq_cols, ["purchase_conv", "primary_conv"], "conv")
+    purchase_sales_sql = _shopping_query_metric_expr(sq_cols, ["purchase_sales", "primary_sales"], "sales")
     cart_conv_sql = _shopping_query_metric_expr(sq_cols, ["cart_conv"], "cart_conv")
     cart_sales_sql = _shopping_query_metric_expr(sq_cols, ["cart_sales"], "cart_sales")
     wish_conv_sql = _shopping_query_metric_expr(sq_cols, ["wishlist_conv"], "wishlist_conv")
@@ -1961,8 +1974,8 @@ def query_shopping_query_adgroup_purchase_summary(_engine, d1: date, d2: date, c
             if raw_type_where:
                 type_where_sql = raw_type_where.replace("AND ", f"AND (c.{cp_col} IS NULL OR ", 1) + ")"
 
-    purchase_conv_sql = _shopping_query_metric_expr(sq_cols, ["purchase_conv", "primary_conv", "conv"], "conv")
-    purchase_sales_sql = _shopping_query_metric_expr(sq_cols, ["purchase_sales", "primary_sales", "sales"], "sales")
+    purchase_conv_sql = _shopping_query_metric_expr(sq_cols, ["purchase_conv", "primary_conv"], "conv")
+    purchase_sales_sql = _shopping_query_metric_expr(sq_cols, ["purchase_sales", "primary_sales"], "sales")
     cart_conv_sql = _shopping_query_metric_expr(sq_cols, ["cart_conv"], "cart_conv")
     cart_sales_sql = _shopping_query_metric_expr(sq_cols, ["cart_sales"], "cart_sales")
     wish_conv_sql = _shopping_query_metric_expr(sq_cols, ["wishlist_conv"], "wishlist_conv")
@@ -2297,8 +2310,8 @@ def query_shopping_search_terms(_engine, d1: date, d2: date, cids: tuple) -> pd.
     # primary_* or conv/sales, while newer rows have purchase_* and total_* split
     # columns.  Treat the purchase metric as the best available purchase-complete
     # source and never require one exact physical column name for the overview.
-    purchase_conv_expr = _coalesce_expr(["primary_conv", "purchase_conv", "conv"])
-    purchase_sales_expr = _coalesce_expr(["primary_sales", "purchase_sales", "sales"])
+    purchase_conv_expr = _coalesce_expr(["purchase_conv", "primary_conv"])
+    purchase_sales_expr = _coalesce_expr(["purchase_sales", "primary_sales"])
     total_conv_expr = _greatest_expr(["total_conv", "conv", "primary_conv", "purchase_conv"])
     total_sales_expr = _greatest_expr(["total_sales", "sales", "primary_sales", "purchase_sales"])
 

@@ -12,7 +12,9 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 
-TARGETING_PARSER_VERSION = "targeting_v20260530_age_bucket_detail1"
+TARGETING_PARSER_VERSION = "targeting_v20260531_age_all_types1"
+
+AGE_BREAKDOWN_CANDIDATES = ["ageRangeNm", "ageRange", "age", "ageTp", "ageRangeTp"]
 
 FIELDS = ["impCnt", "clkCnt", "salesAmt", "ccnt", "convAmt"]
 AGE_BUCKETS = [
@@ -40,7 +42,11 @@ METRIC_ALIASES = {
 ID_ALIASES = ["id", "nccCampaignId", "campaignId", "campaign_id", "캠페인ID", "캠페인id"]
 BREAKDOWN_ALIASES = {
     "hh24": ["hh24", "hour", "hourOfDay", "hour_of_day", "시간대", "시간"],
-    "ageRangeNm": ["ageRangeNm", "age_range_nm", "ageRange", "age", "연령대", "연령"],
+    "ageRangeNm": ["ageRangeNm", "age_range_nm", "ageRange", "age", "ageTp", "ageRangeTp", "연령대", "연령"],
+    "ageRange": ["ageRange", "ageRangeNm", "age_range", "age", "ageTp", "ageRangeTp", "연령대", "연령"],
+    "age": ["age", "ageRange", "ageRangeNm", "ageTp", "ageRangeTp", "연령대", "연령"],
+    "ageTp": ["ageTp", "ageRangeTp", "ageRange", "ageRangeNm", "age", "연령대", "연령"],
+    "ageRangeTp": ["ageRangeTp", "ageTp", "ageRange", "ageRangeNm", "age", "연령대", "연령"],
 }
 
 
@@ -282,7 +288,7 @@ def _empty_breakdown_row(customer_id: str, target_date: date, campaign_id: str, 
         row["data_source"] = "stats_breakdown_hh24_zero_fill"
     else:
         row["age_range"] = str(bucket_value)
-        row["data_source"] = "stats_breakdown_ageRangeNm_zero_fill"
+        row["data_source"] = f"stats_breakdown_{breakdown}_zero_fill"
     return row
 
 
@@ -661,7 +667,7 @@ def _build_rows_from_breakdown(raw_rows: List[dict], customer_id: str, target_da
             b["data_source"] = "stats_breakdown_hh24"
         else:
             b["age_range"] = str(bucket_value)
-            b["data_source"] = "stats_breakdown_ageRangeNm"
+            b["data_source"] = f"stats_breakdown_{breakdown}"
         rows.append(b)
 
     meta = {
@@ -794,7 +800,7 @@ def _build_adgroup_rows_from_breakdown(
             b["data_source"] = "stats_breakdown_hh24_adgroup"
         else:
             b["age_range"] = str(bucket_value)
-            b["data_source"] = "stats_breakdown_ageRangeNm_adgroup"
+            b["data_source"] = f"stats_breakdown_{breakdown}_adgroup"
         rows.append(b)
 
     meta = {
@@ -822,6 +828,59 @@ def _remap_stat_row_ids(raw_rows: List[dict], id_map: Dict[str, str]) -> List[di
         remapped["id"] = campaign_id
         out.append(remapped)
     return out
+
+
+def _fetch_first_campaign_age_breakdown(
+    customer_id: str,
+    target_date: date,
+    buckets: Dict[str, List[str]],
+    get_stats_breakdown_range_fn: Callable[..., List[dict]],
+    log_fn: Callable[[str], None] | None = None,
+) -> Tuple[List[dict], List[Dict[str, Any]], Dict[str, Any], str]:
+    if not buckets:
+        return [], [], {"raw_rows": 0, "parsed_rows": 0, "skipped": "no_campaigns"}, "ageRangeNm"
+    last_meta: Dict[str, Any] = {}
+    for breakdown in AGE_BREAKDOWN_CANDIDATES:
+        raw: List[dict] = []
+        for _, ids in buckets.items():
+            raw.extend(get_stats_breakdown_range_fn(customer_id, ids, target_date, breakdown, log_fn=log_fn))
+        rows, meta = _build_rows_from_breakdown(raw, customer_id, target_date, breakdown)
+        meta = dict(meta or {})
+        meta["requested_breakdown"] = breakdown
+        last_meta = meta
+        if raw or rows:
+            return raw, rows, meta, breakdown
+    last_meta.setdefault("raw_rows", 0)
+    last_meta.setdefault("parsed_rows", 0)
+    last_meta["attempted_breakdowns"] = AGE_BREAKDOWN_CANDIDATES
+    return [], [], last_meta, "ageRangeNm"
+
+
+def _fetch_first_adgroup_age_breakdown(
+    customer_id: str,
+    target_date: date,
+    buckets: Dict[str, List[str]],
+    adgroup_campaign_map: Dict[str, str],
+    get_stats_breakdown_range_fn: Callable[..., List[dict]],
+    log_fn: Callable[[str], None] | None = None,
+) -> Tuple[List[dict], List[Dict[str, Any]], Dict[str, Any], str]:
+    if not buckets:
+        return [], [], {"raw_rows": 0, "parsed_rows": 0, "skipped": "no_adgroups"}, "ageRangeNm"
+    last_meta: Dict[str, Any] = {}
+    for breakdown in AGE_BREAKDOWN_CANDIDATES:
+        raw: List[dict] = []
+        for _, ids in buckets.items():
+            raw.extend(get_stats_breakdown_range_fn(customer_id, ids, target_date, breakdown, log_fn=log_fn))
+        rows, meta = _build_adgroup_rows_from_breakdown(raw, customer_id, target_date, breakdown, adgroup_campaign_map)
+        meta = dict(meta or {})
+        meta["requested_breakdown"] = breakdown
+        last_meta = meta
+        if raw or rows:
+            return raw, rows, meta, breakdown
+    last_meta.setdefault("raw_rows", 0)
+    last_meta.setdefault("parsed_rows", 0)
+    last_meta["attempted_breakdowns"] = AGE_BREAKDOWN_CANDIDATES
+    return [], [], last_meta, "ageRangeNm"
 
 
 def collect_campaign_time_age_stats(
@@ -856,21 +915,18 @@ def collect_campaign_time_age_stats(
     hour_rows = _densify_breakdown_rows(hour_rows, customer_id, target_date, hour_ids, "hh24")
     hour_saved = _replace_campaign_hourly_rows(engine, customer_id, target_date, hour_rows, scoped_ids=hour_ids)
 
-    # ageRangeNm breakdown은 쇼핑 캠페인 보고서에서만 지원되므로 쇼핑 캠페인으로 제한합니다.
-    # 캠페인 유형이 섞인 ids 요청은 일부 계정에서 실패할 수 있어 유형별 bucket 단위로 먼저 요청하고,
-    # 실패 시 get_stats_breakdown_range 내부에서 단건 재시도합니다.
-    shopping_set = {str(x).strip() for x in (shopping_campaign_ids or []) if str(x or "").strip()}
-    age_ids = [x for x in all_campaign_ids if x in shopping_set]
+    # 연령대는 캠페인 유형별로 나눠 요청합니다. 특정 계정/유형에서 breakdown 명칭이
+    # 다르게 내려오는 경우가 있어 후보 키를 순차 시도하고, 성공한 breakdown으로 저장합니다.
+    age_ids = list(hour_ids)
 
     age_buckets: Dict[str, List[str]] = {}
     for lookup_id in age_ids:
         age_buckets.setdefault(type_map.get(lookup_id, "UNKNOWN") or "UNKNOWN", []).append(lookup_id)
 
-    age_raw: List[dict] = []
-    for _, ids in age_buckets.items():
-        age_raw.extend(get_stats_breakdown_range_fn(customer_id, ids, target_date, "ageRangeNm", log_fn=log_fn))
-    age_rows, age_meta = _build_rows_from_breakdown(age_raw, customer_id, target_date, "ageRangeNm")
-    age_rows = _densify_breakdown_rows(age_rows, customer_id, target_date, age_ids, "ageRangeNm")
+    age_raw, age_rows, age_meta, age_breakdown = _fetch_first_campaign_age_breakdown(
+        customer_id, target_date, age_buckets, get_stats_breakdown_range_fn, log_fn=log_fn
+    )
+    age_rows = _densify_breakdown_rows(age_rows, customer_id, target_date, age_ids, age_breakdown)
     age_saved = _replace_campaign_age_rows(engine, customer_id, target_date, age_rows, scoped_ids=age_ids)
 
     # 그룹별 필터/표시를 위해 광고그룹 단위 breakdown도 함께 저장합니다.
@@ -901,12 +957,12 @@ def collect_campaign_time_age_stats(
         age_adgroup_buckets: Dict[str, List[str]] = {}
         for gid, cid in age_adgroup_campaign_map.items():
             age_adgroup_buckets.setdefault(type_map.get(str(cid), "UNKNOWN") or "UNKNOWN", []).append(gid)
-        for _, ids in age_adgroup_buckets.items():
-            adgroup_age_raw.extend(get_stats_breakdown_range_fn(customer_id, ids, target_date, "ageRangeNm", log_fn=log_fn))
-        adgroup_age_rows, adgroup_age_meta = _build_adgroup_rows_from_breakdown(
-            adgroup_age_raw, customer_id, target_date, "ageRangeNm", age_adgroup_campaign_map
+        adgroup_age_raw, adgroup_age_rows, adgroup_age_meta, age_adgroup_breakdown = _fetch_first_adgroup_age_breakdown(
+            customer_id, target_date, age_adgroup_buckets, age_adgroup_campaign_map, get_stats_breakdown_range_fn, log_fn=log_fn
         )
         adgroup_age_saved = _replace_adgroup_age_rows(engine, customer_id, target_date, adgroup_age_rows, scoped_ids=age_adgroup_ids)
+    else:
+        age_adgroup_breakdown = "ageRangeNm"
 
     return {
         "hour_ids": len(hour_ids),
@@ -923,9 +979,11 @@ def collect_campaign_time_age_stats(
         "age_rows_saved": int(age_saved),
         "age_raw_rows": int(age_meta.get("raw_rows", 0)),
         "age_meta": age_meta,
+        "age_breakdown": age_breakdown,
         "age_adgroup_ids": len(age_adgroup_ids),
         "age_adgroup_rows_saved": int(adgroup_age_saved),
         "age_adgroup_raw_rows": int(adgroup_age_meta.get("raw_rows", 0)),
         "age_adgroup_meta": adgroup_age_meta,
+        "age_adgroup_breakdown": age_adgroup_breakdown,
         "parser_version": TARGETING_PARSER_VERSION,
     }

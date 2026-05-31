@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from html import escape
 from typing import Dict, Iterable, List
+import io
 
 import numpy as np
 import pandas as pd
@@ -37,6 +38,37 @@ CHART_METRIC_OPTIONS = {
     "ROAS": "ROAS(%)",
 }
 
+
+
+
+def _make_xlsx_bytes(df: pd.DataFrame, sheet_name: str = "data") -> bytes:
+    buf = io.BytesIO()
+    safe_sheet = str(sheet_name or "data")[:31] or "data"
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name=safe_sheet)
+    return buf.getvalue()
+
+
+def _render_export_buttons(df: pd.DataFrame, key_prefix: str) -> None:
+    if df is None or df.empty:
+        return
+    today = pd.Timestamp.today().strftime("%Y%m%d")
+    signature = f"{key_prefix}_{id(df)}_{len(df)}_{len(df.columns)}_{abs(hash(tuple(map(str, df.columns)))) % 100000}"
+    c1, c2 = st.columns([1, 1])
+    c1.download_button(
+        "CSV 다운로드",
+        data=df.to_csv(index=False).encode("utf-8-sig"),
+        file_name=f"시간연령기기_성과_{today}.csv",
+        mime="text/csv",
+        key=f"{signature}_csv",
+    )
+    c2.download_button(
+        "엑셀 다운로드",
+        data=_make_xlsx_bytes(df, "성과데이터"),
+        file_name=f"시간연령기기_성과_{today}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key=f"{signature}_xlsx",
+    )
 
 def _sql_in_str_list(values: Iterable[str]) -> str:
     vals = []
@@ -273,6 +305,7 @@ def _render_table(df: pd.DataFrame) -> None:
             hide_index=True,
             column_config=_table_column_config(first_col) if first_col else None,
         )
+    _render_export_buttons(view, "ta_table_export")
 
 
 def _kpi_row(summary: pd.DataFrame) -> None:
@@ -947,7 +980,7 @@ def _render_age_tab(engine, f: Dict) -> None:
 
     tab_summary, tab_campaign, tab_group = st.tabs(["연령대 요약", "캠페인별", "그룹별"])
     with tab_summary:
-        _render_section_title("연령대별 상세", "쇼핑 캠페인에서 제공되는 연령대 breakdown 기준입니다.")
+        _render_section_title("연령대별 상세", "수집 가능한 캠페인 유형의 연령대 breakdown 기준입니다.")
         disp = _format_display(chart, ["연령대"])
         _render_table(disp)
 

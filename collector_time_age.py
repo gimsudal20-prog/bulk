@@ -174,7 +174,7 @@ def verify_account(engine: Engine, customer_id: str, target_date, campaign_ids: 
     existing_ages = {
         (str(r["campaign_id"]), str(r["age_range"]))
         for r in age_rows
-        if str(r["campaign_id"]) in shopping_set
+        if str(r["campaign_id"]) in campaign_set
     }
     missing_hours = [
         {"campaign_id": cid, "hour_of_day": hour}
@@ -184,13 +184,13 @@ def verify_account(engine: Engine, customer_id: str, target_date, campaign_ids: 
     ]
     missing_ages = [
         {"campaign_id": cid, "age_range": age}
-        for cid in sorted(shopping_set)
+        for cid in sorted(campaign_set)
         for age in AGE_BUCKETS
         if (cid, age) not in existing_ages
     ]
     ok = bool(campaign_ids) and not missing_hours and not missing_ages
     if require_age:
-        ok = ok and bool(shopping_ids) and bool(existing_ages)
+        ok = ok and bool(campaign_ids) and bool(existing_ages)
     return {
         "campaign_count": len(campaign_ids),
         "shopping_campaign_count": len(shopping_ids),
@@ -199,7 +199,7 @@ def verify_account(engine: Engine, customer_id: str, target_date, campaign_ids: 
         "hourly_missing_count": len(missing_hours),
         "hourly_missing_sample": missing_hours[:20],
         "age_rows": len(existing_ages),
-        "age_expected_rows": len(shopping_ids) * len(AGE_BUCKETS),
+        "age_expected_rows": len(campaign_ids) * len(AGE_BUCKETS),
         "age_missing_count": len(missing_ages),
         "age_missing_sample": missing_ages[:20],
         "ok": ok,

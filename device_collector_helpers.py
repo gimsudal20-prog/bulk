@@ -11,7 +11,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 
-DEVICE_PARSER_VERSION = "pcm_v20260531_stat_pcmbltp1"
+DEVICE_PARSER_VERSION = "pcm_v20260531_no_ad_report_conv_infer1"
 UNSEGMENTED_DEVICE_NAME = "UNSEGMENTED"
 
 DEVICE_HEADER_CANDIDATES = [
@@ -568,10 +568,13 @@ def parse_ad_device_report(
         clk_idx = inferred.get("clk_idx", -1)
     if cost_idx == -1:
         cost_idx = inferred.get("cost_idx", -1)
+    # AD report fallback often lacks explicit conversion/revenue headers.
+    # Do not infer these from numeric positions: rank/total/other numeric columns were
+    # being misread as conversion and revenue, corrupting device CVR/ROAS.
     if conv_idx == -1:
-        conv_idx = inferred.get("conv_idx", -1)
+        conv_idx = -1
     if sales_idx == -1:
-        sales_idx = inferred.get("sales_idx", -1)
+        sales_idx = -1
     if rank_idx == -1:
         rank_idx = inferred.get("rank_idx", -1)
 

@@ -207,6 +207,8 @@ def ensure_tables(engine: Engine):
                     adgroup_id TEXT,
                     ad_id TEXT,
                     query_text TEXT,
+                    query_provided BOOLEAN DEFAULT TRUE,
+                    query_bucket TEXT DEFAULT 'provided',
                     total_conv DOUBLE PRECISION,
                     total_sales BIGINT DEFAULT 0,
                     purchase_conv DOUBLE PRECISION,
@@ -216,8 +218,6 @@ def ensure_tables(engine: Engine):
                     wishlist_conv DOUBLE PRECISION,
                     wishlist_sales BIGINT DEFAULT 0,
                     split_available BOOLEAN,
-                    query_provided BOOLEAN DEFAULT TRUE,
-                    query_bucket TEXT DEFAULT 'search_term',
                     data_source TEXT,
                     PRIMARY KEY(dt, customer_id, adgroup_id, ad_id, query_text)
                 )"""))
@@ -244,6 +244,10 @@ def ensure_tables(engine: Engine):
                     )
                 """))
 
+            # 새 검색어 미제공 분류 컬럼은 수집 insert에 직접 필요하므로 fast mode에서도 보장합니다.
+            ensure_column(engine, "fact_shopping_query_daily", "query_provided", "BOOLEAN DEFAULT TRUE")
+            ensure_column(engine, "fact_shopping_query_daily", "query_bucket", "TEXT DEFAULT 'provided'")
+
             if not fast_mode:
                 ensure_column(engine, "dim_ad", "ad_title", "TEXT")
                 ensure_column(engine, "dim_ad", "ad_desc", "TEXT")
@@ -251,9 +255,6 @@ def ensure_tables(engine: Engine):
                 ensure_column(engine, "dim_ad", "mobile_landing_url", "TEXT")
                 ensure_column(engine, "dim_ad", "creative_text", "TEXT")
                 ensure_column(engine, "dim_ad", "image_url", "TEXT")
-
-                ensure_column(engine, "fact_shopping_query_daily", "query_provided", "BOOLEAN DEFAULT TRUE")
-                ensure_column(engine, "fact_shopping_query_daily", "query_bucket", "TEXT DEFAULT 'search_term'")
 
                 for table in ["fact_campaign_daily", "fact_keyword_daily", "fact_ad_daily"]:
                     ensure_column(engine, table, "purchase_conv", "DOUBLE PRECISION")
@@ -461,8 +462,6 @@ def replace_fact_range(engine: Engine, table: str, rows: List[Dict[str, Any]], c
 
 def replace_query_fact_range(engine: Engine, rows: List[Dict[str, Any]], customer_id: str, d1):
     table = "fact_shopping_query_daily"
-    ensure_column(engine, table, "query_provided", "BOOLEAN DEFAULT TRUE")
-    ensure_column(engine, table, "query_bucket", "TEXT DEFAULT 'search_term'")
     clear_fact_range(engine, table, customer_id, d1)
     if not rows:
         return

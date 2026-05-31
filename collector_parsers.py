@@ -823,16 +823,14 @@ def _sq_detect_query_text_idx(sample_rows, gid_idx: int) -> int:
             continue
         v = str(r.iloc[candidate]).strip()
         if v == '-':
+            # SHOPPINGKEYWORD_CONVERSION_DETAIL can expose conversions from
+            # search-term-unprovided inventory as '-' in the query column.
             dash_score += 1
             continue
         if v and not v.lower().startswith(('cmp-', 'grp-', 'nkw-', 'nad-', 'bsn-')):
             vv = v.replace(',', '')
             if not re.fullmatch(r'-?\d+(?:\.\d+)?', vv):
                 text_score += 1
-    # SHOPPINGKEYWORD_CONVERSION_DETAIL can return '-' for search terms that are
-    # not provided. Keep the candidate column even when the sample is composed
-    # only of '-' rows; otherwise those conversions are discarded before the UI
-    # can classify them as search-term-unprovided/content/other area.
     return candidate if (text_score > 0 or dash_score > 0) else -1
 
 
@@ -871,7 +869,7 @@ def _log_shopping_query_parse_diag(diag: Dict[str, Any]):
         "🧩 SHOPPINGKEYWORD_CONVERSION_DETAIL 파서 | "
         f"rows={diag.get('rows', 0)} kept={diag.get('kept', 0)} unique={diag.get('unique', 0)} "
         f"short={diag.get('short', 0)} no_type={diag.get('no_type', 0)} no_numeric={diag.get('no_numeric', 0)} "
-        f"missing_id={diag.get('missing_id', 0)} unprovided_query={diag.get('unprovided_query', 0)} "
+        f"missing_id={diag.get('missing_id', 0)} unprovided={diag.get('unprovided_query', 0)} missing_adid={diag.get('missing_adid', 0)} "
         f"idx=(cid:{diag.get('cid_idx', -1)}, gid:{diag.get('gid_idx', -1)}, ad:{diag.get('adid_idx', -1)}, q:{diag.get('kw_text_idx', -1)})"
     )
 
@@ -894,6 +892,8 @@ def parse_shopping_query_report(df: pd.DataFrame, target_date: date, customer_id
         'no_type': 0,
         'no_numeric': 0,
         'missing_id': 0,
+        'unprovided_query': 0,
+        'missing_adid': 0,
         'cid_idx': cid_idx,
         'gid_idx': gid_idx,
         'adid_idx': adid_idx,
@@ -923,14 +923,20 @@ def parse_shopping_query_report(df: pd.DataFrame, target_date: date, customer_id
         row_cid = vals[cid_idx].strip() if 0 <= cid_idx < len(vals) else ""
         row_gid = vals[gid_idx].strip() if 0 <= gid_idx < len(vals) else ""
         row_adid = vals[adid_idx].strip() if 0 <= adid_idx < len(vals) else ""
-        raw_query_text = vals[kw_text_idx].strip() if 0 <= kw_text_idx < len(vals) else ""
-        query_provided = bool(raw_query_text and raw_query_text != '-')
-        query_text = raw_query_text if query_provided else "(검색어 미제공)"
-        if not row_gid or not row_adid:
+        query_text_raw = vals[kw_text_idx].strip() if 0 <= kw_text_idx < len(vals) else ""
+        query_provided = bool(query_text_raw and query_text_raw != '-')
+        query_text = query_text_raw if query_provided else "(검색어 미제공 영역)"
+        query_bucket = "provided" if query_provided else "unprovided"
+        if not query_provided:
+            diag['unprovided_query'] += 1
+        if not row_gid:
             diag['missing_id'] += 1
             continue
-        if not query_provided:
-            diag['unprovided_query'] = int(diag.get('unprovided_query', 0) or 0) + 1
+        if not row_adid or row_adid == '-':
+            # Some unprovided/content-like rows do not carry a material id.
+            # Keep them instead of dropping the conversion; joins will simply show 미분류.
+            row_adid = "UNKNOWN_AD"
+            diag['missing_adid'] += 1
 
         key = (row_cid, row_gid, row_adid, query_text)
         row = rows_map.setdefault(key, {
@@ -940,6 +946,8 @@ def parse_shopping_query_report(df: pd.DataFrame, target_date: date, customer_id
             "adgroup_id": row_gid,
             "ad_id": row_adid,
             "query_text": query_text,
+            "query_provided": query_provided,
+            "query_bucket": query_bucket,
             "total_conv": 0.0,
             "total_sales": 0,
             "purchase_conv": 0.0,
@@ -949,8 +957,6 @@ def parse_shopping_query_report(df: pd.DataFrame, target_date: date, customer_id
             "wishlist_conv": 0.0,
             "wishlist_sales": 0,
             "split_available": True,
-            "query_provided": bool(query_provided),
-            "query_bucket": "search_term" if query_provided else "unprovided",
             "data_source": "SHOPPINGKEYWORD_CONVERSION_DETAIL",
         })
         row["total_conv"] += c_val

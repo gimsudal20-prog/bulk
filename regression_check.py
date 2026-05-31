@@ -178,7 +178,7 @@ def check_targeting_breakdown_contract(root: Path) -> list[str]:
     runner_text = runner_path.read_text(encoding='utf-8')
     required = {
         'targeting ids 쉼표 파라미터': '"ids": ",".join(chunk)' in targeting_text,
-        '연령대는 쇼핑 캠페인만 요청': 'age_ids = [x for x in all_campaign_ids if x in shopping_set]' in targeting_text,
+        '연령대는 전체 수집 대상 캠페인 요청': 'age_ids = list(hour_ids)' in targeting_text and 'AGE_BREAKDOWN_CANDIDATES' in targeting_text,
         '시간대 24구간 zero-fill': 'for hour in range(24)' in targeting_text,
         '연령대 표준구간 zero-fill': all(x in targeting_text for x in ['"14세 미만"', '"14세 ~ 18세"', '"19세 ~ 24세"', '"60세 이상"', '"연령 알 수 없음"', '"해당 없음"']),
         '연령대 캠페인 id 기준 조회': 'age_entity_source": "campaign"' in targeting_text and 'for lookup_id in age_ids' in targeting_text,
@@ -230,7 +230,7 @@ def check_device_breakdown_contract(root: Path) -> list[str]:
     runner_text = runner_path.read_text(encoding='utf-8')
     backfill_text = backfill_path.read_text(encoding='utf-8')
     required = {
-        'device parser actual pcMobile version 갱신': 'pcm_v20260531_stat_pcmbltp1' in device_text,
+        'device parser actual pcMobile version 갱신': 'pcm_v20260531_no_ad_report_conv_infer1' in device_text,
         'device metric 상대 위치 추론': '_infer_metric_indices_relative' in device_text and 'relative_metrics' in device_text,
         'pcMobileTp 헤더 alias': 'pcmobiletp' in device_text and 'PC/모바일 구분' in device_text,
         'criterion targeting id alias': 'targeting id' in device_text and '타겟팅 id' in device_text,

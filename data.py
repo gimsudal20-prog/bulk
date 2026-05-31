@@ -2074,8 +2074,18 @@ def query_shopping_search_terms(_engine, d1: date, d2: date, cids: tuple) -> pd.
         return f"SUM(COALESCE(f.{col}, 0))" if col in sq_cols else "0"
 
     split_select_sql = "BOOL_OR(COALESCE(f.split_available, FALSE)) as split_available" if "split_available" in sq_cols else "FALSE as split_available"
-    query_provided_sql = "BOOL_AND(COALESCE(f.query_provided, TRUE)) as query_provided" if "query_provided" in sq_cols else "TRUE as query_provided"
-    query_bucket_sql = "MIN(COALESCE(f.query_bucket, 'search_term')) as query_bucket" if "query_bucket" in sq_cols else "'search_term' as query_bucket"
+    query_expr = "COALESCE(NULLIF(TRIM(CAST(f.query_text AS TEXT)), ''), '(검색어 미제공 영역)')"
+    query_provided_select_sql = (
+        "BOOL_AND(COALESCE(f.query_provided, TRUE)) as query_provided"
+        if "query_provided" in sq_cols
+        else f"CASE WHEN {query_expr} IN ('-', '(검색어 미제공 영역)') THEN FALSE ELSE TRUE END as query_provided"
+    )
+    query_bucket_conditions = ["BOOL_OR(COALESCE(NULLIF(TRIM(CAST(f.query_text AS TEXT)), ''), '-') = '-')"]
+    if "query_bucket" in sq_cols:
+        query_bucket_conditions.insert(0, "BOOL_OR(COALESCE(f.query_bucket, 'provided') = 'unprovided')")
+    if "query_provided" in sq_cols:
+        query_bucket_conditions.insert(0, "BOOL_OR(COALESCE(f.query_provided, TRUE) = FALSE)")
+    query_bucket_select_sql = "CASE WHEN " + " OR ".join(query_bucket_conditions) + " THEN 'unprovided' ELSE 'provided' END as query_bucket"
 
     type_where_sql = ""
     type_params = {}
@@ -2092,8 +2102,15 @@ def query_shopping_search_terms(_engine, d1: date, d2: date, cids: tuple) -> pd.
 
     sql = f"""
         SELECT
-            f.customer_id, f.campaign_id, f.adgroup_id,
-            c.campaign_name, a.adgroup_name, f.query_text,
+            f.customer_id,
+            f.campaign_id,
+            f.adgroup_id,
+            f.ad_id,
+            c.campaign_name,
+            a.adgroup_name,
+            {query_expr} AS query_text,
+            {query_provided_select_sql},
+            {query_bucket_select_sql},
             {_sum_metric("total_conv", "total_conv")},
             {_sum_metric("total_sales", "total_sales")},
             {_sum_metric("purchase_conv", "purchase_conv")},
@@ -2102,14 +2119,12 @@ def query_shopping_search_terms(_engine, d1: date, d2: date, cids: tuple) -> pd.
             {_sum_metric("cart_sales", "cart_sales")},
             {_sum_metric("wishlist_conv", "wishlist_conv")},
             {_sum_metric("wishlist_sales", "wishlist_sales")},
-            {split_select_sql},
-            {query_provided_sql},
-            {query_bucket_sql}
+            {split_select_sql}
         FROM fact_shopping_query_daily f
         LEFT JOIN dim_campaign c ON f.campaign_id = c.campaign_id AND f.customer_id = c.customer_id
         LEFT JOIN dim_adgroup a ON f.adgroup_id = a.adgroup_id AND f.customer_id = a.customer_id
         WHERE f.dt BETWEEN :d1 AND :d2 {where_cid} {type_where_sql}
-        GROUP BY f.customer_id, f.campaign_id, f.adgroup_id, c.campaign_name, a.adgroup_name, f.query_text
+        GROUP BY f.customer_id, f.campaign_id, f.adgroup_id, f.ad_id, c.campaign_name, a.adgroup_name, {query_expr}
         -- 성과가 있는 검색어 우선 정렬 및 로드 수 제한 최적화
         HAVING {_sum_expr("total_sales")} > 0
             OR {_sum_expr("total_conv")} > 0

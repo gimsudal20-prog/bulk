@@ -222,6 +222,38 @@ def _merge_overview_keyword_bundle_with_shopping_terms(_engine, start_dt, end_dt
     return pd.concat(parts, ignore_index=True, sort=False)
 
 
+def _shopping_terms_purchase_summary(_engine, start_dt, end_dt, cids: tuple) -> dict:
+    try:
+        terms = query_shopping_search_terms(_engine, start_dt, end_dt, tuple(cids or ()))
+    except Exception:
+        terms = pd.DataFrame()
+    if terms is None or terms.empty:
+        return {}
+    purchase_conv = pd.to_numeric(terms.get("purchase_conv"), errors="coerce").fillna(0).sum()
+    purchase_sales = pd.to_numeric(terms.get("purchase_sales"), errors="coerce").fillna(0).sum()
+    total_conv = pd.to_numeric(terms.get("total_conv"), errors="coerce").fillna(0).sum()
+    total_sales = pd.to_numeric(terms.get("total_sales"), errors="coerce").fillna(0).sum()
+    return {
+        "conv": float(purchase_conv),
+        "sales": float(purchase_sales),
+        "tot_conv": float(total_conv if total_conv > 0 else purchase_conv),
+        "tot_sales": float(total_sales if total_sales > 0 else purchase_sales),
+        "rows": int(len(terms.index)),
+    }
+
+
+def _apply_shopping_purchase_summary(summary: dict, shop_summary: dict) -> dict:
+    if not shop_summary:
+        return summary or {}
+    out = dict(summary or {})
+    out["conv"] = float(shop_summary.get("conv", 0) or 0)
+    out["sales"] = float(shop_summary.get("sales", 0) or 0)
+    out["tot_conv"] = float(shop_summary.get("tot_conv", out.get("tot_conv", out.get("conv", 0))) or 0)
+    out["tot_sales"] = float(shop_summary.get("tot_sales", out.get("tot_sales", out.get("sales", 0))) or 0)
+    out["roas"] = (out["sales"] / out.get("cost", 0) * 100) if float(out.get("cost", 0) or 0) > 0 else 0
+    return out
+
+
 
 @st.cache_data(ttl=43200, max_entries=10, show_spinner=False)
 def _cached_campaign_bundle(_engine, start_dt, end_dt, cids: tuple, type_sel: tuple) -> pd.DataFrame:
@@ -1360,6 +1392,15 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
 
     cur = cur_summary or {}
     base = base_summary or {}
+
+    if purchase_view and can_use_purchase_toggle and _overview_type_allows_shopping(type_sel):
+        cur_shop_summary = _shopping_terms_purchase_summary(engine, f["start"], f["end"], cids)
+        base_shop_summary = _shopping_terms_purchase_summary(engine, b1, b2, cids)
+        if cur_shop_summary:
+            cur = _apply_shopping_purchase_summary(cur, cur_shop_summary)
+            _diag_add(diag, "요약 구매완료 보정", "ok", cur_shop_summary.get("rows"), "fact_shopping_query_daily", "쇼핑검색 구매완료 KPI를 검색어 상세 기준으로 정렬")
+        if base_shop_summary:
+            base = _apply_shopping_purchase_summary(base, base_shop_summary)
 
     cur['tot_conv'] = cur.get('tot_conv', cur.get('conv', 0))
     cur['tot_sales'] = cur.get('tot_sales', cur.get('sales', 0))

@@ -245,6 +245,61 @@ def _save_device_totals_with_unsegmented_fallback(
 
 
 
+def _collect_pc_mobile_device_stats_from_stats(
+    *,
+    customer_id: str,
+    target_date: date,
+    target_camp_ids: List[str],
+    target_ad_ids: List[str],
+    get_stats_breakdown_range_fn: Callable[..., List[dict]] | None,
+    build_pc_mobile_device_stat_from_stats_fn: Callable[..., tuple] | None,
+    log_fn: Callable[[str], None] = _log,
+) -> Tuple[Dict[Tuple[str, str], dict], Dict[Tuple[str, str], dict], Dict[str, Any]]:
+    """Collect actual PC/MOBILE performance from /stats breakdown=pcMblTp.
+
+    This intentionally does not use adgroup device targeting settings. Even when an
+    adgroup is set to "모두", the Stat API can return separate PC/MOBILE rows.
+    """
+    meta: Dict[str, Any] = {
+        "status": "not_requested",
+        "source_report": "STATS_PCMobile",
+        "breakdown": "pcMblTp",
+        "campaign_raw_rows": 0,
+        "ad_raw_rows": 0,
+        "campaign_rows": 0,
+        "ad_rows": 0,
+    }
+    if not callable(get_stats_breakdown_range_fn) or not callable(build_pc_mobile_device_stat_from_stats_fn):
+        meta["status"] = "not_available"
+        return {}, {}, meta
+
+    camp_raw: List[dict] = []
+    ad_raw: List[dict] = []
+    errors: List[str] = []
+    try:
+        camp_raw = get_stats_breakdown_range_fn(customer_id, target_camp_ids, target_date, "pcMblTp", log_fn=log_fn) if target_camp_ids else []
+    except Exception as exc:
+        errors.append(f"campaign={type(exc).__name__}: {exc}")
+    try:
+        ad_raw = get_stats_breakdown_range_fn(customer_id, target_ad_ids, target_date, "pcMblTp", log_fn=log_fn) if target_ad_ids else []
+    except Exception as exc:
+        errors.append(f"ad={type(exc).__name__}: {exc}")
+
+    camp_stat, camp_meta = build_pc_mobile_device_stat_from_stats_fn(camp_raw, valid_ids=set(target_camp_ids or []))
+    ad_stat, ad_meta = build_pc_mobile_device_stat_from_stats_fn(ad_raw, valid_ids=set(target_ad_ids or []))
+    meta.update({
+        "status": "ok" if (camp_stat or ad_stat) else ("error" if errors else "no_rows"),
+        "errors": errors,
+        "campaign_raw_rows": len(camp_raw or []),
+        "ad_raw_rows": len(ad_raw or []),
+        "campaign_rows": len(camp_stat),
+        "ad_rows": len(ad_stat),
+        "campaign_meta": camp_meta,
+        "ad_meta": ad_meta,
+    })
+    return ad_stat, camp_stat, meta
+
+
 def _save_report_stats_and_breakdowns(
     engine: Engine,
     *,
@@ -270,9 +325,11 @@ def _save_report_stats_and_breakdowns(
     result: Dict[str, Any],
     normalize_sa_scope_fn: Callable[[str | None], str],
     fetch_stats_fallback_fn: Callable[..., int],
+    get_stats_breakdown_range_fn: Callable[..., List[dict]] | None,
     clear_fact_scope_fn: Callable[..., Any],
     parse_ad_device_report_fn: Callable[..., tuple],
     parse_criterion_device_reports_fn: Callable[..., tuple] | None,
+    build_pc_mobile_device_stat_from_stats_fn: Callable[..., tuple] | None,
     filter_stat_result_fn: Callable[..., dict],
     save_device_stats_fn: Callable[..., int],
     build_unsegmented_device_stat_from_totals_fn: Callable[..., Dict[Tuple[str, str], dict]],
@@ -284,243 +341,122 @@ def _save_report_stats_and_breakdowns(
     log_fn: Callable[[str], None] = _log,
 ) -> Tuple[int, int, int, int, int, int, Dict[str, Any]]:
     ad_to_campaign_map = ad_to_campaign_map or {}
-    adgroup_to_campaign_map = adgroup_to_campaign_map or {}
-    campaign_type_map = campaign_type_map or {}
     collect_campaign_stats, collect_keyword_stats, collect_ad_stats = _scope_enabled_collectors(sa_scope, collect_sa, normalize_sa_scope_fn)
-    c_cnt = fetch_stats_fallback_fn(engine, customer_id, target_date, target_camp_ids, "campaign_id", "fact_campaign_daily", split_map=camp_map, scoped_replace=shopping_only) if collect_campaign_stats else 0
+
+    c_cnt = fetch_stats_fallback_fn(
+        engine, customer_id, target_date, target_camp_ids, "campaign_id", "fact_campaign_daily",
+        split_map=camp_map, scoped_replace=shopping_only
+    ) if collect_campaign_stats else 0
+
     if collect_keyword_stats:
         if shopping_only and target_kw_ids:
             clear_fact_scope_fn(engine, "fact_keyword_daily", customer_id, target_date, "keyword_id", target_kw_ids)
             k_cnt = 0
         else:
-            k_cnt = fetch_stats_fallback_fn(engine, customer_id, target_date, target_kw_ids, "keyword_id", "fact_keyword_daily", split_map=kw_map, scoped_replace=shopping_only) if not skip_keyword_stats else 0
+            k_cnt = fetch_stats_fallback_fn(
+                engine, customer_id, target_date, target_kw_ids, "keyword_id", "fact_keyword_daily",
+                split_map=kw_map, scoped_replace=shopping_only
+            ) if not skip_keyword_stats else 0
     else:
         k_cnt = 0
 
+    a_cnt = 0
     device_ad_cnt = 0
     device_campaign_cnt = 0
-    a_cnt = 0
-    ad_stat: Dict[str, Dict[str, Any]] = {}
-    camp_device_stat: Dict[Tuple[str, str], Dict[str, Any]] = {}
 
     if not skip_ad_stats:
-        if ad_report_df is not None and not getattr(ad_report_df, "empty", False):
-            if collect_ad_stats:
-                a_cnt = fetch_stats_fallback_fn(
-                    engine,
-                    customer_id,
-                    target_date,
-                    target_ad_ids,
-                    "ad_id",
-                    "fact_ad_daily",
-                    split_map=ad_map,
-                    scoped_replace=shopping_only,
-                )
-                ad_stat = {}
-            else:
-                a_cnt = 0
-                ad_stat = {}
-
-            if collect_device:
-                ad_device_stat, camp_device_stat, device_meta = parse_ad_device_report_fn(ad_report_df, ad_to_campaign=ad_to_campaign_map)
-                if shopping_only:
-                    ad_device_stat = filter_stat_result_fn(ad_device_stat, set(target_ad_ids))
-                    camp_device_stat = filter_stat_result_fn(camp_device_stat, set(target_camp_ids))
-            else:
-                ad_device_stat, camp_device_stat, device_meta = {}, {}, {"status": "disabled", "reason": "collect_mode=sa_only"}
-                result["device_status"] = "disabled"
-
-            if collect_device and device_meta.get("status") == "ok":
-                result["device_missing_campaign_rows"] = int(device_meta.get("missing_campaign_rows", 0) or 0)
-                device_ad_cnt, device_campaign_cnt, fallback_cnt = _save_device_totals_with_unsegmented_fallback(
-                    engine,
-                    customer_id=customer_id,
-                    account_name=account_name,
-                    target_date=target_date,
-                    target_camp_ids=target_camp_ids,
-                    target_ad_ids=target_ad_ids,
-                    ad_device_stat=ad_device_stat,
-                    camp_device_stat=camp_device_stat,
-                    save_device_stats_fn=save_device_stats_fn,
-                    build_unsegmented_device_stat_from_totals_fn=build_unsegmented_device_stat_from_totals_fn,
-                    source_report="AD",
-                    log_fn=log_fn,
-                )
-                result["device_status"] = "ok_with_unsegmented_total" if fallback_cnt else "ok"
-                if ad_stat:
-                    total_from_ad = {
-                        "imp": sum(int(v.get("imp", 0) or 0) for v in ad_stat.values()),
-                        "clk": sum(int(v.get("clk", 0) or 0) for v in ad_stat.values()),
-                        "cost": sum(int(v.get("cost", 0) or 0) for v in ad_stat.values()),
-                        "conv": sum(float(v.get("conv", 0.0) or 0.0) for v in ad_stat.values()),
-                        "sales": sum(int(v.get("sales", 0) or 0) for v in ad_stat.values()),
-                    }
-                    total_from_device = summarize_stat_res_fn(ad_device_stat)
-                    diff_cost = total_from_ad["cost"] - total_from_device["cost"]
-                    diff_sales = total_from_ad["sales"] - total_from_device["sales"]
-                    diff_conv = round(total_from_ad["conv"] - total_from_device["conv"], 4)
-                    if diff_cost or diff_sales or diff_conv:
-                        log_fn(
-                            f"   ⚠️ [ {account_name} ] PC/M 검증 차이 감지: cost={diff_cost}, sales={diff_sales}, conv={diff_conv} "
-                            f"(source_report=AD, device_rows={device_meta.get('ad_rows', 0)})"
-                        )
-                miss = int(device_meta.get("missing_campaign_rows", 0) or 0)
-                miss_msg = f", 캠페인 매핑누락={miss}건" if miss else ""
-                log_fn(
-                    f"   ✅ [ {account_name} ] PC/M 분리 저장 완료: 캠페인({device_campaign_cnt}) | 소재({device_ad_cnt})"
-                    f"{miss_msg} | parser={device_parser_version}"
-                )
-            elif collect_device:
-                result["device_status"] = str(device_meta.get("status") or "unknown")
-                result["device_missing_campaign_rows"] = int(device_meta.get("missing_campaign_rows", 0) or 0)
-                debug_keys = [
-                    "header_idx", "ad_idx", "camp_idx", "device_idx", "imp_idx", "clk_idx", "cost_idx",
-                    "conv_idx", "sales_idx", "rank_idx", "scan_rows", "reject_short", "reject_empty_ad",
-                    "reject_empty_device", "reject_zero_metrics", "sample_headers", "preview_rows"
-                ]
-                extra_parts = []
-                for _k in debug_keys:
-                    _v = device_meta.get(_k)
-                    if _v in (None, "", [], {}):
-                        continue
-                    extra_parts.append(f"{_k}={_v}")
-                extra_msg = f" | {' | '.join(extra_parts)}" if extra_parts else ""
-                log_fn(
-                    f"   ℹ️ [ {account_name} ] AD 리포트에서 PC/M 컬럼을 확인하지 못했습니다. "
-                    f"CRITERION 기기 리포트로 보정 수집을 시도합니다. "
-                    f"status={device_meta.get('status')} | parser={device_parser_version}{extra_msg}"
-                )
-
-                criterion_saved = False
-                if callable(parse_criterion_device_reports_fn) and criterion_report_df is not None and not getattr(criterion_report_df, "empty", False):
-                    criterion_camp_stat, criterion_meta = parse_criterion_device_reports_fn(
-                        criterion_report_df,
-                        criterion_conversion_report_df,
-                        adgroup_to_campaign=adgroup_to_campaign_map,
-                    )
-                    if shopping_only:
-                        criterion_camp_stat = filter_stat_result_fn(criterion_camp_stat, set(target_camp_ids))
-                    result["criterion_device_status"] = str(criterion_meta.get("status") or "unknown")
-                    result["criterion_device_rows"] = int(criterion_meta.get("campaign_rows", 0) or 0)
-                    if criterion_meta.get("status") == "ok" and criterion_camp_stat:
-                        device_ad_cnt, device_campaign_cnt, fallback_cnt = _save_device_totals_with_unsegmented_fallback(
-                            engine,
-                            customer_id=customer_id,
-                            account_name=account_name,
-                            target_date=target_date,
-                            target_camp_ids=target_camp_ids,
-                            target_ad_ids=target_ad_ids,
-                            ad_device_stat={},
-                            camp_device_stat=criterion_camp_stat,
-                            save_device_stats_fn=save_device_stats_fn,
-                            build_unsegmented_device_stat_from_totals_fn=build_unsegmented_device_stat_from_totals_fn,
-                            source_report="CRITERION",
-                            log_fn=log_fn,
-                        )
-                        result["device_status"] = "criterion_ok_with_unsegmented_total" if fallback_cnt else "criterion_ok"
-                        criterion_saved = True
-                        log_fn(
-                            f"   ✅ [ {account_name} ] CRITERION PC/M 분리 저장 완료: 캠페인({device_campaign_cnt}) "
-                            f"| 보정({fallback_cnt}) | conversion={criterion_meta.get('conversion_status', 'not_requested')}"
-                        )
-                    else:
-                        crit_debug_keys = [
-                            "header_idx", "criterion_idx", "device_idx", "imp_idx", "clk_idx", "cost_idx",
-                            "conv_idx", "sales_idx", "scan_rows", "reject_empty_criterion",
-                            "reject_empty_device", "reject_missing_campaign", "reject_zero_metrics",
-                            "sample_headers", "preview_rows"
-                        ]
-                        crit_parts = []
-                        for _k in crit_debug_keys:
-                            _v = criterion_meta.get(_k)
-                            if _v in (None, "", [], {}):
-                                continue
-                            crit_parts.append(f"{_k}={_v}")
-                        crit_msg = f" | {' | '.join(crit_parts)}" if crit_parts else ""
-                        log_fn(f"   ⚠️ [ {account_name} ] CRITERION PC/M 파싱 실패: status={criterion_meta.get('status')}{crit_msg}")
-                else:
-                    result["criterion_device_status"] = "missing"
-                    log_fn(f"   ℹ️ [ {account_name} ] CRITERION 리포트가 없어 PC/M 보정 수집을 건너뜁니다.")
-
-                if not criterion_saved:
-                    device_ad_cnt, device_campaign_cnt, fallback_cnt = _save_device_totals_with_unsegmented_fallback(
-                        engine,
-                        customer_id=customer_id,
-                        account_name=account_name,
-                        target_date=target_date,
-                        target_camp_ids=target_camp_ids,
-                        target_ad_ids=target_ad_ids,
-                        ad_device_stat={},
-                        camp_device_stat={},
-                        save_device_stats_fn=save_device_stats_fn,
-                        build_unsegmented_device_stat_from_totals_fn=build_unsegmented_device_stat_from_totals_fn,
-                        source_report="STATS_TOTAL",
-                        log_fn=log_fn,
-                    )
-                    if fallback_cnt:
-                        result["device_status"] = "unsegmented_total_fallback"
+        if collect_ad_stats:
+            if ad_report_df is None or getattr(ad_report_df, "empty", False):
+                log_fn(f"   ⚠️ [ {account_name} ] AD 리포트 없음 → 소재 실시간 stats 총합으로 대체합니다.")
+            a_cnt = fetch_stats_fallback_fn(
+                engine, customer_id, target_date, target_ad_ids, "ad_id", "fact_ad_daily",
+                split_map=ad_map, scoped_replace=shopping_only,
+            )
         else:
-            if collect_ad_stats:
-                log_fn(f"   ⚠️ [ {account_name} ] AD 리포트 없음 → 소재만 실시간 stats 총합으로 대체합니다.")
-                a_cnt = fetch_stats_fallback_fn(engine, customer_id, target_date, target_ad_ids, "ad_id", "fact_ad_daily", split_map=ad_map, scoped_replace=shopping_only)
-            else:
-                log_fn(f"   ℹ️ [ {account_name} ] AD 리포트가 없어 PC/M 전용 적재를 건너뜁니다.")
-                a_cnt = 0
-            if collect_device:
-                criterion_saved = False
-                if callable(parse_criterion_device_reports_fn) and criterion_report_df is not None and not getattr(criterion_report_df, "empty", False):
-                    criterion_camp_stat, criterion_meta = parse_criterion_device_reports_fn(
-                        criterion_report_df,
-                        criterion_conversion_report_df,
-                        adgroup_to_campaign=adgroup_to_campaign_map,
-                    )
-                    if shopping_only:
-                        criterion_camp_stat = filter_stat_result_fn(criterion_camp_stat, set(target_camp_ids))
-                    result["criterion_device_status"] = str(criterion_meta.get("status") or "unknown")
-                    result["criterion_device_rows"] = int(criterion_meta.get("campaign_rows", 0) or 0)
-                    if criterion_meta.get("status") == "ok" and criterion_camp_stat:
-                        device_ad_cnt, device_campaign_cnt, fallback_cnt = _save_device_totals_with_unsegmented_fallback(
-                            engine,
-                            customer_id=customer_id,
-                            account_name=account_name,
-                            target_date=target_date,
-                            target_camp_ids=target_camp_ids,
-                            target_ad_ids=target_ad_ids,
-                            ad_device_stat={},
-                            camp_device_stat=criterion_camp_stat,
-                            save_device_stats_fn=save_device_stats_fn,
-                            build_unsegmented_device_stat_from_totals_fn=build_unsegmented_device_stat_from_totals_fn,
-                            source_report="CRITERION",
-                            log_fn=log_fn,
-                        )
-                        result["device_status"] = "criterion_ok_with_unsegmented_total" if fallback_cnt else "criterion_ok"
-                        criterion_saved = True
-                        log_fn(f"   ✅ [ {account_name} ] AD 리포트 없이 CRITERION PC/M 분리 저장 완료: 캠페인({device_campaign_cnt}) | 보정({fallback_cnt})")
-                if not criterion_saved:
-                    device_ad_cnt, device_campaign_cnt, fallback_cnt = _save_device_totals_with_unsegmented_fallback(
-                        engine,
-                        customer_id=customer_id,
-                        account_name=account_name,
-                        target_date=target_date,
-                        target_camp_ids=target_camp_ids,
-                        target_ad_ids=target_ad_ids,
-                        ad_device_stat={},
-                        camp_device_stat={},
-                        save_device_stats_fn=save_device_stats_fn,
-                        build_unsegmented_device_stat_from_totals_fn=build_unsegmented_device_stat_from_totals_fn,
-                        source_report="STATS_TOTAL",
-                        log_fn=log_fn,
-                    )
-                    result["device_status"] = "unsegmented_total_fallback" if fallback_cnt else "ad_report_missing"
+            a_cnt = 0
     else:
         a_cnt = 0
+
+    if collect_device:
+        # 1순위: 실제 성과 기준 /stats breakdown=pcMblTp.
+        # 광고그룹의 기기 타게팅 설정값(모두/PC/모바일)이 아니라 PC/MOBILE 실적 row를 직접 받습니다.
+        stats_ad_device_stat, stats_camp_device_stat, stats_device_meta = _collect_pc_mobile_device_stats_from_stats(
+            customer_id=customer_id,
+            target_date=target_date,
+            target_camp_ids=target_camp_ids,
+            target_ad_ids=target_ad_ids,
+            get_stats_breakdown_range_fn=get_stats_breakdown_range_fn,
+            build_pc_mobile_device_stat_from_stats_fn=build_pc_mobile_device_stat_from_stats_fn,
+            log_fn=log_fn,
+        )
+        result["device_stats_breakdown_status"] = str(stats_device_meta.get("status") or "unknown")
+        result["device_stats_campaign_rows"] = int(stats_device_meta.get("campaign_rows", 0) or 0)
+        result["device_stats_ad_rows"] = int(stats_device_meta.get("ad_rows", 0) or 0)
+
+        ad_device_stat = stats_ad_device_stat
+        camp_device_stat = stats_camp_device_stat
+        source_parts: List[str] = []
+        if ad_device_stat or camp_device_stat:
+            source_parts.append("STATS_PCMobile")
+
+        # 2순위: 구버전/일부 계정에서 pcMblTp breakdown row가 비어 있을 때만 AD 리포트 컬럼을 보조로 사용합니다.
+        report_meta: Dict[str, Any] = {"status": "not_requested"}
+        if ad_report_df is not None and not getattr(ad_report_df, "empty", False):
+            report_ad_stat, report_camp_stat, report_meta = parse_ad_device_report_fn(ad_report_df, ad_to_campaign=ad_to_campaign_map)
+            result["device_report_status"] = str(report_meta.get("status") or "unknown")
+            if not ad_device_stat and report_ad_stat:
+                ad_device_stat = report_ad_stat
+                source_parts.append("AD_REPORT_AD_FALLBACK")
+            if not camp_device_stat and report_camp_stat:
+                camp_device_stat = report_camp_stat
+                source_parts.append("AD_REPORT_CAMPAIGN_FALLBACK")
+        else:
+            result["device_report_status"] = "ad_report_missing"
+
+        # CRITERION 리포트는 광고그룹 타게팅/criterion 기반이라 기기 설정값과 섞일 수 있어
+        # 더 이상 PC/M 실제 성과의 주 수집원으로 저장하지 않습니다.
+        result["criterion_device_status"] = "not_used_actual_pcMblTp"
+        result["criterion_device_rows"] = 0
+
+        if shopping_only:
+            ad_device_stat = filter_stat_result_fn(ad_device_stat, set(target_ad_ids))
+            camp_device_stat = filter_stat_result_fn(camp_device_stat, set(target_camp_ids))
+
+        source_report = "+".join(dict.fromkeys(source_parts)) or "STATS_TOTAL"
+        device_ad_cnt, device_campaign_cnt, fallback_cnt = _save_device_totals_with_unsegmented_fallback(
+            engine,
+            customer_id=customer_id,
+            account_name=account_name,
+            target_date=target_date,
+            target_camp_ids=target_camp_ids,
+            target_ad_ids=target_ad_ids,
+            ad_device_stat=ad_device_stat,
+            camp_device_stat=camp_device_stat,
+            save_device_stats_fn=save_device_stats_fn,
+            build_unsegmented_device_stat_from_totals_fn=build_unsegmented_device_stat_from_totals_fn,
+            source_report=source_report,
+            log_fn=log_fn,
+        )
+        result["device_ad_source"] = "STATS_PCMobile" if stats_ad_device_stat else ("AD_REPORT" if ad_device_stat else "STATS_TOTAL")
+        result["device_campaign_source"] = "STATS_PCMobile" if stats_camp_device_stat else ("AD_REPORT" if camp_device_stat else "STATS_TOTAL")
+        result["device_status"] = "actual_pc_mobile_ok_with_unsegmented_total" if fallback_cnt else (
+            "actual_pc_mobile_ok" if (stats_ad_device_stat or stats_camp_device_stat) else (
+                "ad_report_fallback_ok" if (ad_device_stat or camp_device_stat) else (
+                    "unsegmented_total_fallback" if fallback_cnt else "no_device_rows"
+                )
+            )
+        )
+        log_fn(
+            f"   ✅ [ {account_name} ] PC/M 실제 성과 저장 완료: 캠페인({device_campaign_cnt}) | 소재({device_ad_cnt}) "
+            f"| source={source_report} | stats_rows=캠페인 {result.get('device_stats_campaign_rows', 0)}, 소재 {result.get('device_stats_ad_rows', 0)} "
+            f"| parser={device_parser_version}"
+        )
+    else:
         result["device_status"] = "not_requested"
 
     media_cnt = 0
     media_meta = {"status": "disabled", "reason": "media_collection_removed"}
-
     return c_cnt, k_cnt, a_cnt, device_ad_cnt, device_campaign_cnt, media_cnt, media_meta
-
 
 
 def _sync_structure_and_collect_targets(

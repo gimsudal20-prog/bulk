@@ -11,7 +11,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 
-DEVICE_PARSER_VERSION = "pcm_v20260531_metric2"
+DEVICE_PARSER_VERSION = "pcm_v20260531_stat_pcmbltp1"
 UNSEGMENTED_DEVICE_NAME = "UNSEGMENTED"
 
 DEVICE_HEADER_CANDIDATES = [
@@ -950,6 +950,180 @@ def parse_criterion_device_reports(
     })
     return base_stat, meta
 
+
+
+PC_MOBILE_BREAKDOWN_KEY = "pcMblTp"
+PC_MOBILE_BREAKDOWN_ALIASES = [
+    "pcMblTp", "pcMobileTp", "pc_mobile_tp", "pc mobile tp", "pc/mobile tp", "pcmobiletp",
+    "pcMbl", "pcMobile", "pc_mobile", "pc mobile", "pc/mobile", "pcmobile",
+    "device", "deviceType", "device_name", "platform", "deliveryDevice",
+    "기기", "디바이스", "PC/모바일", "PC모바일", "PC 모바일", "노출기기",
+]
+STAT_ID_ALIASES = ["id", "nccCampaignId", "campaignId", "campaign_id", "nccAdId", "adId", "ad_id", "광고ID", "캠페인ID"]
+STAT_METRIC_ALIASES = {
+    "imp": ["impCnt", "impressions", "impression", "imp", "노출수"],
+    "clk": ["clkCnt", "clicks", "click", "clk", "클릭수"],
+    "cost": ["salesAmt", "cost", "spend", "광고비", "비용", "총비용"],
+    "conv": ["ccnt", "convCnt", "conversionCount", "conversions", "전환수"],
+    "sales": ["convAmt", "conversionValue", "salesByConversion", "conversionSales", "전환매출", "전환매출액"],
+}
+
+
+def _get_case_insensitive(row: dict, names: List[str]) -> Any:
+    if not isinstance(row, dict):
+        return None
+    for name in names:
+        if name in row:
+            return row.get(name)
+    norm_map = {_normalize_header(k): k for k in row.keys()}
+    for name in names:
+        key = norm_map.get(_normalize_header(name))
+        if key is not None:
+            return row.get(key)
+    return None
+
+
+def _extract_stat_id(row: dict) -> str:
+    val = _get_case_insensitive(row, STAT_ID_ALIASES)
+    return str(val or "").strip()
+
+
+def _extract_stat_breakdown_value(row: dict, aliases: List[str]) -> str:
+    val = _get_case_insensitive(row, aliases)
+    if val not in (None, ""):
+        return str(val).strip()
+
+    # /stats 응답은 breakdown/breakdowns, dimension/segment, 또는 metrics 배열과 함께
+    # 중첩 객체로 내려올 수 있어 최대한 방어적으로 꺼냅니다.
+    for container_key in ["breakdown", "breakdowns", "dimension", "dimensions", "segment", "segments"]:
+        obj = row.get(container_key) if isinstance(row, dict) else None
+        if isinstance(obj, dict):
+            val = _get_case_insensitive(obj, aliases + ["value", "name"])
+            if val not in (None, ""):
+                return str(val).strip()
+        elif isinstance(obj, list):
+            for item in obj:
+                if not isinstance(item, dict):
+                    continue
+                key_name = _get_case_insensitive(item, ["key", "type", "field", "breakdown"])
+                val = _get_case_insensitive(item, aliases + ["value", "name"])
+                if val in (None, ""):
+                    continue
+                if not key_name or _normalize_header(str(key_name)) in {_normalize_header(a) for a in aliases}:
+                    return str(val).strip()
+
+    name_val = _get_case_insensitive(row, ["name"])
+    if name_val not in (None, ""):
+        name_text = str(name_val).strip()
+        if normalize_device_name(name_text):
+            return name_text
+    return ""
+
+
+def _extract_stat_metric(row: dict, metric_key: str) -> float:
+    val = _get_case_insensitive(row, STAT_METRIC_ALIASES.get(metric_key, []))
+    if val is not None:
+        return _safe_float(val)
+
+    metrics = row.get("metrics") if isinstance(row, dict) else None
+    if isinstance(metrics, dict):
+        val = _get_case_insensitive(metrics, STAT_METRIC_ALIASES.get(metric_key, []))
+        if val is not None:
+            return _safe_float(val)
+    if isinstance(metrics, list):
+        # fields 순서: [impCnt, clkCnt, salesAmt, ccnt, convAmt]
+        order = {"imp": 0, "clk": 1, "cost": 2, "conv": 3, "sales": 4}
+        idx = order.get(metric_key, -1)
+        if 0 <= idx < len(metrics):
+            return _safe_float(metrics[idx])
+    return 0.0
+
+
+def build_pc_mobile_device_stat_from_stats(
+    raw_rows: List[dict],
+    *,
+    valid_ids: set[str] | None = None,
+) -> Tuple[Dict[Tuple[str, str], dict], dict]:
+    """Build device stats from /stats?breakdown=pcMblTp.
+
+    This uses actual performance breakdown rows, not adgroup targeting/device settings.
+    Therefore an adgroup set to "모두" still produces separate PC/MOBILE rows when the
+    Stat API returns device-segmented performance.
+    """
+    valid_ids = {str(x).strip() for x in (valid_ids or set()) if str(x or "").strip()} or None
+    stats: Dict[Tuple[str, str], dict] = {}
+    rejected = {
+        "missing_id": 0,
+        "out_of_scope": 0,
+        "missing_device": 0,
+        "unsegmented_device": 0,
+        "zero_metric": 0,
+    }
+    samples = {k: [] for k in rejected.keys()}
+
+    for row in raw_rows or []:
+        if not isinstance(row, dict):
+            continue
+        entity_id = _extract_stat_id(row)
+        if not entity_id:
+            rejected["missing_id"] += 1
+            if len(samples["missing_id"]) < 3:
+                samples["missing_id"].append({k: row.get(k) for k in list(row.keys())[:12]})
+            continue
+        if valid_ids is not None and entity_id not in valid_ids:
+            rejected["out_of_scope"] += 1
+            continue
+
+        raw_device = _extract_stat_breakdown_value(row, PC_MOBILE_BREAKDOWN_ALIASES)
+        device_name = normalize_device_name(raw_device)
+        if not device_name:
+            rejected["missing_device"] += 1
+            if len(samples["missing_device"]) < 3:
+                samples["missing_device"].append({k: row.get(k) for k in list(row.keys())[:12]})
+            continue
+        if device_name == UNSEGMENTED_DEVICE_NAME:
+            rejected["unsegmented_device"] += 1
+            if len(samples["unsegmented_device"]) < 3:
+                samples["unsegmented_device"].append({k: row.get(k) for k in list(row.keys())[:12]})
+            continue
+
+        imp = int(_extract_stat_metric(row, "imp") or 0)
+        clk = int(_extract_stat_metric(row, "clk") or 0)
+        cost = int(_extract_stat_metric(row, "cost") or 0)
+        conv = float(_extract_stat_metric(row, "conv") or 0.0)
+        sales = int(_extract_stat_metric(row, "sales") or 0)
+        if imp == 0 and clk == 0 and cost == 0 and conv == 0 and sales == 0:
+            rejected["zero_metric"] += 1
+            if len(samples["zero_metric"]) < 3:
+                samples["zero_metric"].append({k: row.get(k) for k in list(row.keys())[:12]})
+            continue
+
+        key = (entity_id, device_name)
+        bucket = stats.setdefault(key, {
+            "imp": 0,
+            "clk": 0,
+            "cost": 0,
+            "conv": 0.0,
+            "sales": 0,
+            "rank_sum": 0.0,
+            "rank_cnt": 0,
+        })
+        bucket["imp"] += imp
+        bucket["clk"] += clk
+        bucket["cost"] += cost
+        bucket["conv"] += conv
+        bucket["sales"] += sales
+
+    meta = {
+        "status": "ok" if stats else "no_rows",
+        "source_report": "STATS_PCMobile",
+        "breakdown": PC_MOBILE_BREAKDOWN_KEY,
+        "raw_rows": len(raw_rows or []),
+        "parsed_rows": len(stats),
+        "samples": samples,
+        **rejected,
+    }
+    return stats, meta
 
 def save_device_stats(
     engine: Engine,

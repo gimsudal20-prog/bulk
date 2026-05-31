@@ -218,17 +218,27 @@ def check_overview_keyword_purchase_contract(root: Path) -> list[str]:
 def check_device_breakdown_contract(root: Path) -> list[str]:
     device_path = root / 'device_collector_helpers.py'
     view_path = root / 'view_time_age.py'
-    if not device_path.exists() or not view_path.exists():
-        raise RegressionFailure('device_collector_helpers.py 또는 view_time_age.py 가 없습니다')
+    collector_path = root / 'collector.py'
+    runner_path = root / 'collector_runner.py'
+    backfill_path = root / 'collector_backfill_recent_sa.py'
+    if not device_path.exists() or not view_path.exists() or not collector_path.exists() or not runner_path.exists() or not backfill_path.exists():
+        raise RegressionFailure('기기별 수집/UI 핵심 파일이 없습니다')
 
     device_text = device_path.read_text(encoding='utf-8')
     view_text = view_path.read_text(encoding='utf-8')
+    collector_text = collector_path.read_text(encoding='utf-8')
+    runner_text = runner_path.read_text(encoding='utf-8')
+    backfill_text = backfill_path.read_text(encoding='utf-8')
     required = {
-        'device parser metric version 갱신': 'pcm_v20260531_metric2' in device_text,
+        'device parser actual pcMobile version 갱신': 'pcm_v20260531_stat_pcmbltp1' in device_text,
         'device metric 상대 위치 추론': '_infer_metric_indices_relative' in device_text and 'relative_metrics' in device_text,
         'pcMobileTp 헤더 alias': 'pcmobiletp' in device_text and 'PC/모바일 구분' in device_text,
         'criterion targeting id alias': 'targeting id' in device_text and '타겟팅 id' in device_text,
         '미분리 device total 유지': 'UNSEGMENTED' in device_text and 'PC/MOBILE' in device_text,
+        'tuple key device filter 유지': '_stat_result_entity_id' in collector_text and 'isinstance(key, (tuple, list))' in collector_text,
+        'actual pcMobile breakdown helper': 'build_pc_mobile_device_stat_from_stats' in device_text and 'PC_MOBILE_BREAKDOWN_KEY' in device_text,
+        'collector uses pcMblTp breakdown': 'get_stats_breakdown_range_fn' in runner_text and 'pcMblTp' in runner_text and 'not_used_actual_pcMblTp' in runner_text,
+        'backfill uses pcMblTp breakdown': 'get_stats_breakdown_range' in backfill_text and 'pcMblTp' in backfill_text and 'not_used_actual_pcMblTp' in backfill_text,
         'time_age 기기별 탭 추가': '_render_device_tab' in view_text and '기기별' in view_text,
         'time_age campaign/ad device 조회': '_query_device' in view_text and '_query_ad_device' in view_text,
         'time_age device 테이블 체크': 'fact_campaign_device_daily' in view_text and 'fact_ad_device_daily' in view_text,

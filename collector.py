@@ -31,6 +31,7 @@ from device_collector_helpers import (
     DEVICE_PARSER_VERSION,
     build_ad_to_campaign_map,
     build_adgroup_to_campaign_map,
+    build_pc_mobile_device_stat_from_stats,
     build_unsegmented_device_stat_from_totals,
     parse_ad_device_report,
     parse_criterion_device_reports,
@@ -683,11 +684,23 @@ def collect_media_fact(engine: Engine, customer_id: str, target_date: date, ad_r
     return 0, {"status": "disabled", "reason": "media_collection_removed"}
 
 
+def _stat_result_entity_id(key) -> str:
+    """Return the entity id from a stats key.
+
+    Device breakdown dictionaries are keyed as (entity_id, device_name),
+    while normal stats dictionaries are keyed by entity_id.  Keep both forms
+    intact when filtering so PC/M rows are not accidentally dropped.
+    """
+    if isinstance(key, (tuple, list)) and key:
+        return str(key[0] or "").strip()
+    return str(key or "").strip()
+
+
 def filter_stat_result(stat_res: dict, allowed_ids: set[str] | None) -> dict:
     if not stat_res or not allowed_ids:
         return stat_res or {}
     allowed = {str(x).strip() for x in allowed_ids if str(x).strip()}
-    return {str(k): v for k, v in (stat_res or {}).items() if str(k).strip() in allowed}
+    return {k: v for k, v in (stat_res or {}).items() if _stat_result_entity_id(k) in allowed}
 
 
 def list_campaigns(customer_id: str) -> List[dict]:
@@ -967,9 +980,11 @@ def _save_report_stats_and_breakdowns(
         result=result,
         normalize_sa_scope_fn=normalize_sa_scope,
         fetch_stats_fallback_fn=fetch_stats_fallback,
+        get_stats_breakdown_range_fn=get_stats_breakdown_range,
         clear_fact_scope_fn=clear_fact_scope,
         parse_ad_device_report_fn=parse_ad_device_report,
         parse_criterion_device_reports_fn=parse_criterion_device_reports,
+        build_pc_mobile_device_stat_from_stats_fn=build_pc_mobile_device_stat_from_stats,
         filter_stat_result_fn=filter_stat_result,
         save_device_stats_fn=save_device_stats,
         build_unsegmented_device_stat_from_totals_fn=build_unsegmented_device_stat_from_totals,
@@ -1127,6 +1142,7 @@ def process_account(engine: Engine, customer_id: str, account_name: str, target_
         prepare_account_report_fetch_plan_fn=_prepare_account_report_fetch_plan,
         scope_enabled_collectors_fn=_scope_enabled_collectors,
         fetch_stats_fallback_fn=fetch_stats_fallback,
+        get_stats_breakdown_range_fn=get_stats_breakdown_range,
         clear_fact_scope_fn=clear_fact_scope,
         save_device_stats_fn=save_device_stats,
         build_unsegmented_device_stat_from_totals_fn=build_unsegmented_device_stat_from_totals,

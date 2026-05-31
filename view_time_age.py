@@ -5,12 +5,12 @@ from __future__ import annotations
 from html import escape
 from typing import Dict, Iterable, List
 
-import altair as alt
 import numpy as np
 import pandas as pd
 import streamlit as st
 
 from data import get_table_columns, sql_read, table_exists
+from ui import render_echarts_dual_axis
 from targeting_collector_helpers import AGE_BUCKETS
 
 
@@ -300,59 +300,55 @@ def _kpi_row(summary: pd.DataFrame) -> None:
             )
 
 
-def _render_static_bar_chart(df: pd.DataFrame, label_col: str, value_col: str, *, value_label: str = "광고비") -> None:
-    """Render a fixed, non-scrollable chart that does not capture wheel/zoom gestures."""
-    if df is None or df.empty or label_col not in df.columns or value_col not in df.columns:
+def _render_overview_like_chart(df: pd.DataFrame, label_col: str, *, key: str, title_prefix: str) -> None:
+    """Render the time/age/device chart in the same bar+line style as overview trend charts."""
+    if df is None or df.empty or label_col not in df.columns:
         st.info("차트로 표시할 데이터가 없습니다.")
         return
 
-    work = df[[label_col, value_col]].copy()
-    work[value_col] = pd.to_numeric(work[value_col], errors="coerce").fillna(0)
-    work[label_col] = work[label_col].astype(str)
-    work = work.rename(columns={value_col: value_label})
+    chart_df = _add_calc_cols(df).copy()
+    for col in ["imp", "clk", "cost", "sales"]:
+        chart_df[col] = pd.to_numeric(chart_df.get(col, 0), errors="coerce").fillna(0)
+    chart_df[label_col] = chart_df[label_col].astype(str)
 
-    chart = (
-        alt.Chart(work)
-        .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
-        .encode(
-            x=alt.X(
-                f"{label_col}:N",
-                title=None,
-                sort=None,
-                axis=alt.Axis(labelAngle=0, labelLimit=80),
-            ),
-            y=alt.Y(
-                f"{value_label}:Q",
-                title=None,
-                axis=alt.Axis(format=",.0f"),
-            ),
-            tooltip=[
-                alt.Tooltip(f"{label_col}:N", title=label_col),
-                alt.Tooltip(f"{value_label}:Q", title=value_label, format=",.0f"),
-            ],
-        )
-        .properties(height=300)
-        .configure_view(strokeWidth=0)
-    )
-    st.altair_chart(chart, use_container_width=True, theme=None)
-
-
-def _render_metric_bar_chart(df: pd.DataFrame, label_col: str, *, key: str, title_prefix: str) -> None:
-    """Let operators switch the chart metric without changing the tables below."""
-    selected_metric = st.selectbox(
-        "차트 지표",
-        list(CHART_METRIC_OPTIONS.keys()),
-        index=0,
+    trend_view = st.segmented_control(
+        "추이 보기",
+        ["비용 및 매출 추이", "유입 지표 추이"],
+        default="비용 및 매출 추이",
         key=key,
-        help="차트만 바뀌며, 아래 표는 전체 지표를 유지합니다.",
+        label_visibility="collapsed",
     )
-    metric_col = CHART_METRIC_OPTIONS[selected_metric]
-    _render_section_title(
-        f"{title_prefix} {selected_metric}",
-        "광고비·클릭·전환수·ROAS 중 선택해서 볼 수 있습니다. 표 헤더를 클릭하면 정렬됩니다.",
-    )
-    _render_static_bar_chart(df, label_col, metric_col, value_label=selected_metric)
 
+    if trend_view == "유입 지표 추이":
+        _render_section_title(
+            f"{title_prefix} 노출 및 클릭 추이",
+            "오버뷰의 일자별 성과 추이와 동일한 막대+라인 형식입니다.",
+        )
+        render_echarts_dual_axis(
+            f"{title_prefix} 노출 및 클릭 추이",
+            chart_df,
+            label_col,
+            "imp",
+            "노출수",
+            "clk",
+            "클릭수",
+            height=320,
+        )
+    else:
+        _render_section_title(
+            f"{title_prefix} 비용 및 매출 추이",
+            "오버뷰의 일자별 성과 추이와 동일한 막대+라인 형식입니다.",
+        )
+        render_echarts_dual_axis(
+            f"{title_prefix} 비용 및 매출 추이",
+            chart_df,
+            label_col,
+            "cost",
+            "광고비",
+            "sales",
+            "매출",
+            height=320,
+        )
 
 def _filter_campaign_and_group(
     df: pd.DataFrame,
@@ -672,7 +668,7 @@ def _render_hour_tab(engine, f: Dict) -> None:
     _kpi_row(summary)
 
     chart = _prepare_hour_frame(_add_calc_cols(hourly))
-    _render_metric_bar_chart(chart, "시간대", key="ta_hour_chart_metric_v11", title_prefix="시간대별")
+    _render_overview_like_chart(chart, "시간대", key="ta_hour_trend_view_v12", title_prefix="시간대별")
 
     tab_summary, tab_campaign, tab_group = st.tabs(["시간대 요약", "캠페인별", "그룹별"])
     with tab_summary:
@@ -746,7 +742,7 @@ def _render_device_tab(engine, f: Dict) -> None:
 
     chart = _prepare_device_frame(_add_calc_cols(device))
     chart = chart.rename(columns={"device_name": "기기"})
-    _render_metric_bar_chart(chart, "기기", key="ta_device_chart_metric_v11", title_prefix="기기별")
+    _render_overview_like_chart(chart, "기기", key="ta_device_trend_view_v12", title_prefix="기기별")
 
     tab_summary, tab_campaign, tab_ad = st.tabs(["기기별 요약", "캠페인별", "소재별"])
     with tab_summary:
@@ -820,7 +816,7 @@ def _render_age_tab(engine, f: Dict) -> None:
 
     chart = _prepare_age_frame(_add_calc_cols(age))
     chart = chart.rename(columns={"age_range": "연령대"})
-    _render_metric_bar_chart(chart, "연령대", key="ta_age_chart_metric_v11", title_prefix="연령대별")
+    _render_overview_like_chart(chart, "연령대", key="ta_age_trend_view_v12", title_prefix="연령대별")
 
     tab_summary, tab_campaign, tab_group = st.tabs(["연령대 요약", "캠페인별", "그룹별"])
     with tab_summary:
@@ -876,8 +872,7 @@ def page_time_age(meta: pd.DataFrame, engine, f: Dict) -> None:
         .ta-section-desc{font-size:12px;font-weight:650;color:#64748B;text-align:right;line-height:1.35;}
         [data-baseweb="tab-list"]{margin-top:14px!important;}
         div[data-baseweb="select"]{transform:none!important;transition:none!important;}
-        div[data-testid="stVegaLiteChart"]{overflow:hidden!important;}
-        div[data-testid="stVegaLiteChart"] canvas{max-width:100%!important;}
+        div[data-testid="stIFrame"]{overflow:hidden!important;}
         </style>
         """,
         unsafe_allow_html=True,

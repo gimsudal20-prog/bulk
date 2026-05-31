@@ -126,8 +126,8 @@ def check_conversion_keyword_mapping_contract(root: Path) -> list[str]:
         'header keyword text index': 'kw_text_idx' in text and 'get_text_col_idx' in text,
         'header keyword lookup mapping': '_conv_resolve_keyword_object_id(' in text and 'keyword_unique_lookup' in text,
         'header campaign token fallback': 'row_campaign_id = extract_prefixed_token(vals, "cmp-")' in text,
-        'AD_CONVERSION은 쇼핑 없이도 수집': 'split_enabled_for_date_fn(target_date) and collect_sa' in runner_text and 'split_candidate_reports = ["AD_CONVERSION"]' in runner_text,
-        '쇼핑검색어는 keyword split 제외': 'raw_kw_map = ad_kw_map' in runner_text and 'SHOPPINGKEYWORD_CONVERSION_DETAIL is a search-term report' in runner_text,
+        'AD/CRITERION 전환은 쇼핑 없이도 수집': 'split_enabled_for_date_fn(target_date) and collect_sa' in runner_text and 'split_candidate_reports = ["AD_CONVERSION", "CRITERION_CONVERSION"]' in runner_text,
+        '쇼핑검색어는 keyword split 제외': 'raw_kw_map = merge_split_maps_fn(ad_kw_map, criterion_kw_map)' in runner_text and 'SHOPPINGKEYWORD_CONVERSION_DETAIL is a search-term report' in runner_text,
     }
     missing = [name for name, ok in required.items() if not ok]
     if missing:

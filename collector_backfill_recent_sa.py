@@ -1138,6 +1138,17 @@ def _conv_looks_like_id(v: str) -> bool:
     return s.startswith(('cmp-', 'grp-', 'nkw-', 'nad-', 'bsn-'))
 
 
+def _conv_extract_keyword_id_from_value(v: str) -> str:
+    raw = str(v or "").strip().strip('"').strip("'")
+    if not raw or raw == "-":
+        return ""
+    owner = raw.split("~", 1)[0].strip().strip('"').strip("'")
+    if owner.lower().startswith("nkw-"):
+        return owner
+    m = re.search(r"(nkw-[A-Za-z0-9-]+)", raw, flags=re.I)
+    return m.group(1) if m else ""
+
+
 def _conv_row_allowed(allowed_campaign_ids: set[str], row_campaign_id: str | None) -> bool:
     if not allowed_campaign_ids:
         return True
@@ -1231,9 +1242,18 @@ def _conv_process_header_mode(df: pd.DataFrame, allowed_campaign_ids: set[str], 
 
     headers = [normalize_header(str(x)) for x in df.iloc[header_idx].fillna("")]
     cid_idx = get_col_idx(headers, ['캠페인id', 'campaignid', 'ncccampaignid'])
-    kid_idx = get_col_idx(headers, ['키워드id', 'keywordid', 'ncckeywordid'])
+    kid_idx = get_col_idx(headers, [
+        '키워드id', 'keywordid', 'ncckeywordid',
+        'criterionid', 'criterion id', 'criterion_id', 'criterion',
+        '기준id', '기준 id', '타게팅id', '타겟팅id', '타게팅 id', '타겟팅 id',
+        'targetid', 'target id', 'targetingid', 'targeting id',
+    ])
     adid_idx = get_col_idx(headers, ['광고id', '소재id', 'adid', 'nccadid'])
-    type_idx = get_col_idx(headers, ['전환유형', 'conversiontype', 'convtp'])
+    type_idx = get_col_idx(headers, [
+        '전환유형', '전환 유형', '전환유형명', '전환 유형명',
+        'conversiontype', 'conversion type', 'conversiontypename', 'conversion type name',
+        'convtp', 'convtype', 'conversioncategory', 'conversion category',
+    ])
     cnt_idx = get_col_idx(headers, ['총전환수', '전환수', 'conversions', 'conversioncount', 'ccnt'])
     sales_idx = get_col_idx(headers, ['총전환매출액(원)', '전환매출액', 'conversionvalue', 'sales', 'salesbyconversion', 'convamt'])
 
@@ -1248,10 +1268,13 @@ def _conv_process_header_mode(df: pd.DataFrame, allowed_campaign_ids: set[str], 
     for _, r in data_df.iterrows():
         if len(r) <= max(type_idx, cnt_idx, sales_idx if sales_idx != -1 else -1):
             continue
+        vals = [str(x) for x in r.tolist()]
         row_campaign_id = r.iloc[cid_idx] if cid_idx != -1 and len(r) > cid_idx else ''
+        if not str(row_campaign_id or '').strip():
+            row_campaign_id = extract_prefixed_token(vals, 'cmp-')
         if not _conv_row_allowed(allowed_campaign_ids, row_campaign_id):
             filtered += 1
-            _conv_add_debug_row(debug_rows, report_hint, debug_target_date, debug_account_name, [str(x) for x in r.tolist()], "", 0, 0, False, "campaign_filtered_header")
+            _conv_add_debug_row(debug_rows, report_hint, debug_target_date, debug_account_name, vals, "", 0, 0, False, "campaign_filtered_header")
             continue
         is_purchase, is_cart, is_wishlist = _conv_classify_conversion_value(r.iloc[type_idx])
         if not (is_purchase or is_cart or is_wishlist):
@@ -1260,11 +1283,12 @@ def _conv_process_header_mode(df: pd.DataFrame, allowed_campaign_ids: set[str], 
         c_val = safe_float(r.iloc[cnt_idx])
         s_val = int(safe_float(r.iloc[sales_idx])) if sales_idx != -1 else 0
         add_split_summary(summary, is_purchase, is_cart, is_wishlist, c_val, s_val)
-        _conv_add_debug_row(debug_rows, report_hint, debug_target_date, debug_account_name, [str(x) for x in r.tolist()], "purchase" if is_purchase else ("cart" if is_cart else "wishlist"), c_val, s_val, True, "header_keep")
+        _conv_add_debug_row(debug_rows, report_hint, debug_target_date, debug_account_name, vals, "purchase" if is_purchase else ("cart" if is_cart else "wishlist"), c_val, s_val, True, "header_keep")
         if cid_idx != -1 and len(r) > cid_idx:
             _conv_apply_row(camp_map, r.iloc[cid_idx], is_purchase, is_cart, is_wishlist, c_val, s_val)
         if kid_idx != -1 and len(r) > kid_idx:
-            _conv_apply_row(kw_map, r.iloc[kid_idx], is_purchase, is_cart, is_wishlist, c_val, s_val)
+            kw_id = _conv_extract_keyword_id_from_value(r.iloc[kid_idx]) or str(r.iloc[kid_idx]).strip()
+            _conv_apply_row(kw_map, kw_id, is_purchase, is_cart, is_wishlist, c_val, s_val)
         if adid_idx != -1 and len(r) > adid_idx:
             _conv_apply_row(ad_map, r.iloc[adid_idx], is_purchase, is_cart, is_wishlist, c_val, s_val)
         kept += 1
@@ -1367,7 +1391,7 @@ def _conv_pick_numeric_payload(vals: list[str], type_hits: list[tuple[int, bool,
 
 
 def _conv_resolve_keyword_object_id(vals: list[str], kw_text_idx: int, row_gid: str, row_kid: str, keyword_lookup: dict, live_keyword_resolver):
-    row_kid_s = str(row_kid).strip()
+    row_kid_s = _conv_extract_keyword_id_from_value(row_kid) or str(row_kid).strip()
     kw_obj_id = ""
     kw_text = ""
     match_mode = ""
@@ -2042,9 +2066,13 @@ def process_account(engine: Engine, customer_id: str, account_name: str, target_
             log(f"   ⏳ [ {account_name} ] 리포트 생성 대기 중...")
             report_types = ["AD", "CRITERION", "CRITERION_CONVERSION"]
             split_candidate_reports = []
-            if split_enabled_for_date(target_date) and shopping_campaign_ids:
-                split_candidate_reports = ["AD_CONVERSION", "SHOPPINGKEYWORD_CONVERSION_DETAIL"]
-                report_types.extend(split_candidate_reports)
+            if split_enabled_for_date(target_date):
+                split_candidate_reports = ["AD_CONVERSION", "CRITERION_CONVERSION"]
+                if shopping_campaign_ids:
+                    split_candidate_reports.append("SHOPPINGKEYWORD_CONVERSION_DETAIL")
+                for _tp in split_candidate_reports:
+                    if _tp not in report_types:
+                        report_types.append(_tp)
                 result["split_attempted"] = True
             dfs = fetch_multiple_stat_reports(customer_id, report_types, target_date)
             result["ad_report_status"] = _report_df_status(dfs.get("AD"))
@@ -2086,18 +2114,17 @@ def process_account(engine: Engine, customer_id: str, account_name: str, target_
             if not split_enabled_for_date(target_date):
                 result["split_reason"] = "date_before_enable"
                 log(f"   ℹ️ [ {account_name} ] 2026-03-11 이전 날짜는 purchase/cart/wishlist 분리 수집을 시도하지 않습니다.")
-            elif not shopping_campaign_ids:
-                result["split_reason"] = "no_shopping_campaign"
-                log(f"   ℹ️ [ {account_name} ] 쇼핑검색 캠페인이 없어 purchase/cart/wishlist 분리 수집을 건너뜁니다.")
             else:
                 # 핵심:
                 # - 캠페인/소재 분리값은 AD_CONVERSION을 우선 사용
-                # - 키워드 분리값은 SHOPPINGKEYWORD_CONVERSION_DETAIL을 우선 사용
-                #   (이 리포트는 키워드 텍스트 기반으로 내려오는 경우가 많아 keyword_lookup 매핑 필요)
-                # - 두 리포트를 "하나만 선택"하면 3skbox처럼 크게 누락될 수 있으므로
-                #   서로 다른 용도로 나눠 사용한다.
+                # - 파워링크 키워드 구매완료는 AD_CONVERSION + CRITERION_CONVERSION을 병합
+                # - SHOPPINGKEYWORD_CONVERSION_DETAIL은 검색어 리포트이므로 fact_keyword_daily에는 넣지 않고
+                #   별도 검색어 fact 저장에만 사용한다.
                 source_maps = {}
-                report_candidates = ["AD_CONVERSION", "SHOPPINGKEYWORD_CONVERSION_DETAIL"]
+                report_candidates = ["AD_CONVERSION", "CRITERION_CONVERSION"]
+                if shopping_campaign_ids:
+                    report_candidates.append("SHOPPINGKEYWORD_CONVERSION_DETAIL")
+                report_candidates = list(dict.fromkeys(report_candidates))
                 for tp in report_candidates:
                     conv_df = dfs.get(tp)
                     if conv_df is None:
@@ -2143,9 +2170,11 @@ def process_account(engine: Engine, customer_id: str, account_name: str, target_
                     source_maps[tp] = (one_camp_map, one_kw_map, one_ad_map, one_summary)
 
                 ad_conv_maps = source_maps.get("AD_CONVERSION", ({}, {}, {}, empty_split_summary()))
+                criterion_conv_maps = source_maps.get("CRITERION_CONVERSION", ({}, {}, {}, empty_split_summary()))
                 shop_kw_maps = source_maps.get("SHOPPINGKEYWORD_CONVERSION_DETAIL", ({}, {}, {}, empty_split_summary()))
 
                 ad_camp_map, ad_kw_map, ad_ad_map, ad_summary = ad_conv_maps
+                criterion_camp_map, criterion_kw_map, criterion_ad_map, criterion_summary = criterion_conv_maps
                 shop_camp_map, shop_kw_map, shop_ad_map, shop_summary = shop_kw_maps
 
                 shop_query_df = dfs.get("SHOPPINGKEYWORD_CONVERSION_DETAIL")
@@ -2157,12 +2186,12 @@ def process_account(engine: Engine, customer_id: str, account_name: str, target_
                         shop_query_rows = []
 
                 # 포렌식 결과상 AD_CONVERSION 이 대시보드 총합에 훨씬 가깝고,
-                # SHOPPINGKEYWORD_CONVERSION_DETAIL 은 일부 subset 만 내려오는 경우가 있다.
-                # 따라서 summary / campaign / ad / keyword 의 우선 원천은 AD_CONVERSION 으로 두고,
-                # 쇼핑 키워드 detail 은 AD keyword split 이 비었을 때만 fallback 으로 사용한다.
-                camp_map = ad_camp_map if ad_camp_map else shop_camp_map
+                # SHOPPINGKEYWORD_CONVERSION_DETAIL 은 검색어 subset 으로 내려오는 경우가 있다.
+                # 따라서 summary / campaign / ad 의 우선 원천은 AD_CONVERSION 으로 두고,
+                # 키워드 구매완료는 AD_CONVERSION + CRITERION_CONVERSION만 병합한다.
+                camp_map = ad_camp_map if ad_camp_map else (criterion_camp_map if criterion_camp_map else shop_camp_map)
                 ad_map = ad_ad_map if ad_ad_map else shop_ad_map
-                raw_kw_map = merge_split_maps(ad_kw_map, shop_kw_map)
+                raw_kw_map = merge_split_maps(ad_kw_map, criterion_kw_map)
                 kw_map = filter_split_map_excluding_ids(raw_kw_map, shopping_keyword_ids)
                 removed_kw = max(0, len(raw_kw_map) - len(kw_map))
                 if removed_kw:
@@ -2170,23 +2199,31 @@ def process_account(engine: Engine, customer_id: str, account_name: str, target_
 
                 split_report_ok = bool(camp_map or kw_map or ad_map)
 
-                final_split_summary = ad_summary if split_summary_has_values(ad_summary) else shop_summary
-                split_ok, split_reason = validate_shopping_split_summary(final_split_summary, ad_map)
-                if split_report_ok and not split_ok:
-                    result["split_reason"] = split_reason
-                    log(f"   ⚠️ [ {account_name} ] shopping split 검증 실패 → 상세 split 저장을 건너뛰고 총합만 적재합니다. ({split_reason})")
-                    camp_map, kw_map, ad_map = {}, {}, {}
-                    shop_query_rows = []
-                    split_report_ok = False
+                final_split_summary = ad_summary if split_summary_has_values(ad_summary) else (criterion_summary if split_summary_has_values(criterion_summary) else shop_summary)
+                if shopping_campaign_ids and split_report_ok and split_summary_has_values(final_split_summary):
+                    split_ok, split_reason = validate_shopping_split_summary(final_split_summary, ad_map)
+                    if not split_ok:
+                        result["split_reason"] = split_reason
+                        log(f"   ⚠️ [ {account_name} ] 상세 split 검증 실패 → 상세 split 저장을 건너뛰고 총합만 적재합니다. ({split_reason})")
+                        camp_map, kw_map, ad_map = {}, {}, {}
+                        shop_query_rows = []
+                        split_report_ok = False
 
                 if split_report_ok:
                     result["split_reason"] = "ok"
-                    camp_ad_src = 'AD_CONVERSION' if ad_camp_map or ad_ad_map else ('SHOPPINGKEYWORD_CONVERSION_DETAIL' if shop_camp_map or shop_ad_map else 'none')
-                    kw_src = 'AD_CONVERSION+SHOPPINGKEYWORD_CONVERSION_DETAIL' if (ad_kw_map and shop_kw_map) else ('AD_CONVERSION' if ad_kw_map else ('SHOPPINGKEYWORD_CONVERSION_DETAIL' if shop_kw_map else 'none'))
-                    summary_src = 'AD_CONVERSION' if split_summary_has_values(ad_summary) else ('SHOPPINGKEYWORD_CONVERSION_DETAIL' if split_summary_has_values(shop_summary) else 'none')
+                    camp_ad_src = 'AD_CONVERSION' if ad_camp_map or ad_ad_map else ('CRITERION_CONVERSION' if criterion_camp_map or criterion_ad_map else ('SHOPPINGKEYWORD_CONVERSION_DETAIL' if shop_camp_map or shop_ad_map else 'none'))
+                    if ad_kw_map and criterion_kw_map:
+                        kw_src = 'AD_CONVERSION+CRITERION_CONVERSION'
+                    elif criterion_kw_map:
+                        kw_src = 'CRITERION_CONVERSION'
+                    elif ad_kw_map:
+                        kw_src = 'AD_CONVERSION'
+                    else:
+                        kw_src = 'none'
+                    summary_src = 'AD_CONVERSION' if split_summary_has_values(ad_summary) else ('CRITERION_CONVERSION' if split_summary_has_values(criterion_summary) else ('SHOPPINGKEYWORD_CONVERSION_DETAIL' if split_summary_has_values(shop_summary) else 'none'))
                     query_src = 'SHOPPINGKEYWORD_CONVERSION_DETAIL' if shop_query_rows else 'none'
                     log(
-                        f"   ✅ [ {account_name} ] shopping split 원천 사용: "
+                        f"   ✅ [ {account_name} ] detail split 원천 사용: "
                         f"summary={summary_src}, campaign/ad={camp_ad_src}, keyword={kw_src}, query={query_src}"
                     )
                     if split_summary_has_values(final_split_summary):

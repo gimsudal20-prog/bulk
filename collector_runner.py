@@ -51,11 +51,17 @@ def _resolve_split_payload(
         return camp_map, kw_map, ad_map, shop_query_rows, split_report_ok
 
     source_maps: Dict[str, Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]], Dict[str, Any]]] = {}
-    report_candidates = ["AD_CONVERSION"]
+    # AD_CONVERSION mostly covers campaign/ad split.  Powerlink keyword purchase
+    # completions can appear in CRITERION_CONVERSION with a criterion value such
+    # as ``nkw-...~...``.  Parse both and merge only keyword-level split from
+    # CRITERION_CONVERSION into fact_keyword_daily.
+    report_candidates = ["AD_CONVERSION", "CRITERION_CONVERSION"]
     if shopping_campaign_ids:
         report_candidates.append("SHOPPINGKEYWORD_CONVERSION_DETAIL")
     else:
-        log_fn(f"   ℹ️ [ {account_name} ] 쇼핑검색 캠페인이 없어 쇼핑검색어 전환 리포트만 건너뜁니다. AD_CONVERSION 키워드 구매완료는 계속 수집합니다.")
+        log_fn(f"   ℹ️ [ {account_name} ] 쇼핑검색 캠페인이 없어 쇼핑검색어 전환 리포트만 건너뜁니다. AD/CRITERION 전환 리포트로 키워드 구매완료는 계속 수집합니다.")
+    # keep order while removing duplicate report types
+    report_candidates = list(dict.fromkeys(report_candidates))
     for tp in report_candidates:
         conv_df = dfs.get(tp)
         if conv_df is None:
@@ -78,15 +84,17 @@ def _resolve_split_payload(
         )
 
         if len(one_camp_map) == 0 and len(one_kw_map) == 0 and len(one_ad_map) == 0:
-            log_fn(f"   ⚠️ [ {account_name} ] {tp} 데이터는 있으나 shopping purchase/cart/wishlist 파싱에 실패했습니다. debug_reports 원본을 확인하세요.")
+            log_fn(f"   ⚠️ [ {account_name} ] {tp} 데이터는 있으나 purchase/cart/wishlist 파싱에 실패했습니다. debug_reports 원본을 확인하세요.")
             continue
 
         source_maps[tp] = (one_camp_map, one_kw_map, one_ad_map, one_summary)
 
     ad_conv_maps = source_maps.get("AD_CONVERSION", ({}, {}, {}, empty_split_summary_fn()))
+    criterion_conv_maps = source_maps.get("CRITERION_CONVERSION", ({}, {}, {}, empty_split_summary_fn()))
     shop_kw_maps = source_maps.get("SHOPPINGKEYWORD_CONVERSION_DETAIL", ({}, {}, {}, empty_split_summary_fn()))
 
     ad_camp_map, ad_kw_map, ad_ad_map, ad_summary = ad_conv_maps
+    criterion_camp_map, criterion_kw_map, criterion_ad_map, criterion_summary = criterion_conv_maps
     shop_camp_map, shop_kw_map, shop_ad_map, shop_summary = shop_kw_maps
 
     shop_query_df = dfs.get("SHOPPINGKEYWORD_CONVERSION_DETAIL")
@@ -97,11 +105,13 @@ def _resolve_split_payload(
             log_fn(f"   ⚠️ [ {account_name} ] 쇼핑검색어 분리 저장 파싱 실패: {e}")
             shop_query_rows = []
 
-    camp_map = ad_camp_map if ad_camp_map else shop_camp_map
+    camp_map = ad_camp_map if ad_camp_map else (criterion_camp_map if criterion_camp_map else shop_camp_map)
     ad_map = ad_ad_map if ad_ad_map else shop_ad_map
     # SHOPPINGKEYWORD_CONVERSION_DETAIL is a search-term report, not a keyword report.
-    # Keyword purchase completion must come from AD_CONVERSION only.
-    raw_kw_map = ad_kw_map
+    # Powerlink keyword purchase completion should come from AD_CONVERSION and
+    # CRITERION_CONVERSION only.  The shopping search-term rows are stored in
+    # fact_search_term_daily, not fact_keyword_daily.
+    raw_kw_map = merge_split_maps_fn(ad_kw_map, criterion_kw_map)
     if shopping_only:
         kw_map = {}
     else:
@@ -112,24 +122,31 @@ def _resolve_split_payload(
 
     split_report_ok = bool(camp_map or kw_map or ad_map)
 
-    final_split_summary = ad_summary if split_summary_has_values_fn(ad_summary) else shop_summary
+    final_split_summary = ad_summary if split_summary_has_values_fn(ad_summary) else (criterion_summary if split_summary_has_values_fn(criterion_summary) else shop_summary)
     if shopping_only and split_report_ok and split_summary_has_values_fn(final_split_summary):
         split_ok, split_reason = validate_shopping_split_summary_fn(final_split_summary, ad_map)
         if not split_ok:
-            log_fn(f"   ⚠️ [ {account_name} ] shopping split 검증 실패 → 상세 split 저장을 건너뛰고 총합만 적재합니다. ({split_reason})")
+            log_fn(f"   ⚠️ [ {account_name} ] 상세 split 검증 실패 → 상세 split 저장을 건너뛰고 총합만 적재합니다. ({split_reason})")
             camp_map, kw_map, ad_map = {}, {}, {}
             shop_query_rows = []
             result["stage"] = "resolve_split_payload"
             split_report_ok = False
 
     if split_report_ok:
-        camp_ad_src = 'AD_CONVERSION' if ad_camp_map or ad_ad_map else ('SHOPPINGKEYWORD_CONVERSION_DETAIL' if shop_camp_map or shop_ad_map else 'none')
-        kw_src = 'AD_CONVERSION' if ad_kw_map else 'none'
-        summary_src = 'AD_CONVERSION' if split_summary_has_values_fn(ad_summary) else ('SHOPPINGKEYWORD_CONVERSION_DETAIL' if split_summary_has_values_fn(shop_summary) else 'none')
+        camp_ad_src = 'AD_CONVERSION' if ad_camp_map or ad_ad_map else ('CRITERION_CONVERSION' if criterion_camp_map or criterion_ad_map else ('SHOPPINGKEYWORD_CONVERSION_DETAIL' if shop_camp_map or shop_ad_map else 'none'))
+        if ad_kw_map and criterion_kw_map:
+            kw_src = 'AD_CONVERSION+CRITERION_CONVERSION'
+        elif criterion_kw_map:
+            kw_src = 'CRITERION_CONVERSION'
+        elif ad_kw_map:
+            kw_src = 'AD_CONVERSION'
+        else:
+            kw_src = 'none'
+        summary_src = 'AD_CONVERSION' if split_summary_has_values_fn(ad_summary) else ('CRITERION_CONVERSION' if split_summary_has_values_fn(criterion_summary) else ('SHOPPINGKEYWORD_CONVERSION_DETAIL' if split_summary_has_values_fn(shop_summary) else 'none'))
         query_src = 'SHOPPINGKEYWORD_CONVERSION_DETAIL' if shop_query_rows else 'none'
         result["split_source"] = f"summary={summary_src},campaign/ad={camp_ad_src},keyword={kw_src},query={query_src}"
         log_fn(
-            f"   ✅ [ {account_name} ] shopping split 원천 사용: "
+            f"   ✅ [ {account_name} ] detail split 원천 사용: "
             f"summary={summary_src}, campaign/ad={camp_ad_src}, keyword={kw_src}, query={query_src}"
         )
         if split_summary_has_values_fn(final_split_summary):
@@ -842,10 +859,12 @@ def _prepare_account_report_fetch_plan(
         if collect_device:
             report_types.extend(["CRITERION", "CRITERION_CONVERSION"])
         if split_enabled_for_date_fn(target_date) and collect_sa:
-            split_candidate_reports = ["AD_CONVERSION"]
+            split_candidate_reports = ["AD_CONVERSION", "CRITERION_CONVERSION"]
             if shopping_campaign_ids:
                 split_candidate_reports.append("SHOPPINGKEYWORD_CONVERSION_DETAIL")
-            report_types.extend(split_candidate_reports)
+            for _tp in split_candidate_reports:
+                if _tp not in report_types:
+                    report_types.append(_tp)
             split_attempted = bool(collect_sa)
         dfs = fetch_multiple_stat_reports_fn(customer_id, report_types, target_date)
         result["ad_report_status"], result["ad_report_rows"] = df_state_fn(dfs.get("AD"))

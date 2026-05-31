@@ -325,6 +325,23 @@ def _conv_looks_like_id(v: str) -> bool:
     return s.startswith(('cmp-', 'grp-', 'nkw-', 'nad-', 'bsn-'))
 
 
+def _conv_extract_keyword_id_from_value(v: str) -> str:
+    """Return a clean nkw-* keyword id from keyword/criterion style values.
+
+    CRITERION_CONVERSION rows can expose the keyword through a criterion value
+    such as ``nkw-...~...`` instead of a plain keyword id column.  Keep only
+    the owner keyword id so it can match dim_keyword/fact_keyword_daily.
+    """
+    raw = str(v or "").strip().strip('"').strip("'")
+    if not raw or raw == "-":
+        return ""
+    owner = raw.split("~", 1)[0].strip().strip('"').strip("'")
+    if owner.lower().startswith("nkw-"):
+        return owner
+    m = re.search(r"(nkw-[A-Za-z0-9-]+)", raw, flags=re.I)
+    return m.group(1) if m else ""
+
+
 def _conv_row_allowed(row_campaign_id: str | None, allowed_campaign_ids: set[str]) -> bool:
     if not allowed_campaign_ids:
         return True
@@ -441,10 +458,22 @@ def _conv_resolve_header_indexes(headers: list[str]) -> dict[str, int]:
     return {
         'cid_idx': get_col_idx(headers, ['캠페인id', 'campaignid', 'ncccampaignid']),
         'gid_idx': get_col_idx(headers, ['광고그룹id', 'adgroupid', 'nccadgroupid']),
-        'kid_idx': get_col_idx(headers, ['키워드id', 'keywordid', 'ncckeywordid']),
+        # CRITERION_CONVERSION can use criterion/target columns instead of a
+        # direct keyword id column.  Treat those as keyword candidates and
+        # normalize ``nkw-...~...`` to ``nkw-...`` before saving.
+        'kid_idx': get_col_idx(headers, [
+            '키워드id', 'keywordid', 'ncckeywordid',
+            'criterionid', 'criterion id', 'criterion_id', 'criterion',
+            '기준id', '기준 id', '타게팅id', '타겟팅id', '타게팅 id', '타겟팅 id',
+            'targetid', 'target id', 'targetingid', 'targeting id',
+        ]),
         'kw_text_idx': get_text_col_idx(headers, ['키워드', 'keyword', '키워드명', 'keywordname'], ['id']),
         'adid_idx': get_col_idx(headers, ['광고id', '소재id', 'adid', 'nccadid']),
-        'type_idx': get_col_idx(headers, ['전환유형', 'conversiontype', 'convtp']),
+        'type_idx': get_col_idx(headers, [
+            '전환유형', '전환 유형', '전환유형명', '전환 유형명',
+            'conversiontype', 'conversion type', 'conversiontypename', 'conversion type name',
+            'convtp', 'convtype', 'conversioncategory', 'conversion category',
+        ]),
         'cnt_idx': get_col_idx(headers, ['총전환수', '전환수', 'conversions', 'conversioncount', 'ccnt']),
         'sales_idx': get_col_idx(headers, ['총전환매출액(원)', '전환매출액', 'conversionvalue', 'sales', 'salesbyconversion', 'convamt']),
     }
@@ -616,7 +645,7 @@ def _conv_resolve_keyword_object_id(row_kid: str, row_gid: str, kw_text_idx: int
                                     keyword_lookup: dict, keyword_unique_lookup: dict, live_keyword_resolver) -> tuple[str, str, str]:
     kw_obj_id = ""
     kw_text = ""
-    row_kid_s = str(row_kid).strip()
+    row_kid_s = _conv_extract_keyword_id_from_value(row_kid) or str(row_kid).strip()
     if row_kid_s not in {"", "-"} and row_kid_s.lower().startswith("nkw-"):
         kw_obj_id = row_kid_s
     elif kw_text_idx != -1 and kw_text_idx < len(vals) and row_gid and row_gid != "-":

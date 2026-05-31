@@ -201,6 +201,8 @@ def check_overview_keyword_purchase_contract(root: Path) -> list[str]:
         'overview keyword cache version 갱신': 'cache_version = 2' in overview_text,
         'overview keyword 전체 기준 정렬 컨트롤': '_render_overview_keyword_sort_controls' in overview_text and '_sort_overview_detail_frame' in overview_text,
         'overview keyword 미매핑 전환 행': '_append_unmapped_keyword_conversion_row' in overview_text and '키워드 미매핑 전환' in overview_text,
+        'overview keyword 미매핑 중복 제거': '_UNMAPPED_KEYWORD_LABEL' in overview_text and '!= _UNMAPPED_KEYWORD_LABEL' in overview_text,
+        'overview keyword 미매핑 campaign 기준 차감': '_filter_keyword_scope_for_campaigns' in overview_text and '"campaign_id"' in overview_text,
     }
     missing = [name for name, ok in required.items() if not ok]
     if missing:

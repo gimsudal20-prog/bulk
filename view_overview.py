@@ -525,17 +525,56 @@ def _build_overview_campaign_frames(cur_camp: pd.DataFrame, base_camp: pd.DataFr
     return df_display, df_type_display, camp_disp
 
 
+_UNMAPPED_KEYWORD_LABEL = "(키워드 미매핑 전환)"
+
+
 def _overview_is_naver_keyword_scope(df: pd.DataFrame) -> pd.Series:
     if df is None or df.empty:
         return pd.Series(dtype=bool)
-    type_col = next((c for c in ["campaign_type_label", "campaign_type", "campaign_tp"] if c in df.columns), None)
-    if not type_col:
-        return pd.Series([False] * len(df.index), index=df.index)
     labels = {
         "WEB_SITE", "SHOPPING", "POWER_CONTENT", "POWER_CONTENTS", "BRAND_SEARCH", "PLACE",
-        "파워링크", "쇼핑검색", "파워컨텐츠", "브랜드검색", "플레이스",
+        "파워링크", "쇼핑검색", "파워컨텐츠", "브랜드검색", "플레이스", "네이버", "NAVER",
     }
-    return df[type_col].astype(str).str.strip().str.upper().isin({x.upper() for x in labels})
+    normalized_labels = {x.upper() for x in labels}
+    mask = pd.Series([False] * len(df.index), index=df.index)
+    for col in ["platform", "campaign_type_label", "campaign_type", "campaign_tp"]:
+        if col in df.columns:
+            mask = mask | df[col].astype(str).str.strip().str.upper().isin(normalized_labels)
+    return mask
+
+
+def _filter_keyword_scope_for_campaigns(kw_df: pd.DataFrame, camp_scope: pd.DataFrame) -> pd.DataFrame:
+    if kw_df is None or kw_df.empty:
+        return pd.DataFrame()
+    out = kw_df.copy()
+    if "keyword" in out.columns:
+        out = out[out["keyword"].astype(str) != _UNMAPPED_KEYWORD_LABEL].copy()
+    if out.empty:
+        return out
+
+    if camp_scope is not None and not camp_scope.empty and {"customer_id", "campaign_id"}.issubset(out.columns) and {"customer_id", "campaign_id"}.issubset(camp_scope.columns):
+        pairs = set(
+            zip(
+                camp_scope["customer_id"].astype(str),
+                camp_scope["campaign_id"].astype(str),
+            )
+        )
+        pair_mask = [
+            (str(row.customer_id), str(row.campaign_id)) in pairs
+            for row in out[["customer_id", "campaign_id"]].itertuples(index=False)
+        ]
+        scoped = out[pair_mask].copy()
+        if not scoped.empty:
+            return scoped
+
+    if camp_scope is not None and not camp_scope.empty and "campaign_id" in out.columns and "campaign_id" in camp_scope.columns:
+        campaign_ids = set(camp_scope["campaign_id"].dropna().astype(str))
+        scoped = out[out["campaign_id"].astype(str).isin(campaign_ids)].copy()
+        if not scoped.empty:
+            return scoped
+
+    scoped = out[_overview_is_naver_keyword_scope(out)].copy()
+    return scoped if not scoped.empty else out
 
 
 def _sum_numeric_metric(df: pd.DataFrame, col: str) -> float:
@@ -545,6 +584,8 @@ def _sum_numeric_metric(df: pd.DataFrame, col: str) -> float:
 
 
 def _append_unmapped_keyword_conversion_row(kw_df: pd.DataFrame, camp_df: pd.DataFrame) -> pd.DataFrame:
+    if kw_df is not None and not kw_df.empty and "keyword" in kw_df.columns:
+        kw_df = kw_df[kw_df["keyword"].astype(str) != _UNMAPPED_KEYWORD_LABEL].copy()
     if camp_df is None or camp_df.empty:
         return pd.DataFrame() if kw_df is None else kw_df
 
@@ -552,7 +593,7 @@ def _append_unmapped_keyword_conversion_row(kw_df: pd.DataFrame, camp_df: pd.Dat
     if camp_scope.empty:
         return pd.DataFrame() if kw_df is None else kw_df
 
-    kw_scope = kw_df[_overview_is_naver_keyword_scope(kw_df)].copy() if kw_df is not None and not kw_df.empty else pd.DataFrame()
+    kw_scope = _filter_keyword_scope_for_campaigns(kw_df, camp_scope)
     residual = {
         "conv": max(_sum_numeric_metric(camp_scope, "conv") - _sum_numeric_metric(kw_scope, "conv"), 0.0),
         "sales": max(_sum_numeric_metric(camp_scope, "sales") - _sum_numeric_metric(kw_scope, "sales"), 0.0),
@@ -569,9 +610,10 @@ def _append_unmapped_keyword_conversion_row(kw_df: pd.DataFrame, camp_df: pd.Dat
         return pd.DataFrame() if kw_df is None else kw_df
 
     row = {
-        "keyword": "(키워드 미매핑 전환)",
+        "keyword": _UNMAPPED_KEYWORD_LABEL,
         "campaign_type_label": "네이버",
         "campaign_type": "네이버",
+        "platform": "네이버",
         "imp": 0,
         "clk": 0,
         "cost": 0,
@@ -581,9 +623,9 @@ def _append_unmapped_keyword_conversion_row(kw_df: pd.DataFrame, camp_df: pd.Dat
         ids = [str(x) for x in camp_scope["customer_id"].dropna().astype(str).unique()]
         row["customer_id"] = ids[0] if len(ids) == 1 else "multiple"
     if "campaign_name" in camp_scope.columns:
-        row["campaign_name"] = "(키워드 미매핑 전환)"
+        row["campaign_name"] = _UNMAPPED_KEYWORD_LABEL
     if "adgroup_name" in camp_scope.columns:
-        row["adgroup_name"] = "(키워드 미매핑 전환)"
+        row["adgroup_name"] = _UNMAPPED_KEYWORD_LABEL
 
     parts = []
     if kw_df is not None and not kw_df.empty:

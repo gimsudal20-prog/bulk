@@ -733,6 +733,358 @@ def clear_platform_credentials_cache():
     except Exception:
         pass
 
+
+# ==========================================
+# Dashboard workflow tables
+# ==========================================
+def _json_dumps_payload(value) -> str:
+    try:
+        return json.dumps(value or {}, ensure_ascii=False, default=str)
+    except Exception:
+        return "{}"
+
+
+def ensure_dashboard_workflow_tables(_engine) -> None:
+    sql_exec(
+        _engine,
+        """
+        CREATE TABLE IF NOT EXISTS dashboard_action_items (
+            id BIGSERIAL PRIMARY KEY,
+            item_key TEXT NOT NULL UNIQUE,
+            category TEXT NOT NULL DEFAULT 'general',
+            severity TEXT NOT NULL DEFAULT 'info',
+            title TEXT NOT NULL,
+            body TEXT DEFAULT '',
+            manager TEXT DEFAULT '',
+            account_name TEXT DEFAULT '',
+            customer_id TEXT DEFAULT '',
+            source_page TEXT DEFAULT '',
+            source_ref TEXT DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'open',
+            owner TEXT DEFAULT '',
+            note TEXT DEFAULT '',
+            first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            resolved_at TIMESTAMPTZ
+        )
+        """,
+    )
+    sql_exec(
+        _engine,
+        "CREATE INDEX IF NOT EXISTS idx_dashboard_action_status ON dashboard_action_items(status, severity, last_seen_at DESC)",
+    )
+    sql_exec(
+        _engine,
+        """
+        CREATE TABLE IF NOT EXISTS dashboard_audit_log (
+            id BIGSERIAL PRIMARY KEY,
+            event_time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            actor TEXT NOT NULL DEFAULT 'dashboard',
+            action_type TEXT NOT NULL,
+            target_type TEXT NOT NULL,
+            target_id TEXT DEFAULT '',
+            summary TEXT DEFAULT '',
+            before_json JSONB DEFAULT '{}'::JSONB,
+            after_json JSONB DEFAULT '{}'::JSONB
+        )
+        """,
+    )
+    sql_exec(
+        _engine,
+        "CREATE INDEX IF NOT EXISTS idx_dashboard_audit_time ON dashboard_audit_log(event_time DESC)",
+    )
+    sql_exec(
+        _engine,
+        """
+        CREATE TABLE IF NOT EXISTS dashboard_filter_presets (
+            id BIGSERIAL PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            payload JSONB NOT NULL DEFAULT '{}'::JSONB,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """,
+    )
+
+
+def _clear_dashboard_workflow_caches() -> None:
+    for func_name in [
+        "get_filter_presets",
+        "query_action_items",
+        "query_dashboard_audit_log",
+        "query_collection_status",
+    ]:
+        func = globals().get(func_name)
+        try:
+            if func is not None:
+                func.clear()
+        except Exception:
+            pass
+
+
+def log_dashboard_audit(
+    _engine,
+    action_type: str,
+    target_type: str,
+    target_id: str = "",
+    summary: str = "",
+    before: dict | None = None,
+    after: dict | None = None,
+    actor: str = "dashboard",
+) -> None:
+    try:
+        ensure_dashboard_workflow_tables(_engine)
+        sql_exec(
+            _engine,
+            """
+            INSERT INTO dashboard_audit_log
+                (actor, action_type, target_type, target_id, summary, before_json, after_json)
+            VALUES
+                (:actor, :action_type, :target_type, :target_id, :summary, CAST(:before_json AS JSONB), CAST(:after_json AS JSONB))
+            """,
+            {
+                "actor": str(actor or "dashboard"),
+                "action_type": str(action_type or "update"),
+                "target_type": str(target_type or "unknown"),
+                "target_id": str(target_id or ""),
+                "summary": str(summary or ""),
+                "before_json": _json_dumps_payload(before),
+                "after_json": _json_dumps_payload(after),
+            },
+        )
+        _clear_dashboard_workflow_caches()
+    except Exception:
+        pass
+
+
+@st.cache_data(ttl=60, max_entries=10, show_spinner=False)
+def query_dashboard_audit_log(_engine, limit: int = 200) -> pd.DataFrame:
+    ensure_dashboard_workflow_tables(_engine)
+    safe_limit = max(10, min(int(limit or 200), 1000))
+    return sql_read(
+        _engine,
+        """
+        SELECT id, event_time, actor, action_type, target_type, target_id, summary, before_json, after_json
+        FROM dashboard_audit_log
+        ORDER BY event_time DESC
+        LIMIT :limit
+        """,
+        {"limit": safe_limit},
+    )
+
+
+@st.cache_data(ttl=60, max_entries=10, show_spinner=False)
+def get_filter_presets(_engine) -> pd.DataFrame:
+    ensure_dashboard_workflow_tables(_engine)
+    df = sql_read(
+        _engine,
+        """
+        SELECT id, name, payload, created_at, updated_at
+        FROM dashboard_filter_presets
+        ORDER BY updated_at DESC, name ASC
+        """,
+    )
+    if df.empty or "payload" not in df.columns:
+        return df
+    df["payload"] = df["payload"].apply(
+        lambda x: x if isinstance(x, dict) else (json.loads(x) if isinstance(x, str) and str(x).strip().startswith("{") else {})
+    )
+    return df
+
+
+def save_filter_preset(_engine, name: str, payload: dict) -> None:
+    preset_name = str(name or "").strip()
+    if not preset_name:
+        raise ValueError("프리셋 이름을 입력해주세요.")
+    ensure_dashboard_workflow_tables(_engine)
+    payload_json = _json_dumps_payload(payload)
+    sql_exec(
+        _engine,
+        """
+        INSERT INTO dashboard_filter_presets (name, payload, updated_at)
+        VALUES (:name, CAST(:payload AS JSONB), NOW())
+        ON CONFLICT (name) DO UPDATE
+           SET payload = EXCLUDED.payload,
+               updated_at = NOW()
+        """,
+        {"name": preset_name, "payload": payload_json},
+    )
+    log_dashboard_audit(
+        _engine,
+        "save_filter_preset",
+        "filter_preset",
+        preset_name,
+        f"필터 프리셋 저장: {preset_name}",
+        after={"name": preset_name, "payload": payload},
+    )
+    _clear_dashboard_workflow_caches()
+
+
+def delete_filter_preset(_engine, preset_id: int) -> None:
+    ensure_dashboard_workflow_tables(_engine)
+    sql_exec(_engine, "DELETE FROM dashboard_filter_presets WHERE id = :id", {"id": int(preset_id)})
+    log_dashboard_audit(_engine, "delete_filter_preset", "filter_preset", str(preset_id), "필터 프리셋 삭제")
+    _clear_dashboard_workflow_caches()
+
+
+def upsert_action_items(_engine, items: list[dict]) -> int:
+    if not items:
+        return 0
+    ensure_dashboard_workflow_tables(_engine)
+    written = 0
+    for item in items:
+        item_key = str(item.get("item_key", "") or "").strip()
+        title = str(item.get("title", "") or "").strip()
+        if not item_key or not title:
+            continue
+        params = {
+            "item_key": item_key,
+            "category": str(item.get("category", "general") or "general"),
+            "severity": str(item.get("severity", "info") or "info"),
+            "title": title,
+            "body": str(item.get("body", "") or ""),
+            "manager": str(item.get("manager", "") or ""),
+            "account_name": str(item.get("account_name", "") or ""),
+            "customer_id": str(item.get("customer_id", "") or ""),
+            "source_page": str(item.get("source_page", "") or ""),
+            "source_ref": str(item.get("source_ref", "") or ""),
+        }
+        sql_exec(
+            _engine,
+            """
+            INSERT INTO dashboard_action_items
+                (item_key, category, severity, title, body, manager, account_name, customer_id, source_page, source_ref, last_seen_at)
+            VALUES
+                (:item_key, :category, :severity, :title, :body, :manager, :account_name, :customer_id, :source_page, :source_ref, NOW())
+            ON CONFLICT (item_key) DO UPDATE
+               SET category = EXCLUDED.category,
+                   severity = EXCLUDED.severity,
+                   title = EXCLUDED.title,
+                   body = EXCLUDED.body,
+                   manager = EXCLUDED.manager,
+                   account_name = EXCLUDED.account_name,
+                   customer_id = EXCLUDED.customer_id,
+                   source_page = EXCLUDED.source_page,
+                   source_ref = EXCLUDED.source_ref,
+                   last_seen_at = NOW()
+            """,
+            params,
+        )
+        written += 1
+    if written:
+        _clear_dashboard_workflow_caches()
+    return written
+
+
+@st.cache_data(ttl=60, max_entries=20, show_spinner=False)
+def query_action_items(_engine, status: str = "open", limit: int = 500) -> pd.DataFrame:
+    ensure_dashboard_workflow_tables(_engine)
+    safe_limit = max(20, min(int(limit or 500), 2000))
+    safe_status = str(status or "").strip()
+    return sql_read(
+        _engine,
+        """
+        SELECT
+            id, item_key, category, severity, title, body, manager, account_name, customer_id,
+            source_page, source_ref, status, owner, note, first_seen_at, last_seen_at, resolved_at
+        FROM dashboard_action_items
+        WHERE (:status = '' OR status = :status)
+        ORDER BY
+            CASE severity
+                WHEN 'critical' THEN 0
+                WHEN 'danger' THEN 1
+                WHEN 'warning' THEN 2
+                ELSE 3
+            END,
+            last_seen_at DESC
+        LIMIT :limit
+        """,
+        {"status": safe_status, "limit": safe_limit},
+    )
+
+
+def update_action_item(_engine, item_id: int, status: str, owner: str = "", note: str = "") -> None:
+    ensure_dashboard_workflow_tables(_engine)
+    valid_statuses = {"open", "in_progress", "resolved", "skipped"}
+    status_norm = str(status or "open").strip()
+    if status_norm not in valid_statuses:
+        status_norm = "open"
+    sql_exec(
+        _engine,
+        """
+        UPDATE dashboard_action_items
+           SET status = :status,
+               owner = :owner,
+               note = :note,
+               resolved_at = CASE
+                   WHEN :status IN ('resolved', 'skipped') THEN COALESCE(resolved_at, NOW())
+                   ELSE NULL
+               END
+         WHERE id = :id
+        """,
+        {"id": int(item_id), "status": status_norm, "owner": str(owner or ""), "note": str(note or "")},
+    )
+    log_dashboard_audit(
+        _engine,
+        "update_action_item",
+        "action_item",
+        str(item_id),
+        f"조치 항목 상태 변경: {status_norm}",
+        after={"status": status_norm, "owner": owner, "note": note},
+    )
+    _clear_dashboard_workflow_caches()
+
+
+@st.cache_data(ttl=120, max_entries=20, show_spinner=False)
+def query_collection_status(_engine, cids: tuple = tuple()) -> pd.DataFrame:
+    cids_tuple = _normalize_filter_values(cids)
+    sources = [
+        ("fact_campaign_daily", "캠페인 일별"),
+        ("fact_keyword_daily", "키워드 일별"),
+        ("fact_ad_daily", "소재 일별"),
+        ("fact_shopping_query_daily", "쇼핑 검색어"),
+        ("fact_campaign_hourly_daily", "시간대"),
+        ("fact_campaign_age_daily", "연령대"),
+        ("fact_campaign_device_daily", "디바이스"),
+        ("fact_bizmoney_daily", "비즈머니"),
+        ("fact_campaign_off_log", "OFF 로그"),
+    ]
+    frames = []
+    for table_name, source_label in sources:
+        if not table_exists(_engine, table_name):
+            continue
+        cols = get_table_columns(_engine, table_name)
+        if "customer_id" not in cols or "dt" not in cols:
+            continue
+        where_cid, cid_params = _build_in_filter("CAST(customer_id AS TEXT)", cids_tuple, f"collection_{table_name}")
+        df = sql_read(
+            _engine,
+            f"""
+            SELECT
+                CAST(customer_id AS TEXT) AS customer_id,
+                MAX(dt)::date AS latest_dt,
+                COUNT(*)::BIGINT AS row_count
+            FROM {table_name}
+            WHERE 1=1 {where_cid}
+            GROUP BY CAST(customer_id AS TEXT)
+            """,
+            cid_params,
+        )
+        if df.empty:
+            continue
+        df["source_table"] = table_name
+        df["source_label"] = source_label
+        frames.append(df)
+    if not frames:
+        return pd.DataFrame(columns=["customer_id", "source_table", "source_label", "latest_dt", "row_count", "stale_days"])
+    out = pd.concat(frames, ignore_index=True)
+    latest_dt = pd.to_datetime(out["latest_dt"], errors="coerce")
+    today = pd.Timestamp(date.today())
+    out["stale_days"] = (today - latest_dt).dt.days
+    out["stale_days"] = out["stale_days"].fillna(9999).astype(int)
+    return out
+
+
 def upsert_platform_credential(_engine, row: dict) -> None:
     ensure_platform_credentials_table(_engine)
 
@@ -798,11 +1150,31 @@ def upsert_platform_credential(_engine, row: dict) -> None:
             """,
             payload,
         )
+    safe_payload = {
+        k: v
+        for k, v in payload.items()
+        if k not in {"access_token", "refresh_token", "app_secret"}
+    }
+    log_dashboard_audit(
+        _engine,
+        "upsert_platform_credential",
+        "platform_credential",
+        str(payload.get("id") or payload.get("account_label") or ""),
+        f"플랫폼 연결 저장: {payload.get('account_label')}",
+        after=safe_payload,
+    )
     clear_platform_credentials_cache()
 
 def delete_platform_credential(_engine, row_id: int) -> None:
     ensure_platform_credentials_table(_engine)
     sql_exec(_engine, "DELETE FROM platform_credentials WHERE id = :id", {"id": int(row_id)})
+    log_dashboard_audit(
+        _engine,
+        "delete_platform_credential",
+        "platform_credential",
+        str(row_id),
+        "플랫폼 연결 삭제",
+    )
     clear_platform_credentials_cache()
 
 def toggle_platform_credential(_engine, row_id: int, is_active: bool) -> None:
@@ -811,6 +1183,14 @@ def toggle_platform_credential(_engine, row_id: int, is_active: bool) -> None:
         _engine,
         "UPDATE platform_credentials SET is_active = :is_active, updated_at = NOW() WHERE id = :id",
         {"id": int(row_id), "is_active": bool(is_active)},
+    )
+    log_dashboard_audit(
+        _engine,
+        "toggle_platform_credential",
+        "platform_credential",
+        str(row_id),
+        "플랫폼 연결 활성 상태 변경",
+        after={"is_active": bool(is_active)},
     )
     clear_platform_credentials_cache()
 
@@ -882,6 +1262,14 @@ def update_campaign_target_roas(_engine, cid, campaign_id, target_val, min_val):
         "cid": str(cid),
         "camp_id": str(campaign_id)
     })
+    log_dashboard_audit(
+        _engine,
+        "update_target_roas",
+        "campaign",
+        f"{cid}:{campaign_id}",
+        "캠페인 목표 ROAS 변경",
+        after={"customer_id": str(cid), "campaign_id": str(campaign_id), "target_roas": t_val, "min_roas": m_val},
+    )
 
 def _strict_conv_selects(fact_cols: list, alias: str = "") -> dict:
     prefix = f"{alias}." if alias else ""
@@ -1341,6 +1729,14 @@ def update_monthly_budget(_engine, cid: int, val: int):
         get_table_columns.clear()
         get_meta.clear()
         query_budget_bundle.clear()
+        log_dashboard_audit(
+            _engine,
+            "update_monthly_budget",
+            "customer",
+            cid_norm,
+            "월 예산 변경",
+            after={"customer_id": cid_norm, "monthly_budget": int(val or 0)},
+        )
     except Exception as e:
         st.error(f"예산 업데이트 실패: {e}")
 
@@ -1368,6 +1764,14 @@ def update_customer_operating_weekdays(_engine, cid: int, weekdays: str):
         get_table_columns.clear()
         get_meta.clear()
         query_budget_bundle.clear()
+        log_dashboard_audit(
+            _engine,
+            "update_operating_weekdays",
+            "customer",
+            cid_norm,
+            "운영 요일 변경",
+            after={"customer_id": cid_norm, "operating_weekdays": weekdays_norm},
+        )
     except Exception as e:
         st.error(f"운영 요일 업데이트 실패: {e}")
 

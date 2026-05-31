@@ -15,6 +15,7 @@ from perf_utils import render_perf_panel, reset_perf_events
 
 
 PAGE_DESCRIPTIONS = {
+    "운영 센터": "오늘 처리할 조치 항목, 수집 상태, 변경 이력을 한 곳에서 관리합니다.",
     "요약": "광고비, 전환, ROAS, 위험 신호를 한 번에 보는 운영 홈입니다.",
     "예산 및 잔액": "월 예산 페이스와 비즈머니 소진 위험을 우선순위로 정리합니다.",
     "성과 분석 · 캠페인": "캠페인과 광고그룹을 선택해 하위 키워드와 소재까지 내려갑니다.",
@@ -26,6 +27,7 @@ PAGE_DESCRIPTIONS = {
 }
 
 NAV_CONFIG = [
+    ("운영 센터", "운영 센터", ":material/task_alt:"),
     ("요약", "대시보드 요약", ":material/dashboard:"),
     ("예산 및 잔액", "예산·잔액", ":material/account_balance_wallet:"),
     ("성과 분석 · 캠페인", "캠페인 분석", ":material/campaign:"),
@@ -51,6 +53,7 @@ def _latest_status(latest: dict | None) -> tuple[str, str]:
 
 def _page_action(nav: str) -> tuple[str, str]:
     actions = {
+        "운영 센터": ("조치 큐 갱신", "예산, 잔액, ROAS, 키워드 낭비 신호를 처리 항목으로 모으세요."),
         "요약": ("성과 이상 신호부터 확인", "광고비, 전환, ROAS의 변화가 큰 계정부터 훑어보세요."),
         "예산 및 잔액": ("소진 위험 우선 점검", "잔액과 월 예산 페이스가 어긋난 계정을 먼저 조정하세요."),
         "성과 분석 · 캠페인": ("캠페인 단위 병목 탐색", "비용은 크지만 전환 효율이 낮은 캠페인을 드릴다운하세요."),
@@ -213,7 +216,10 @@ def main():
         st.info("담당자 또는 광고주(계정) 필터를 먼저 1개 이상 선택하면 데이터가 표시됩니다.")
         st.stop()
 
-    if nav == "요약":
+    if nav == "운영 센터":
+        from view_ops import page_ops_center
+        page_ops_center(meta, engine, f)
+    elif nav == "요약":
         from view_overview import page_overview
         page_overview(meta, engine, f)
     elif nav == "예산 및 잔액":

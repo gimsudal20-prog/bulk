@@ -414,6 +414,97 @@ def _normalize_filter_state(values: Dict) -> Dict:
     out["top_n_ad"] = int(out.get("top_n_ad", 200) or 200)
     return out
 
+
+def _filter_payload_from_widget_state(sv: Dict) -> Dict:
+    payload = {
+        "q": st.session_state.get("f_q", sv.get("q", "")),
+        "manager": st.session_state.get("f_manager", sv.get("manager", [])),
+        "account": st.session_state.get("f_account", sv.get("account", [])),
+        "media_sel": st.session_state.get("f_media_sel", sv.get("media_sel", [])),
+        "type_sel": st.session_state.get("f_type_sel", sv.get("type_sel", [])),
+        "period_mode": st.session_state.get("f_period_mode", sv.get("period_mode", "어제")),
+        "d1": st.session_state.get("f_d1", sv.get("d1")),
+        "d2": st.session_state.get("f_d2", sv.get("d2")),
+        "top_n_campaign": st.session_state.get("f_top_n_campaign", sv.get("top_n_campaign", 200)),
+        "top_n_keyword": st.session_state.get("f_top_n_keyword", sv.get("top_n_keyword", 300)),
+        "top_n_ad": st.session_state.get("f_top_n_ad", sv.get("top_n_ad", 200)),
+        "prefetch_warm": sv.get("prefetch_warm", True),
+        "show_diagnostics": st.session_state.get("f_show_diagnostics", sv.get("show_diagnostics", False)),
+    }
+    return _normalize_filter_state(payload)
+
+
+def _date_from_payload(value, fallback: date) -> date:
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except Exception:
+        return fallback
+
+
+def _apply_filter_preset_payload(payload: Dict, default_start: date, default_end: date) -> None:
+    restored = dict(st.session_state.get("filters_v8", {}))
+    restored.update(dict(payload or {}))
+    restored["d1"] = _date_from_payload(restored.get("d1"), default_start)
+    restored["d2"] = _date_from_payload(restored.get("d2"), default_end)
+    restored = _normalize_filter_state(restored)
+    st.session_state["filters_v8"] = restored
+    st.session_state["f_period_mode"] = restored.get("period_mode", "어제")
+    st.session_state["f_d1"] = restored.get("d1", default_start)
+    st.session_state["f_d2"] = restored.get("d2", default_end)
+    st.session_state["f_q"] = restored.get("q", "")
+    st.session_state["f_manager"] = list(restored.get("manager", []) or [])
+    st.session_state["f_account"] = list(restored.get("account", []) or [])
+    st.session_state["f_media_sel"] = list(restored.get("media_sel", []) or [])
+    st.session_state["f_type_sel"] = list(restored.get("type_sel", []) or [])
+    st.session_state["f_top_n_campaign"] = int(restored.get("top_n_campaign", 200) or 200)
+    st.session_state["f_top_n_keyword"] = int(restored.get("top_n_keyword", 300) or 300)
+    st.session_state["f_top_n_ad"] = int(restored.get("top_n_ad", 200) or 200)
+    st.session_state["f_show_diagnostics"] = bool(restored.get("show_diagnostics", False))
+
+
+def _render_filter_preset_controls(engine, sv: Dict, default_start: date, default_end: date) -> None:
+    if engine is None:
+        return
+    with st.expander("필터 프리셋", expanded=False):
+        try:
+            presets = get_filter_presets(engine)
+        except Exception as e:
+            st.caption(f"프리셋을 불러오지 못했습니다: {e}")
+            presets = pd.DataFrame()
+
+        preset_names = presets["name"].dropna().astype(str).tolist() if presets is not None and not presets.empty else []
+        selected_name = st.selectbox(
+            "저장된 프리셋",
+            ["선택 안함"] + preset_names,
+            key="f_filter_preset_select",
+            label_visibility="collapsed",
+        )
+        c_apply, c_delete = st.columns(2)
+        with c_apply:
+            if st.button("적용", key="f_filter_preset_apply", use_container_width=True, disabled=selected_name == "선택 안함"):
+                row = presets[presets["name"].astype(str) == selected_name].head(1)
+                payload = row.iloc[0].get("payload", {}) if not row.empty else {}
+                _apply_filter_preset_payload(payload, default_start, default_end)
+                st.rerun()
+        with c_delete:
+            if st.button("삭제", key="f_filter_preset_delete", use_container_width=True, disabled=selected_name == "선택 안함"):
+                row = presets[presets["name"].astype(str) == selected_name].head(1)
+                if not row.empty:
+                    delete_filter_preset(engine, int(row.iloc[0]["id"]))
+                    st.rerun()
+
+        st.divider()
+        preset_name = st.text_input("새 프리셋 이름", key="f_filter_preset_name", placeholder="예: 주요 계정 주간 리포트")
+        if st.button("현재 조건 저장", key="f_filter_preset_save", type="primary", use_container_width=True):
+            try:
+                save_filter_preset(engine, preset_name, _filter_payload_from_widget_state(sv))
+                st.success("필터 프리셋을 저장했습니다.")
+            except Exception as e:
+                st.error(f"프리셋 저장 실패: {e}")
+
+
 def build_filters(meta: pd.DataFrame, type_opts: List[str], engine=None) -> Dict:
     today = _today_kst()
     default_end = today - timedelta(days=1)
@@ -433,6 +524,7 @@ def build_filters(meta: pd.DataFrame, type_opts: List[str], engine=None) -> Dict
 
     with st.sidebar:
         st.markdown("<div class='nav-sidebar-title'>공통 필터</div>", unsafe_allow_html=True)
+        _render_filter_preset_controls(engine, sv, default_start, default_end)
 
         st.markdown("<div class='sidebar-section-label'>기간 선택</div>", unsafe_allow_html=True)
         

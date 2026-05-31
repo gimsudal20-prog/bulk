@@ -1079,6 +1079,48 @@ def _build_ts_compare_df(cur_df, base_df, group_col, group_label, align_mode="la
     return merged
 
 
+def _sort_overview_detail_frame(df: pd.DataFrame, sort_col: str, descending: bool = True) -> pd.DataFrame:
+    if df is None or df.empty or sort_col not in df.columns:
+        return pd.DataFrame() if df is None else df
+    work = df.copy()
+    numeric_key = pd.to_numeric(work[sort_col], errors="coerce")
+    if numeric_key.notna().any():
+        work["_sort_key"] = numeric_key.fillna(0)
+    else:
+        work["_sort_key"] = work[sort_col].astype(str)
+    tie_cols = [c for c in ["광고비", "총 전환수", "구매완료수"] if c in work.columns and c != sort_col]
+    sort_by = ["_sort_key"] + tie_cols
+    ascending = [not descending] + [False] * len(tie_cols)
+    return work.sort_values(sort_by, ascending=ascending, kind="mergesort").drop(columns=["_sort_key"]).reset_index(drop=True)
+
+
+def _render_overview_keyword_sort_controls(df: pd.DataFrame, visible_cols: list[str]) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame() if df is None else df
+    preferred = [
+        "광고비", "총 전환수", "구매완료수", "총 전환매출", "구매완료 매출",
+        "클릭수", "노출수", "클릭률(%)", "총 전환율(%)", "구매 전환율(%)",
+        "CPC", "통합 ROAS(%)", "구매완료 ROAS(%)",
+    ]
+    sort_options = [c for c in preferred if c in visible_cols and c in df.columns]
+    sort_options.extend([c for c in visible_cols if c in df.columns and c not in sort_options and c != "키워드"])
+    if not sort_options:
+        return df
+
+    sort_col_a, sort_dir_a = st.columns([2, 1], gap="small")
+    with sort_col_a:
+        default_idx = sort_options.index("광고비") if "광고비" in sort_options else 0
+        sort_col = st.selectbox("전체 기준 정렬", sort_options, index=default_idx, key="overview_keyword_sort_col")
+    with sort_dir_a:
+        sort_dir = st.segmented_control(
+            "정렬 방향",
+            ["내림차순", "오름차순"],
+            default="내림차순",
+            key="overview_keyword_sort_dir",
+        )
+    return _sort_overview_detail_frame(df, sort_col, descending=(sort_dir == "내림차순"))
+
+
 def _delta_chip(cur_val, base_val, improve_when_up=True):
     diff = pct_change(float(cur_val or 0), float(base_val or 0)) if base_val is not None else 0.0
     if abs(diff) < 5: return "neu", f"유지 ({diff:+.1f}%)"
@@ -1552,11 +1594,11 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
     elif detail_panel == "키워드 상세 분석":
         if not kw_disp.empty:
             view_cols = ["키워드"] + [c for c in get_funnel_cols(show_deltas) if c in kw_disp.columns]
-            disp_kw = kw_disp[view_cols].copy()
+            disp_kw = _render_overview_keyword_sort_controls(kw_disp[view_cols].copy(), view_cols)
             styled_kw_df = disp_kw.style.format(fmt_dict_standard)
             styled_kw_df = _apply_overview_delta_styles(styled_kw_df, disp_kw)
             _render_overview_sticky_table(styled_kw_df, "키워드", height=460, hide_index=True)
-            st.caption(f"총 {len(disp_kw):,}개 키워드 기준입니다. 컬럼 정렬은 현재 표시된 전체 행을 기준으로 동작합니다.")
+            st.caption(f"총 {len(disp_kw):,}개 키워드 전체를 기준으로 정렬했습니다. 헤더 클릭 정렬보다 상단 정렬 컨트롤을 우선 사용하세요.")
         else:
             st.info("조건에 맞는 데이터가 없습니다.")
 

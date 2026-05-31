@@ -183,6 +183,7 @@ def check_overview_keyword_purchase_contract(root: Path) -> list[str]:
         'keyword bundle 구매완료 fallback 비활성': '_build_bundle_metric_sql(kw_fact_cols, purchase_fallback=False)' in data_text,
         'bundle metric fallback 옵션 유지': 'purchase_fallback: bool = True' in data_text,
         'overview keyword cache version 갱신': 'cache_version = 2' in overview_text,
+        'overview keyword 전체 기준 정렬 컨트롤': '_render_overview_keyword_sort_controls' in overview_text and '_sort_overview_detail_frame' in overview_text,
     }
     missing = [name for name, ok in required.items() if not ok]
     if missing:

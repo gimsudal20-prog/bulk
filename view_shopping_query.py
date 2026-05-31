@@ -178,7 +178,7 @@ def page_perf_shopping_query(meta: pd.DataFrame, engine, f: Dict) -> None:
 
     render_toolbar(
         "쇼핑 검색어 분석",
-        "실제 검색어 기준으로 구매, 장바구니, 총 전환 퍼널 성과를 확인합니다.",
+        "실제 검색어와 검색어 미제공 영역 기준으로 구매, 장바구니, 총 전환 퍼널 성과를 확인합니다.",
         [{"label": f"{f['start']} ~ {f['end']}", "tone": "primary"}, {"label": f.get("media_label", "전체 매체"), "tone": "success"}, {"label": "검색어 퍼널", "tone": "info"}],
     )
 
@@ -217,6 +217,13 @@ def page_perf_shopping_query(meta: pd.DataFrame, engine, f: Dict) -> None:
         "total_conv": "총 전환수",
         "total_sales": "총 전환매출",
     }).copy()
+    raw_query = view["실제 검색어"].astype(str).str.strip() if "실제 검색어" in view.columns else pd.Series([], dtype=str)
+    if "query_provided" in view.columns:
+        provided_mask = view["query_provided"].fillna(True).astype(bool)
+    else:
+        provided_mask = ~raw_query.isin(["", "-", "(검색어 미제공)", "(검색어 미제공 영역)"])
+    view.loc[~provided_mask, "실제 검색어"] = "(검색어 미제공 영역)"
+    view["전환출처"] = np.where(provided_mask, "검색어 상세", "검색어 미제공(리포트 -)")
 
     numeric_cols = [
         "구매완료수", "구매완료 매출", "장바구니수", "장바구니 매출액",
@@ -229,7 +236,7 @@ def page_perf_shopping_query(meta: pd.DataFrame, engine, f: Dict) -> None:
     filtered, filter_state = _render_filter_panel(view)
 
     display_cols = [
-        "업체명", "캠페인", "광고그룹", "실제 검색어",
+        "업체명", "캠페인", "광고그룹", "실제 검색어", "전환출처",
         "구매완료수", "구매완료 매출", "장바구니수", "총 전환수", "총 전환매출",
         "구매완료수 증감", "구매완료 매출 증감", "총 전환수 증감",
     ]

@@ -281,8 +281,14 @@ def _build_shopping_terms_keyword_view(shop_terms: pd.DataFrame, meta: pd.DataFr
         "query_text": "키워드",
     }).copy()
     view["캠페인유형"] = "쇼핑검색"
-    view["구분"] = "쇼핑 검색어"
-    view["전환출처"] = "검색어 상세"
+    raw_keyword = view["키워드"].astype(str).str.strip() if "키워드" in view.columns else pd.Series([], dtype=str)
+    if "query_provided" in view.columns:
+        provided_mask = view["query_provided"].fillna(True).astype(bool)
+    else:
+        provided_mask = ~raw_keyword.isin(["", "-", "(검색어 미제공)", "(검색어 미제공 영역)"])
+    view.loc[~provided_mask, "키워드"] = "(검색어 미제공 영역)"
+    view["구분"] = np.where(provided_mask, "쇼핑 검색어", "검색어 미제공 영역")
+    view["전환출처"] = np.where(provided_mask, "검색어 상세", "검색어 미제공(리포트 -)")
     for col in ["노출", "클릭", "광고비"]:
         view[col] = 0
     total_conv = safe_numeric_col(view, "total_conv")
@@ -315,8 +321,14 @@ def _build_shopping_terms_base_bundle(shop_terms: pd.DataFrame) -> pd.DataFrame:
     out["imp"] = 0
     out["clk"] = 0
     out["cost"] = 0
-    out["구분"] = "쇼핑 검색어"
-    out["전환출처"] = "검색어 상세"
+    raw_keyword = out["키워드"].astype(str).str.strip() if "키워드" in out.columns else pd.Series([], dtype=str)
+    if "query_provided" in out.columns:
+        provided_mask = out["query_provided"].fillna(True).astype(bool)
+    else:
+        provided_mask = ~raw_keyword.isin(["", "-", "(검색어 미제공)", "(검색어 미제공 영역)"])
+    out.loc[~provided_mask, "키워드"] = "(검색어 미제공 영역)"
+    out["구분"] = np.where(provided_mask, "쇼핑 검색어", "검색어 미제공 영역")
+    out["전환출처"] = np.where(provided_mask, "검색어 상세", "검색어 미제공(리포트 -)")
     return out
 
 
@@ -409,9 +421,9 @@ def _build_shopping_unmapped_conversion_rows(base: pd.DataFrame, detail: pd.Data
     if rows.empty:
         return pd.DataFrame()
 
-    rows["키워드"] = "(검색어 미제공 영역)"
+    rows["키워드"] = "(검색어 미제공 영역 - 차액)"
     rows["구분"] = "검색어 미제공 영역"
-    rows["전환출처"] = "검색어 미제공/콘텐츠·기타"
+    rows["전환출처"] = "검색어 미제공/콘텐츠·기타(차액)"
     if "캠페인유형" not in rows.columns:
         rows["캠페인유형"] = "쇼핑검색"
     for col in ["노출", "클릭", "광고비"]:
@@ -701,7 +713,7 @@ def _build_search_term_mapping_summary(view: pd.DataFrame) -> pd.DataFrame:
     out["미제공 매출 비중(%)"] = np.where(out["전체 매출"] > 0, out["검색어 미제공 매출"] / out["전체 매출"] * 100.0, 0.0)
     out["해석"] = np.where(
         out["검색어 미제공 전환"] > 0,
-        "검색어 없는 콘텐츠/기타 영역 가능",
+        "검색어가 '-'로 제공되었거나 총합-검색어상세 차액입니다. 콘텐츠/제휴/기타 영역 가능성이 높습니다.",
         "검색어 상세로 매핑됨",
     )
     if "__all__" in out.columns:
@@ -717,7 +729,7 @@ def _render_search_term_mapping_summary(view: pd.DataFrame) -> None:
     if summary.empty:
         return
     st.markdown("<div style='font-size:14px; font-weight:700; margin-bottom:6px; margin-top:16px;'>쇼핑검색 검색어 매핑 진단</div>", unsafe_allow_html=True)
-    st.caption("검색어 상세 리포트로 매핑된 구매완료와 검색어가 제공되지 않은 영역의 잔여 구매완료를 분리해서 봅니다. 미제공 영역은 콘텐츠/제휴/추천 등 검색어가 없는 지면 전환 가능성이 높습니다.")
+    st.caption("검색어 상세 리포트로 매핑된 구매완료와 검색어가 '-'로 제공되거나 총합 차액으로 남는 구매완료를 분리해서 봅니다. 미제공 영역은 콘텐츠/제휴/추천 등 검색어가 없는 지면 전환 가능성이 높습니다.")
     show_cols = [c for c in [
         "업체명", "캠페인", "광고그룹",
         "검색어 매핑 전환", "검색어 미제공 전환", "전체 전환", "미제공 전환 비중(%)",

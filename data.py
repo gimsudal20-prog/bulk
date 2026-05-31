@@ -2074,6 +2074,8 @@ def query_shopping_search_terms(_engine, d1: date, d2: date, cids: tuple) -> pd.
         return f"SUM(COALESCE(f.{col}, 0))" if col in sq_cols else "0"
 
     split_select_sql = "BOOL_OR(COALESCE(f.split_available, FALSE)) as split_available" if "split_available" in sq_cols else "FALSE as split_available"
+    query_provided_sql = "BOOL_AND(COALESCE(f.query_provided, TRUE)) as query_provided" if "query_provided" in sq_cols else "TRUE as query_provided"
+    query_bucket_sql = "MIN(COALESCE(f.query_bucket, 'search_term')) as query_bucket" if "query_bucket" in sq_cols else "'search_term' as query_bucket"
 
     type_where_sql = ""
     type_params = {}
@@ -2100,7 +2102,9 @@ def query_shopping_search_terms(_engine, d1: date, d2: date, cids: tuple) -> pd.
             {_sum_metric("cart_sales", "cart_sales")},
             {_sum_metric("wishlist_conv", "wishlist_conv")},
             {_sum_metric("wishlist_sales", "wishlist_sales")},
-            {split_select_sql}
+            {split_select_sql},
+            {query_provided_sql},
+            {query_bucket_sql}
         FROM fact_shopping_query_daily f
         LEFT JOIN dim_campaign c ON f.campaign_id = c.campaign_id AND f.customer_id = c.customer_id
         LEFT JOIN dim_adgroup a ON f.adgroup_id = a.adgroup_id AND f.customer_id = a.customer_id

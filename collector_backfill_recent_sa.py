@@ -361,6 +361,8 @@ def ensure_tables(engine: Engine):
                     wishlist_conv DOUBLE PRECISION,
                     wishlist_sales BIGINT DEFAULT 0,
                     split_available BOOLEAN,
+                    query_provided BOOLEAN DEFAULT TRUE,
+                    query_bucket TEXT DEFAULT 'search_term',
                     data_source TEXT,
                     PRIMARY KEY(dt, customer_id, adgroup_id, ad_id, query_text)
                 )"""))
@@ -380,6 +382,8 @@ def ensure_tables(engine: Engine):
             ensure_column(engine, "dim_ad", "mobile_landing_url", "TEXT")
             ensure_column(engine, "dim_ad", "creative_text", "TEXT")
             ensure_column(engine, "dim_ad", "image_url", "TEXT")
+            ensure_column(engine, "fact_shopping_query_daily", "query_provided", "BOOLEAN DEFAULT TRUE")
+            ensure_column(engine, "fact_shopping_query_daily", "query_bucket", "TEXT DEFAULT 'search_term'")
 
             for table in ["fact_campaign_daily", "fact_keyword_daily", "fact_ad_daily"]:
                 ensure_column(engine, table, "purchase_conv", "DOUBLE PRECISION")
@@ -481,6 +485,8 @@ def replace_fact_range(engine: Engine, table: str, rows: List[Dict[str, Any]], c
 
 def replace_query_fact_range(engine: Engine, rows: List[Dict[str, Any]], customer_id: str, d1: date):
     table = "fact_shopping_query_daily"
+    ensure_column(engine, table, "query_provided", "BOOLEAN DEFAULT TRUE")
+    ensure_column(engine, table, "query_bucket", "TEXT DEFAULT 'search_term'")
     clear_fact_range(engine, table, customer_id, d1)
     if not rows:
         return
@@ -1338,13 +1344,17 @@ def _conv_detect_kw_text_idx(sample_rows, gid_idx: int, report_hint: str) -> int
     if not (0 <= candidate < max_cols):
         return -1
     text_score = 0
+    dash_score = 0
     for r in sample_rows:
         if len(r) <= candidate:
             continue
         v = str(r.iloc[candidate]).strip()
-        if v and v != '-' and not _conv_looks_like_id(v) and _conv_maybe_numeric(v) is None:
+        if v == '-':
+            dash_score += 1
+            continue
+        if v and not _conv_looks_like_id(v) and _conv_maybe_numeric(v) is None:
             text_score += 1
-    return candidate if text_score > 0 else -1
+    return candidate if (text_score > 0 or dash_score > 0) else -1
 
 
 def _conv_collect_type_hits(vals: list[str]) -> list[tuple[int, bool, bool, bool]]:
@@ -1569,15 +1579,19 @@ def parse_shopping_query_report(df: pd.DataFrame, target_date: date, customer_id
     max_cols = max((len(r) for r in sample_rows), default=0)
     if 0 <= candidate < max_cols:
         text_score = 0
+        dash_score = 0
         for r in sample_rows:
             if len(r) <= candidate:
                 continue
             v = str(r.iloc[candidate]).strip()
-            if v and v != '-' and not v.lower().startswith(('cmp-', 'grp-', 'nkw-', 'nad-', 'bsn-')):
+            if v == '-':
+                dash_score += 1
+                continue
+            if v and not v.lower().startswith(('cmp-', 'grp-', 'nkw-', 'nad-', 'bsn-')):
                 vv = v.replace(',', '')
                 if not re.fullmatch(r'-?\d+(?:\.\d+)?', vv):
                     text_score += 1
-        if text_score > 0:
+        if text_score > 0 or dash_score > 0:
             kw_text_idx = candidate
 
     for _, r in df.iterrows():
@@ -1619,8 +1633,10 @@ def parse_shopping_query_report(df: pd.DataFrame, target_date: date, customer_id
         row_cid = vals[cid_idx].strip() if 0 <= cid_idx < len(vals) else ""
         row_gid = vals[gid_idx].strip() if 0 <= gid_idx < len(vals) else ""
         row_adid = vals[adid_idx].strip() if 0 <= adid_idx < len(vals) else ""
-        query_text = vals[kw_text_idx].strip() if 0 <= kw_text_idx < len(vals) else ""
-        if not row_gid or not row_adid or not query_text or query_text == '-':
+        raw_query_text = vals[kw_text_idx].strip() if 0 <= kw_text_idx < len(vals) else ""
+        query_provided = bool(raw_query_text and raw_query_text != '-')
+        query_text = raw_query_text if query_provided else "(검색어 미제공)"
+        if not row_gid or not row_adid:
             continue
 
         key = (row_cid, row_gid, row_adid, query_text)
@@ -1640,6 +1656,8 @@ def parse_shopping_query_report(df: pd.DataFrame, target_date: date, customer_id
             "wishlist_conv": 0.0,
             "wishlist_sales": 0,
             "split_available": True,
+            "query_provided": bool(query_provided),
+            "query_bucket": "search_term" if query_provided else "unprovided",
             "data_source": "SHOPPINGKEYWORD_CONVERSION_DETAIL",
         })
         row["total_conv"] += c_val

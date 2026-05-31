@@ -135,8 +135,45 @@ def _selected_type_label(type_sel: tuple) -> str:
 def _overview_type_allows_shopping(type_sel: tuple) -> bool:
     if not type_sel:
         return True
-    labels = {str(x or "").strip().upper() for x in type_sel}
-    return bool(labels.intersection({"쇼핑검색", "SHOPPING", "네이버", "NAVER"}))
+    labels = {str(x or "").strip() for x in type_sel}
+    for label in labels:
+        up = label.upper()
+        if "쇼핑" in label or "SHOPPING" in up or up in {"네이버", "NAVER"}:
+            return True
+    return False
+
+
+def _normalize_overview_type_label(value) -> str:
+    raw = str(value or "").strip()
+    up = raw.upper()
+    if not raw:
+        return ""
+    if "쇼핑" in raw or "SHOPPING" in up:
+        return "쇼핑검색"
+    if "파워" in raw or up in {"WEB_SITE", "POWERLINK", "SA"}:
+        return "파워링크"
+    if "META" in up or "메타" in raw:
+        return "메타"
+    if "GOOGLE" in up or "구글" in raw:
+        return "구글"
+    if up in {"NAVER", "네이버"}:
+        return "네이버"
+    return raw
+
+
+def _overview_is_shopping_only_context(type_sel: tuple, cur_camp: pd.DataFrame | None = None) -> bool:
+    labels = {_normalize_overview_type_label(x) for x in type_sel if str(x or "").strip()}
+    labels = {x for x in labels if x and x != "네이버"}
+    if labels:
+        return labels == {"쇼핑검색"}
+    if cur_camp is None or cur_camp.empty:
+        return False
+    camp_labels: set[str] = set()
+    for col in ["campaign_type_label", "campaign_type", "campaign_tp", "캠페인유형"]:
+        if col in cur_camp.columns:
+            camp_labels.update(_normalize_overview_type_label(v) for v in cur_camp[col].dropna().astype(str).tolist())
+    camp_labels = {x for x in camp_labels if x and x != "네이버"}
+    return bool(camp_labels) and camp_labels == {"쇼핑검색"}
 
 
 def _overview_is_shopping_series(series: pd.Series) -> pd.Series:
@@ -1263,15 +1300,8 @@ def _normalize_type_label(val) -> str:
 
 
 def _infer_kpi_mode(type_sel: tuple, cur_camp: pd.DataFrame, is_split_only: bool) -> str:
-    labels = {_normalize_type_label(x) for x in type_sel if str(x).strip()}
-    if not labels and cur_camp is not None and not cur_camp.empty:
-        for col in ["campaign_type_label", "campaign_type", "campaign_tp", "캠페인유형"]:
-            if col in cur_camp.columns:
-                vals = cur_camp[col].dropna().astype(str).tolist()
-                labels = {_normalize_type_label(v) for v in vals if str(v).strip()}
-                if labels: break
-    labels = {x for x in labels if x}
-    if is_split_only and labels and labels == {"쇼핑검색"}: return "shopping_purchase"
+    if is_split_only and _overview_is_shopping_only_context(type_sel, cur_camp):
+        return "shopping_purchase"
     return "generic_conversion"
 
 
@@ -1364,6 +1394,14 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
     combined_toggle = not is_split_only
     auto_kpi_mode = _infer_kpi_mode(type_sel, cur_camp, is_split_only)
     can_use_purchase_toggle = (f["end"] >= patch_date)
+    shopping_only_context = _overview_is_shopping_only_context(type_sel, cur_camp)
+    force_purchase_view = bool(can_use_purchase_toggle and (not is_mixed_period) and shopping_only_context)
+    if force_purchase_view:
+        # Streamlit keeps toggle state by key.  Without resetting it, a previous
+        # generic-conversion view can make a shopping-only overview keep showing
+        # campaign total conversions such as 3건 instead of the search-term
+        # purchase-complete total such as 25건.
+        st.session_state["overview_purchase_view_toggle"] = True
 
     head_col_meta, empty_col, head_col_toggle = st.columns([5, 1, 3])
     with head_col_meta:
@@ -1380,13 +1418,16 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
             "구매완료 데이터로 보기",
             value=(auto_kpi_mode == "shopping_purchase"),
             key="overview_purchase_view_toggle",
-            disabled=not can_use_purchase_toggle,
+            disabled=(not can_use_purchase_toggle) or force_purchase_view,
+            help="쇼핑검색만 조회할 때는 검색어 상세 구매완료 기준을 자동 적용합니다.",
         )
+        if force_purchase_view:
+            purchase_view = True
 
     if is_mixed_period:
         st.info("안내: 3월 11일 이전 및 이후 데이터가 혼재되어 있어, 상단 성과 지표와 추이 그래프는 '총 전환' 기준으로 표시됩니다.")
     elif purchase_view and can_use_purchase_toggle and _overview_type_allows_shopping(type_sel):
-        render_inline_notice("구매완료 기준", "오버뷰의 구매완료수는 쇼핑 검색어 상세의 purchase_conv 기준으로만 표시합니다. 상세 분리 데이터가 없으면 총 전환수를 구매완료로 대체하지 않습니다.")
+        render_inline_notice("구매완료 기준", "쇼핑검색 오버뷰는 검색어 상세의 구매완료 파생값(primary_conv/purchase_conv 우선)으로 표시합니다. 상세 분리 데이터가 없을 때만 총 전환수를 구매완료로 대체하지 않습니다.")
     elif is_legacy_only:
         st.info("안내: 3월 11일 이전 데이터 조회 시, 상단 성과 지표와 추이 그래프는 '총 전환' 기준으로 표시됩니다.")
 

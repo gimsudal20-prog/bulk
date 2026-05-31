@@ -2065,6 +2065,34 @@ def query_shopping_search_terms(_engine, d1: date, d2: date, cids: tuple) -> pd.
 
     sq_cols = set(get_table_columns(_engine, "fact_shopping_query_daily"))
 
+    def _coalesce_expr(candidates: list[str]) -> str:
+        picked = [f"f.{col}" for col in candidates if col in sq_cols]
+        if not picked:
+            return "0"
+        if len(picked) == 1:
+            return f"COALESCE({picked[0]}, 0)"
+        return f"COALESCE({', '.join(picked)}, 0)"
+
+    def _greatest_expr(candidates: list[str]) -> str:
+        picked = [f"COALESCE(f.{col}, 0)" for col in candidates if col in sq_cols]
+        if not picked:
+            return "0"
+        if len(picked) == 1:
+            return picked[0]
+        return f"GREATEST({', '.join(picked)})"
+
+    # fact_shopping_query_daily has evolved over time.  Older rows may only have
+    # primary_* or conv/sales, while newer rows have purchase_* and total_* split
+    # columns.  Treat the purchase metric as the best available purchase-complete
+    # source and never require one exact physical column name for the overview.
+    purchase_conv_expr = _coalesce_expr(["primary_conv", "purchase_conv", "conv"])
+    purchase_sales_expr = _coalesce_expr(["primary_sales", "purchase_sales", "sales"])
+    total_conv_expr = _greatest_expr(["total_conv", "conv", "primary_conv", "purchase_conv"])
+    total_sales_expr = _greatest_expr(["total_sales", "sales", "primary_sales", "purchase_sales"])
+
+    def _sum_metric_expr(expr: str, alias: str) -> str:
+        return f"SUM({expr}) as {alias}"
+
     def _sum_metric(col: str, alias: str) -> str:
         if col in sq_cols:
             return f"SUM(COALESCE(f.{col}, 0)) as {alias}"
@@ -2111,10 +2139,10 @@ def query_shopping_search_terms(_engine, d1: date, d2: date, cids: tuple) -> pd.
             {query_expr} AS query_text,
             {query_provided_select_sql},
             {query_bucket_select_sql},
-            {_sum_metric("total_conv", "total_conv")},
-            {_sum_metric("total_sales", "total_sales")},
-            {_sum_metric("purchase_conv", "purchase_conv")},
-            {_sum_metric("purchase_sales", "purchase_sales")},
+            {_sum_metric_expr(total_conv_expr, "total_conv")},
+            {_sum_metric_expr(total_sales_expr, "total_sales")},
+            {_sum_metric_expr(purchase_conv_expr, "purchase_conv")},
+            {_sum_metric_expr(purchase_sales_expr, "purchase_sales")},
             {_sum_metric("cart_conv", "cart_conv")},
             {_sum_metric("cart_sales", "cart_sales")},
             {_sum_metric("wishlist_conv", "wishlist_conv")},
@@ -2126,11 +2154,11 @@ def query_shopping_search_terms(_engine, d1: date, d2: date, cids: tuple) -> pd.
         WHERE f.dt BETWEEN :d1 AND :d2 {where_cid} {type_where_sql}
         GROUP BY f.customer_id, f.campaign_id, f.adgroup_id, f.ad_id, c.campaign_name, a.adgroup_name, {query_expr}
         -- 성과가 있는 검색어 우선 정렬 및 로드 수 제한 최적화
-        HAVING {_sum_expr("total_sales")} > 0
-            OR {_sum_expr("total_conv")} > 0
-            OR {_sum_expr("purchase_sales")} > 0
-            OR {_sum_expr("purchase_conv")} > 0
-        ORDER BY {_sum_expr("purchase_conv")} DESC, {_sum_expr("purchase_sales")} DESC, {_sum_expr("total_conv")} DESC
+        HAVING SUM({total_sales_expr}) > 0
+            OR SUM({total_conv_expr}) > 0
+            OR SUM({purchase_sales_expr}) > 0
+            OR SUM({purchase_conv_expr}) > 0
+        ORDER BY SUM({purchase_conv_expr}) DESC, SUM({purchase_sales_expr}) DESC, SUM({total_conv_expr}) DESC
         LIMIT 5000
     """
     df = sql_read(_engine, sql, {"d1": str(d1), "d2": str(d2), **cid_params, **type_params})

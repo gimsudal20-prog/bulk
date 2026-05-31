@@ -325,7 +325,7 @@ def _build_shopping_terms_keyword_view(shop_terms: pd.DataFrame, meta: pd.DataFr
     )
     view.loc[unprovided_mask, "키워드"] = "(검색어 미제공 영역)"
     view["구분"] = np.where(unprovided_mask, "쇼핑 미제공 영역", "쇼핑 검색어")
-    view["전환출처"] = np.where(unprovided_mask, "검색어 미제공(리포트 -)", "검색어 상세")
+    view["전환출처"] = np.where(unprovided_mask, "검색어 미제공(리포트 -/구매완료 파생)", "검색어 상세(구매완료 파생)")
     for col in ["노출", "클릭", "광고비"]:
         view[col] = 0
     total_conv = safe_numeric_col(view, "total_conv")
@@ -371,7 +371,7 @@ def _build_shopping_terms_base_bundle(shop_terms: pd.DataFrame) -> pd.DataFrame:
     )
     out.loc[unprovided_mask, "키워드"] = "(검색어 미제공 영역)"
     out["구분"] = np.where(unprovided_mask, "쇼핑 미제공 영역", "쇼핑 검색어")
-    out["전환출처"] = np.where(unprovided_mask, "검색어 미제공(리포트 -)", "검색어 상세")
+    out["전환출처"] = np.where(unprovided_mask, "검색어 미제공(리포트 -/구매완료 파생)", "검색어 상세(구매완료 파생)")
     return out
 
 

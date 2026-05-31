@@ -51,10 +51,6 @@ def _render_page_header(nav: str, latest: dict | None, f: dict | None = None) ->
         chips.append(("primary", f"{f.get('start')} ~ {f.get('end')}"))
         if f.get("type_sel"):
             chips.append(("info", ", ".join(map(str, f.get("type_sel", [])))))
-        else:
-            chips.append(("info", "전체 유형"))
-        selected_count = len(f.get("selected_customer_ids", []) or [])
-        chips.append(("success" if selected_count else "warning", f"조회 ID {selected_count:,}개"))
 
     chip_html = "".join(
         f"<span class='nv-meta-chip {escape(tone)}'>{escape(label)}</span>"
@@ -62,20 +58,20 @@ def _render_page_header(nav: str, latest: dict | None, f: dict | None = None) ->
     )
     st.markdown(
         f"""
-        <div class='nv-console-head'>
+        <div class='nv-console-head nv-console-head-compact'>
             <div class='nv-console-top'>
                 <div class='nv-page-head-left'>
                     <div class='nv-h1'>{escape(nav)}</div>
                     <p class='nv-page-sub'>{escape(subtitle)}</p>
                 </div>
+                <div class='nv-page-meta'>{chip_html}</div>
             </div>
             <div class='nv-filter-bar'>
                 <div class='nv-scope-bar'>
                     <div class='nv-scope-left'>
-                        <span class='nv-scope-label'>현재 조회</span>{media_html}
+                        <span class='nv-scope-label'>조회 범위</span>{media_html}
                         <span class='nv-meta-chip'>{escape(scope_label)}</span>
                     </div>
-                    <div class='nv-page-meta'>{chip_html}</div>
                 </div>
             </div>
         </div>
@@ -105,7 +101,7 @@ def main():
     meta_ready = (meta is not None) and (not meta.empty)
 
     with st.sidebar:
-        st.markdown("<div class='nav-sidebar-title'>Navigation</div>", unsafe_allow_html=True)
+        st.markdown("<div class='nav-sidebar-title'>메뉴</div>", unsafe_allow_html=True)
 
         if not meta_ready:
             st.warning("동기화가 필요합니다.")

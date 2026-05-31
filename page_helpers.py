@@ -432,7 +432,7 @@ def build_filters(meta: pd.DataFrame, type_opts: List[str], engine=None) -> Dict
     accounts = filter_maps.get("accounts", [])
 
     with st.sidebar:
-        st.markdown("<div class='nav-sidebar-title'>Global Filters</div>", unsafe_allow_html=True)
+        st.markdown("<div class='nav-sidebar-title'>공통 필터</div>", unsafe_allow_html=True)
 
         st.markdown("<div class='sidebar-section-label'>기간 선택</div>", unsafe_allow_html=True)
         
@@ -548,7 +548,7 @@ def build_filters(meta: pd.DataFrame, type_opts: List[str], engine=None) -> Dict
             st.markdown("<div class='sidebar-section-label'>관리자 옵션</div>", unsafe_allow_html=True)
             show_diagnostics = st.checkbox("조회 진단 보기", value=bool(sv.get("show_diagnostics", False)), key="f_show_diagnostics")
 
-        st.caption("필터 변경 시 즉시 반영됩니다.")
+        st.caption("선택한 조건으로 바로 조회됩니다.")
 
     updated_filters = _normalize_filter_state({
         "q": q or "", "manager": manager_sel or [], "account": account_sel or [], "media_sel": media_sel or [],

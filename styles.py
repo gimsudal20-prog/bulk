@@ -40,10 +40,10 @@ GLOBAL_UI_CSS = """
   --nv-info-soft: #E0F2FE;
 
   /* Geometry */
-  --nv-radius: 6px;
-  --nv-radius-lg: 8px;
+  --nv-radius: 8px;
+  --nv-radius-lg: 10px;
   --nv-shadow-soft: 0 1px 2px rgba(15, 23, 42, 0.05);
-  --nv-shadow-hover: 0 8px 18px rgba(15, 23, 42, 0.08);
+  --nv-shadow-hover: 0 4px 12px rgba(15, 23, 42, 0.07);
 }
 
 /* =========================================
@@ -144,6 +144,17 @@ h1, h2, h3, h4, h5, h6 {
   justify-content: space-between;
   gap: 18px;
   padding: 15px 18px 13px;
+}
+.nv-console-head-compact .nv-console-top {
+  align-items: center;
+  padding: 14px 16px 12px;
+}
+.nv-console-head-compact .nv-filter-bar {
+  padding: 9px 14px;
+}
+.nv-console-head-compact .nv-page-meta {
+  min-width: auto;
+  white-space: nowrap;
 }
 .nv-filter-bar {
   display: flex;
@@ -735,10 +746,10 @@ h1, h2, h3, h4, h5, h6 {
   font-weight: 850 !important;
   letter-spacing: -0.01em !important;
   box-shadow: none !important;
-  transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.15s ease, color 0.15s ease !important;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease !important;
 }
 [data-testid="stSidebar"] [data-testid="stButton"] button:hover {
-  transform: translateY(-1px);
+  transform: none !important;
 }
 [data-testid="stSidebar"] [data-testid="stButton"] button span {
   display: inline-flex !important;
@@ -761,7 +772,7 @@ h1, h2, h3, h4, h5, h6 {
   background: linear-gradient(135deg, var(--nv-primary), var(--nv-primary-hover)) !important;
   color: #fff !important;
   border: 1px solid var(--nv-primary) !important;
-  box-shadow: 0 8px 18px rgba(7, 71, 217, 0.16) !important;
+  box-shadow: 0 3px 10px rgba(7, 71, 217, 0.12) !important;
 }
 
 [data-testid="stSidebar"] [role="radiogroup"] {

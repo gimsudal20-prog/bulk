@@ -257,6 +257,7 @@ def ui_metric_or_stmetric(title: str, value: str, desc: str = "", key: str = "")
 
 
 def render_big_table(df, key: str, height: int = 400) -> None:
+    """Render tables with Streamlit's native dataframe for consistent sorting and scrolling."""
     if df is None:
         render_empty_state("데이터 로드 실패", height)
         return
@@ -271,35 +272,6 @@ def render_big_table(df, key: str, height: int = 400) -> None:
     if not is_styler:
         check_df = _prioritize_display_columns(check_df)
         df = check_df
-
-    if len(check_df) > 1000:
-        try:
-            st.dataframe(check_df, use_container_width=True, height=height, hide_index=True)
-        except Exception:
-            st.dataframe(check_df, use_container_width=True, height=height)
-        return
-
-    aggrid_parts = _ensure_aggrid()
-    if aggrid_parts:
-        AgGrid, GridOptionsBuilder, ColumnsAutoSizeMode, GridUpdateMode = aggrid_parts
-        gb = GridOptionsBuilder.from_dataframe(check_df)
-        gb.configure_default_column(resizable=True, filterable=True, sortable=True)
-        gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=15)
-        gb.configure_selection('single')
-        grid_options = gb.build()
-
-        AgGrid(
-            check_df,
-            gridOptions=grid_options,
-            height=height,
-            width='100%',
-            theme='alpine',
-            update_mode=GridUpdateMode.NO_UPDATE,
-            columns_auto_size_mode=ColumnsAutoSizeMode.FIT_ALL_COLUMNS_TO_VIEW,
-            allow_unsafe_jscode=False,
-            key=f"aggrid_{key}",
-        )
-        return
 
     try:
         st.dataframe(df, use_container_width=True, height=height, hide_index=True)

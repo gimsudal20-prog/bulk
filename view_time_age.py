@@ -29,6 +29,13 @@ AGE_SORT_ORDER.update({
     "미분류": 99,
 })
 
+CHART_METRIC_OPTIONS = {
+    "광고비": "cost",
+    "클릭": "clk",
+    "전환수": "conv",
+    "ROAS": "ROAS(%)",
+}
+
 
 def _sql_in_str_list(values: Iterable[str]) -> str:
     vals = []
@@ -268,6 +275,23 @@ def _render_static_bar_chart(df: pd.DataFrame, label_col: str, value_col: str, *
     work[label_col] = work[label_col].astype(str)
     chart_data = work.rename(columns={value_col: value_label}).set_index(label_col)
     st.bar_chart(chart_data, height=320)
+
+
+def _render_metric_bar_chart(df: pd.DataFrame, label_col: str, *, key: str, title_prefix: str) -> None:
+    """Let operators switch the chart metric without changing the tables below."""
+    selected_metric = st.selectbox(
+        "차트 지표",
+        list(CHART_METRIC_OPTIONS.keys()),
+        index=0,
+        key=key,
+        help="차트만 바뀌며, 아래 표는 전체 지표를 유지합니다.",
+    )
+    metric_col = CHART_METRIC_OPTIONS[selected_metric]
+    _render_section_title(
+        f"{title_prefix} {selected_metric}",
+        "광고비·클릭·전환수·ROAS 중 선택해서 볼 수 있습니다. 표 헤더를 클릭하면 정렬됩니다.",
+    )
+    _render_static_bar_chart(df, label_col, metric_col, value_label=selected_metric)
 
 
 def _filter_campaign_and_group(
@@ -565,7 +589,7 @@ def _render_hour_tab(engine, f: Dict) -> None:
     by_camp_all = _query_hourly(engine, f["start"], f["end"], cids, type_sel, by_campaign=True)
     by_group_all = _query_adgroup_hourly(engine, f["start"], f["end"], cids, type_sel)
     if by_camp_all.empty and by_group_all.empty:
-        st.info("시간대별 데이터가 아직 없습니다. 패치 적용 후 해당 날짜를 다시 수집하면 표시됩니다.")
+        st.info("시간대별 데이터가 아직 없습니다. 시간·연령 수집을 실행한 날짜부터 표시됩니다.")
         return
 
     filter_base = by_group_all if not by_group_all.empty else by_camp_all
@@ -573,7 +597,7 @@ def _render_hour_tab(engine, f: Dict) -> None:
         filter_base,
         campaign_key="ta_hour_campaign_filter_v10",
         group_key="ta_hour_adgroup_filter_v10",
-        desc="캠페인/광고그룹을 선택하면 시간대 요약, 캠페인별, 그룹별 표가 동일 조건으로 변경됩니다.",
+        desc="캠페인/광고그룹을 선택하면 KPI, 차트, 표가 같은 조건으로 바뀝니다.",
     )
     if filtered.empty:
         st.info("선택한 캠페인/그룹 조건에 해당하는 시간대별 데이터가 없습니다.")
@@ -588,8 +612,7 @@ def _render_hour_tab(engine, f: Dict) -> None:
     _kpi_row(summary)
 
     chart = _prepare_hour_frame(_add_calc_cols(hourly))
-    _render_section_title("시간대별 광고비", "표는 기존 dataframe 방식이라 헤더 클릭 정렬이 가능합니다.")
-    _render_static_bar_chart(chart, "시간대", "cost")
+    _render_metric_bar_chart(chart, "시간대", key="ta_hour_chart_metric_v11", title_prefix="시간대별")
 
     tab_summary, tab_campaign, tab_group = st.tabs(["시간대 요약", "캠페인별", "그룹별"])
     with tab_summary:
@@ -617,7 +640,7 @@ def _render_hour_tab(engine, f: Dict) -> None:
 
     with tab_group:
         if by_group_all.empty:
-            st.info("그룹별 시간대 데이터가 아직 없습니다. 이번 패치의 수집기 보강 후 시간·연령 수집을 다시 실행하면 그룹 필터/표가 활성화됩니다.")
+            st.info("그룹별 시간대 데이터가 아직 없습니다. 그룹 단위 수집 데이터가 쌓이면 이 표가 활성화됩니다.")
         else:
             group_src = _aggregate_metrics(filtered, ["campaign_type", "campaign_name", "adgroup_name", "hour_of_day"])
             group_src = _prepare_hour_frame(group_src)
@@ -639,7 +662,7 @@ def _render_device_tab(engine, f: Dict) -> None:
     by_camp_all = _query_device(engine, f["start"], f["end"], cids, type_sel, by_campaign=True)
     by_ad_all = _query_ad_device(engine, f["start"], f["end"], cids, type_sel)
     if by_camp_all.empty and by_ad_all.empty:
-        st.info("기기별 성과 데이터가 아직 없습니다. 수집기를 sa_with_device 또는 device_only 모드로 다시 실행하면 표시됩니다.")
+        st.info("기기별 성과 데이터가 아직 없습니다. PC/모바일 수집 데이터가 쌓이면 표시됩니다.")
         return
 
     filter_base = by_ad_all if not by_ad_all.empty else by_camp_all
@@ -663,8 +686,7 @@ def _render_device_tab(engine, f: Dict) -> None:
 
     chart = _prepare_device_frame(_add_calc_cols(device))
     chart = chart.rename(columns={"device_name": "기기"})
-    _render_section_title("기기별 광고비", "PC/모바일 분리 데이터가 없으면 미분리 합계로 표시해 총합 누락을 막습니다.")
-    _render_static_bar_chart(chart, "기기", "cost")
+    _render_metric_bar_chart(chart, "기기", key="ta_device_chart_metric_v11", title_prefix="기기별")
 
     tab_summary, tab_campaign, tab_ad = st.tabs(["기기별 요약", "캠페인별", "소재별"])
     with tab_summary:
@@ -692,7 +714,7 @@ def _render_device_tab(engine, f: Dict) -> None:
 
     with tab_ad:
         if by_ad_all.empty:
-            st.info("소재별 기기 데이터가 아직 없습니다. AD 리포트에서 기기 컬럼이 확인되면 표시됩니다.")
+            st.info("소재별 기기 데이터가 아직 없습니다. 소재 기준 PC/모바일 데이터가 쌓이면 표시됩니다.")
         else:
             ad_src = _aggregate_metrics(filtered, ["campaign_type", "campaign_name", "adgroup_name", "ad_name", "device_name"])
             ad_src = _prepare_device_frame(ad_src)
@@ -700,7 +722,7 @@ def _render_device_tab(engine, f: Dict) -> None:
             ad_src = ad_src.rename(columns={"device_name": "기기", "campaign_type": "유형", "campaign_name": "캠페인", "adgroup_name": "광고그룹", "ad_name": "소재"})
             ad_src = ad_src.sort_values("cost", ascending=False)
             disp3 = _format_display(ad_src, ["유형", "캠페인", "광고그룹", "소재", "기기"])
-            desc = "AD 리포트 기준 소재별 PC/모바일 성과입니다."
+            desc = "소재 기준 PC/모바일 성과입니다."
             if selected_groups:
                 desc = f"선택 그룹 {len(selected_groups):,}개 기준입니다."
             _render_section_title("소재별 기기 상세", desc)
@@ -714,7 +736,7 @@ def _render_age_tab(engine, f: Dict) -> None:
     by_camp_all = _query_age(engine, f["start"], f["end"], cids, type_sel, by_campaign=True)
     by_group_all = _query_adgroup_age(engine, f["start"], f["end"], cids, type_sel)
     if by_camp_all.empty and by_group_all.empty:
-        st.info("연령대별 데이터가 아직 없습니다. 패치 적용 후 해당 날짜를 다시 수집하면 표시됩니다. 단, 계정/캠페인별 API 응답 가능 여부에 따라 빈 값일 수 있습니다.")
+        st.info("연령대별 데이터가 아직 없습니다. 연령대 수집 데이터가 제공되는 캠페인부터 표시됩니다.")
         return
 
     filter_base = by_group_all if not by_group_all.empty else by_camp_all
@@ -722,7 +744,7 @@ def _render_age_tab(engine, f: Dict) -> None:
         filter_base,
         campaign_key="ta_age_campaign_filter_v10",
         group_key="ta_age_adgroup_filter_v10",
-        desc="캠페인/광고그룹을 선택하면 연령대 요약, 캠페인별, 그룹별 표가 동일 조건으로 변경됩니다.",
+        desc="캠페인/광고그룹을 선택하면 KPI, 차트, 표가 같은 조건으로 바뀝니다.",
     )
     if filtered.empty:
         st.info("선택한 캠페인/그룹 조건에 해당하는 연령대별 데이터가 없습니다.")
@@ -738,8 +760,7 @@ def _render_age_tab(engine, f: Dict) -> None:
 
     chart = _prepare_age_frame(_add_calc_cols(age))
     chart = chart.rename(columns={"age_range": "연령대"})
-    _render_section_title("연령대별 광고비", "표는 기존 dataframe 방식이라 헤더 클릭 정렬이 가능합니다.")
-    _render_static_bar_chart(chart, "연령대", "cost")
+    _render_metric_bar_chart(chart, "연령대", key="ta_age_chart_metric_v11", title_prefix="연령대별")
 
     tab_summary, tab_campaign, tab_group = st.tabs(["연령대 요약", "캠페인별", "그룹별"])
     with tab_summary:
@@ -767,7 +788,7 @@ def _render_age_tab(engine, f: Dict) -> None:
 
     with tab_group:
         if by_group_all.empty:
-            st.info("그룹별 연령대 데이터가 아직 없습니다. 이번 패치의 수집기 보강 후 시간·연령 수집을 다시 실행하면 그룹 필터/표가 활성화됩니다.")
+            st.info("그룹별 연령대 데이터가 아직 없습니다. 그룹 단위 수집 데이터가 쌓이면 이 표가 활성화됩니다.")
         else:
             group_src = _aggregate_metrics(filtered, ["campaign_type", "campaign_name", "adgroup_name", "age_range"])
             group_src = _prepare_age_frame(group_src)
@@ -786,8 +807,8 @@ def page_time_age(meta: pd.DataFrame, engine, f: Dict) -> None:
     st.markdown(
         """
         <style>
-        .ta-kpi-card{border:1px solid #E5E7EB;border-radius:16px;padding:15px 17px;background:#fff;box-shadow:0 6px 18px rgba(15,23,42,.045);transform:none!important;transition:none!important;}
-        .ta-kpi-card:hover{transform:none!important;box-shadow:0 6px 18px rgba(15,23,42,.045)!important;}
+        .ta-kpi-card{border:1px solid #E5E7EB;border-radius:10px;padding:14px 16px;background:#fff;box-shadow:0 2px 8px rgba(15,23,42,.045);transform:none!important;transition:none!important;}
+        .ta-kpi-card:hover{transform:none!important;box-shadow:0 2px 8px rgba(15,23,42,.045)!important;}
         .ta-kpi-label{font-size:12px;font-weight:750;color:#64748B;margin-bottom:7px;letter-spacing:-.01em;}
         .ta-kpi-value{font-size:22px;font-weight:850;color:#0F172A;line-height:1.1;letter-spacing:-.02em;}
         .ta-section-head{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin:22px 0 10px;padding:0 2px;}
@@ -799,10 +820,10 @@ def page_time_age(meta: pd.DataFrame, engine, f: Dict) -> None:
         """,
         unsafe_allow_html=True,
     )
-    st.caption("시간대는 /stats hh24, 연령대는 쇼핑 캠페인 /stats ageRangeNm, 기기별은 AD/CRITERION PC·모바일 리포트 기반으로 표시됩니다.")
+    st.caption("선택한 기간/계정 기준으로 시간대·연령대·기기별 성과를 비교합니다. 캠페인과 광고그룹 필터를 쓰면 KPI, 차트, 표가 함께 좁혀집니다.")
 
     if not any(table_exists(engine, table) for table in ["fact_campaign_hourly_daily", "fact_campaign_age_daily", "fact_campaign_device_daily", "fact_ad_device_daily"]):
-        st.info("시간대/연령대/기기별 수집 테이블이 아직 없습니다. 패치 적용 후 수집기를 한 번 실행하면 자동 생성됩니다.")
+        st.info("시간대/연령대/기기별 수집 테이블이 아직 없습니다. 관련 데이터 수집 후 자동으로 표시됩니다.")
         return
 
     tab_hour, tab_age, tab_device = st.tabs(["시간대별", "연령대별", "기기별"])

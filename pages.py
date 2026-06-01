@@ -23,6 +23,7 @@ PAGE_DESCRIPTIONS = {
     "성과 분석 · 소재": "광고 소재와 랜딩페이지 단위의 성과를 점검합니다.",
     "쇼핑 검색어 분석": "쇼핑 검색어 기준으로 구매와 전환 기회를 찾습니다.",
     "시간·연령 분석": "시간대와 연령대별로 지출, 클릭, 전환 효율을 확인합니다.",
+    "Meta 도구": "Meta 소재 다운로드와 PAUSED 세팅 생성을 관리합니다.",
     "설정 및 연결": "계정 연결, 담당자 연동, 동기화 도구를 관리합니다.",
 }
 
@@ -35,6 +36,7 @@ NAV_CONFIG = [
     ("성과 분석 · 소재", "소재 분석", ":material/ads_click:"),
     ("쇼핑 검색어 분석", "쇼핑 검색어", ":material/manage_search:"),
     ("시간·연령 분석", "시간·연령", ":material/schedule:"),
+    ("Meta 도구", "Meta 도구", ":material/linked_services:"),
     ("설정 및 연결", "설정·연결", ":material/settings:"),
 ]
 
@@ -61,6 +63,7 @@ def _page_action(nav: str) -> tuple[str, str]:
         "성과 분석 · 소재": ("소재별 승자/패자 비교", "CTR과 전환 효율이 갈리는 소재를 같은 기준으로 비교하세요."),
         "쇼핑 검색어 분석": ("검색어 기회 발굴", "구매완료와 장바구니 신호가 있는 검색어를 분리해서 보세요."),
         "시간·연령 분석": ("타깃 시간대 재배분", "요일, 시간, 연령대별 효율 차이를 예산 조정에 연결하세요."),
+        "Meta 도구": ("Meta 세팅 안전 생성", "헤이즈코리아와 핵이득마켓 Meta 소재를 내려받고 PAUSED 상태로 세팅하세요."),
         "설정 및 연결": ("데이터 연결 상태 확인", "계정 연결, 매체 매핑, 수집 상태를 먼저 정리하세요."),
     }
     return actions.get(nav, ("현재 화면 점검", "필터를 좁힌 뒤 표와 차트를 함께 확인하세요."))
@@ -190,7 +193,7 @@ def main():
         nav = st.session_state.get("nav_page", nav_items[0])
 
     f = None
-    if nav == "설정 및 연결":
+    if nav in {"설정 및 연결", "Meta 도구"}:
         st.session_state["_show_perf_diag"] = False
     else:
         if not meta_ready:
@@ -240,6 +243,9 @@ def main():
     elif nav == "시간·연령 분석":
         from view_time_age import page_time_age
         page_time_age(meta, engine, f)
+    elif nav == "Meta 도구":
+        from view_meta_tools import page_meta_tools
+        page_meta_tools(engine)
     else:
         from view_settings import page_settings
         page_settings(engine)

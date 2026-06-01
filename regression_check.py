@@ -202,8 +202,10 @@ def check_overview_keyword_purchase_contract(root: Path) -> list[str]:
     required = {
         'keyword bundle 구매완료 fallback 비활성': '_build_bundle_metric_sql(kw_fact_cols, purchase_fallback=False)' in data_text,
         'bundle metric fallback 옵션 유지': 'purchase_fallback: bool = True' in data_text,
-        'overview keyword cache version 갱신': 'cache_version = 3' in overview_text,
+        'overview keyword cache version 갱신': 'cache_version = 5' in overview_text,
         'keyword bundle 쇼핑검색 제외': 'keyword_bundle_exclude_shopping' in data_text and 'NOT IN' in data_text,
+        '쇼핑검색 오버뷰 검색어상세 대체 금지': '요약 구매완료 기준' in overview_text and '검색어 상세가 아닌 캠페인 일별 split 기준' in overview_text and 'cur_shop_summary = _shopping_terms_purchase_summary' not in overview_text,
+        '캠페인 번들 검색어상세 override 금지': 'shopping_summary = query_shopping_query_campaign_purchase_summary' not in data_text and '_override_with_shopping_query_purchase(df, shopping_summary' not in data_text,
         'overview keyword 전체 기준 정렬 컨트롤': '_render_overview_keyword_sort_controls' in overview_text and '_sort_overview_detail_frame' in overview_text,
         'overview keyword 미매핑 전환 행': '_append_unmapped_keyword_conversion_row' in overview_text and '키워드 미매핑 전환' in overview_text,
         'overview keyword 미매핑 중복 제거': '_UNMAPPED_KEYWORD_LABEL' in overview_text and '!= _UNMAPPED_KEYWORD_LABEL' in overview_text,

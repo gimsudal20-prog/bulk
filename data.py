@@ -2085,10 +2085,9 @@ def query_campaign_bundle(_engine, d1: date, d2: date, cids: tuple, type_sel: tu
     sql += _bundle_limit_clause(topn_cost)
 
     df = sql_read(_engine, sql, {"d1": str(d1), "d2": str(d2), **cid_params, **type_params})
-    df = _finalize_bundle_df(df, "campaign_type")
-    shopping_summary = query_shopping_query_campaign_purchase_summary(_engine, d1, d2, cids_tuple, type_sel)
-    df = _override_with_shopping_query_purchase(df, shopping_summary, ["customer_id", "campaign_id"], "campaign_type")
-    return df
+    # 캠페인/오버뷰 구매완료는 fact_campaign_daily의 명시적 split만 사용한다.
+    # 검색어 상세 테이블은 검색어 미제공/미매핑 버킷 때문에 캠페인 합계 대체 원천으로 쓰지 않는다.
+    return _finalize_bundle_df(df, "campaign_type")
 
 @st.cache_data(ttl=DASHBOARD_DATA_CACHE_TTL, max_entries=40, show_spinner=False)
 def query_keyword_bundle(_engine, d1: date, d2: date, cids, type_sel: tuple, topn_cost: int = 0, include_dt: bool = False) -> pd.DataFrame:

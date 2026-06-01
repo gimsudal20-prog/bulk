@@ -182,115 +182,10 @@ def _overview_is_shopping_series(series: pd.Series) -> pd.Series:
     return series.astype(str).str.strip().str.upper().isin({"SHOPPING", "쇼핑검색"})
 
 
-def _zero_overview_shopping_conversions(df: pd.DataFrame, *, zero_totals: bool = True) -> pd.DataFrame:
-    if df is None or df.empty:
-        return pd.DataFrame() if df is None else df
-    out = df.copy()
-    type_col = next((c for c in ["campaign_type_label", "campaign_type", "campaign_tp"] if c in out.columns), None)
-    if not type_col:
-        return out
-    mask = _overview_is_shopping_series(out[type_col])
-    if not mask.any():
-        return out
-
-    # 쇼핑검색의 fact_keyword_daily conv는 구매완료가 아니라 총 전환으로 들어오는 경우가 있다.
-    # 검색어 상세 분리 데이터가 없을 때도 구매완료수=총 전환수로 보이지 않도록
-    # 구매완료 계열은 항상 0 처리하고, 검색어 상세가 있을 때만 total/cart/wish도 대체한다.
-    clear_cols = ["conv", "sales"]
-    if zero_totals:
-        clear_cols.extend(["tot_conv", "tot_sales", "cart_conv", "cart_sales", "wishlist_conv", "wishlist_sales"])
-    for col in clear_cols:
-        if col in out.columns:
-            out.loc[mask, col] = 0
-    return out
 
 
-def _shopping_terms_to_overview_keyword_bundle(shop_terms: pd.DataFrame) -> pd.DataFrame:
-    if shop_terms is None or shop_terms.empty:
-        return pd.DataFrame()
-    out = shop_terms.copy()
-    if "query_text" not in out.columns:
-        return pd.DataFrame()
-    out["keyword"] = out["query_text"].fillna("").astype(str).str.strip()
-    out = out[out["keyword"] != ""].copy()
-    if out.empty:
-        return pd.DataFrame()
-    out["campaign_type_label"] = "쇼핑검색"
-    out["campaign_type"] = "쇼핑검색"
-    for col in ["imp", "clk", "cost"]:
-        out[col] = 0
-    purchase_conv = pd.to_numeric(out.get("purchase_conv"), errors="coerce").fillna(0)
-    purchase_sales = pd.to_numeric(out.get("purchase_sales"), errors="coerce").fillna(0)
-    total_conv = pd.to_numeric(out.get("total_conv"), errors="coerce").fillna(0)
-    total_sales = pd.to_numeric(out.get("total_sales"), errors="coerce").fillna(0)
-    out["conv"] = purchase_conv
-    out["sales"] = purchase_sales
-    out["tot_conv"] = total_conv.where(total_conv > 0, purchase_conv)
-    out["tot_sales"] = total_sales.where(total_sales > 0, purchase_sales)
-    keep = [
-        "customer_id", "campaign_name", "adgroup_name", "keyword", "campaign_type_label", "campaign_type",
-        "imp", "clk", "cost", "conv", "sales", "tot_conv", "tot_sales",
-        "cart_conv", "cart_sales", "wishlist_conv", "wishlist_sales",
-    ]
-    return out[[c for c in keep if c in out.columns]].copy()
-
-
-def _merge_overview_keyword_bundle_with_shopping_terms(_engine, start_dt, end_dt, cids: tuple, type_sel: tuple, kw_bundle: pd.DataFrame) -> pd.DataFrame:
-    if not _overview_type_allows_shopping(type_sel):
-        return pd.DataFrame() if kw_bundle is None else kw_bundle
-    try:
-        shop_terms = query_shopping_search_terms(_engine, start_dt, end_dt, cids)
-    except Exception:
-        shop_terms = pd.DataFrame()
-    shop_bundle = _shopping_terms_to_overview_keyword_bundle(shop_terms)
-
-    # Always remove shopping purchase values from keyword fact fallback.
-    # If split search-term data exists, it becomes the authoritative purchase/total source.
-    # If it does not exist, keep only total conversion fallback and show purchase as 0 rather
-    # than repeating total conversion as purchase completion.
-    base = _zero_overview_shopping_conversions(kw_bundle, zero_totals=not shop_bundle.empty)
-    if shop_bundle.empty:
-        return pd.DataFrame() if base is None else base
-
-    parts = []
-    if base is not None and not base.empty:
-        parts.append(base)
-    parts.append(shop_bundle)
-    return pd.concat(parts, ignore_index=True, sort=False)
-
-
-def _shopping_terms_purchase_summary(_engine, start_dt, end_dt, cids: tuple) -> dict:
-    try:
-        terms = query_shopping_search_terms(_engine, start_dt, end_dt, tuple(cids or ()))
-    except Exception:
-        terms = pd.DataFrame()
-    if terms is None or terms.empty:
-        return {}
-    purchase_conv = pd.to_numeric(terms.get("purchase_conv"), errors="coerce").fillna(0).sum()
-    purchase_sales = pd.to_numeric(terms.get("purchase_sales"), errors="coerce").fillna(0).sum()
-    total_conv = pd.to_numeric(terms.get("total_conv"), errors="coerce").fillna(0).sum()
-    total_sales = pd.to_numeric(terms.get("total_sales"), errors="coerce").fillna(0).sum()
-    return {
-        "conv": float(purchase_conv),
-        "sales": float(purchase_sales),
-        "tot_conv": float(total_conv if total_conv > 0 else purchase_conv),
-        "tot_sales": float(total_sales if total_sales > 0 else purchase_sales),
-        "rows": int(len(terms.index)),
-    }
-
-
-def _apply_shopping_purchase_summary(summary: dict, shop_summary: dict) -> dict:
-    if not shop_summary:
-        return summary or {}
-    out = dict(summary or {})
-    out["conv"] = float(shop_summary.get("conv", 0) or 0)
-    out["sales"] = float(shop_summary.get("sales", 0) or 0)
-    out["tot_conv"] = float(shop_summary.get("tot_conv", out.get("tot_conv", out.get("conv", 0))) or 0)
-    out["tot_sales"] = float(shop_summary.get("tot_sales", out.get("tot_sales", out.get("sales", 0))) or 0)
-    out["roas"] = (out["sales"] / out.get("cost", 0) * 100) if float(out.get("cost", 0) or 0) > 0 else 0
-    return out
-
-
+# 쇼핑검색 오버뷰의 구매완료는 캠페인/일자 단위 split 수집값을 기준으로 둔다.
+# 검색어 상세 테이블은 검색어 미제공·미매핑 버킷이 섞일 수 있어 오버뷰 합계 대체 원천으로 사용하지 않는다.
 
 @st.cache_data(ttl=43200, max_entries=10, show_spinner=False)
 def _cached_campaign_bundle(_engine, start_dt, end_dt, cids: tuple, type_sel: tuple) -> pd.DataFrame:
@@ -300,7 +195,7 @@ def _cached_campaign_bundle(_engine, start_dt, end_dt, cids: tuple, type_sel: tu
 
 @st.cache_data(ttl=43200, max_entries=10, show_spinner=False)
 def _cached_keyword_bundle(_engine, start_dt, end_dt, cids: tuple, type_sel: tuple) -> pd.DataFrame:
-    cache_version = 4  # 쇼핑검색 구매완료 strict split 기준 캐시 갱신 (previous cache_version = 3)
+    cache_version = 5  # 쇼핑검색 오버뷰/키워드 구매완료 strict split 기준 캐시 갱신
     # 오버뷰 최초 로딩/리포트용 경량 번들입니다.
     # 화면 상세 표는 아래 _cached_keyword_full_bundle()을 별도로 사용해 정렬 누락을 막습니다.
     try:
@@ -312,7 +207,7 @@ def _cached_keyword_bundle(_engine, start_dt, end_dt, cids: tuple, type_sel: tup
 
 @st.cache_data(ttl=43200, max_entries=6, show_spinner=False)
 def _cached_keyword_full_bundle(_engine, start_dt, end_dt, cids: tuple, type_sel: tuple) -> pd.DataFrame:
-    cache_version = 4  # 쇼핑검색 구매완료 strict split 기준 캐시 갱신 (previous cache_version = 3)
+    cache_version = 5  # 쇼핑검색 오버뷰/키워드 구매완료 strict split 기준 캐시 갱신
     # st.dataframe의 정렬은 브라우저에 전달된 행 안에서만 동작합니다.
     # 따라서 키워드 상세/엑셀용 데이터는 광고비 상위 제한을 걸지 않고 전체를 가져옵니다.
     try:
@@ -1397,10 +1292,9 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
     shopping_only_context = _overview_is_shopping_only_context(type_sel, cur_camp)
     force_purchase_view = bool(can_use_purchase_toggle and (not is_mixed_period) and shopping_only_context)
     if force_purchase_view:
-        # Streamlit keeps toggle state by key.  Without resetting it, a previous
+        # Streamlit keeps toggle state by key. Without resetting it, a previous
         # generic-conversion view can make a shopping-only overview keep showing
-        # campaign total conversions such as 3건 instead of the search-term
-        # purchase-complete total such as 25건.
+        # total conversion KPI instead of explicit purchase-complete KPI.
         st.session_state["overview_purchase_view_toggle"] = True
 
     head_col_meta, empty_col, head_col_toggle = st.columns([5, 1, 3])
@@ -1419,7 +1313,7 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
             value=(auto_kpi_mode == "shopping_purchase"),
             key="overview_purchase_view_toggle",
             disabled=(not can_use_purchase_toggle) or force_purchase_view,
-            help="쇼핑검색만 조회할 때는 검색어 상세 구매완료 기준을 자동 적용합니다.",
+            help="쇼핑검색만 조회할 때는 캠페인 일별 split의 구매완료 기준을 자동 적용합니다.",
         )
         if force_purchase_view:
             purchase_view = True
@@ -1427,7 +1321,7 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
     if is_mixed_period:
         st.info("안내: 3월 11일 이전 및 이후 데이터가 혼재되어 있어, 상단 성과 지표와 추이 그래프는 '총 전환' 기준으로 표시됩니다.")
     elif purchase_view and can_use_purchase_toggle and _overview_type_allows_shopping(type_sel):
-        render_inline_notice("구매완료 기준", "쇼핑검색 오버뷰는 검색어 상세의 구매완료 파생값(primary_conv/purchase_conv 우선)으로 표시합니다. 상세 분리 데이터가 없을 때만 총 전환수를 구매완료로 대체하지 않습니다.")
+        render_inline_notice("구매완료 기준", "쇼핑검색 오버뷰는 캠페인 일별 수집값의 명시적 구매완료 split(purchase_conv/primary_conv)만 사용합니다. split이 없으면 구매완료를 0으로 두고, 총 전환수로 대체하지 않습니다.")
     elif is_legacy_only:
         st.info("안내: 3월 11일 이전 데이터 조회 시, 상단 성과 지표와 추이 그래프는 '총 전환' 기준으로 표시됩니다.")
 
@@ -1435,13 +1329,7 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
     base = base_summary or {}
 
     if purchase_view and can_use_purchase_toggle and _overview_type_allows_shopping(type_sel):
-        cur_shop_summary = _shopping_terms_purchase_summary(engine, f["start"], f["end"], cids)
-        base_shop_summary = _shopping_terms_purchase_summary(engine, b1, b2, cids)
-        if cur_shop_summary:
-            cur = _apply_shopping_purchase_summary(cur, cur_shop_summary)
-            _diag_add(diag, "요약 구매완료 보정", "ok", cur_shop_summary.get("rows"), "fact_shopping_query_daily", "쇼핑검색 구매완료 KPI를 검색어 상세 기준으로 정렬")
-        if base_shop_summary:
-            base = _apply_shopping_purchase_summary(base, base_shop_summary)
+        _diag_add(diag, "요약 구매완료 기준", "ok", 1, "fact_campaign_daily", "쇼핑검색 구매완료 KPI는 검색어 상세가 아닌 캠페인 일별 split 기준")
 
     cur['tot_conv'] = cur.get('tot_conv', cur.get('conv', 0))
     cur['tot_sales'] = cur.get('tot_sales', cur.get('sales', 0))

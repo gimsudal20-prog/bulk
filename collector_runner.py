@@ -890,6 +890,10 @@ def process_account(
     prepare_account_report_fetch_plan_fn: Callable[..., Tuple[Dict[str, Any], List[str], bool, bool, str]],
     scope_enabled_collectors_fn: Callable[[str, bool], tuple[bool, bool, bool]],
     fetch_stats_fallback_fn: Callable[..., int],
+    # collector.py has passed this dependency since the PC/M actual-performance patch.
+    # The actual call path uses the wrapped save_report_stats_and_breakdowns_fn,
+    # but accepting the keyword here keeps the public runner contract stable.
+    get_stats_breakdown_range_fn: Callable[..., List[dict]] | None = None,
     clear_fact_scope_fn: Callable[..., None],
     save_device_stats_fn: Callable[..., int],
     build_unsegmented_device_stat_from_totals_fn: Callable[..., Dict[Tuple[str, str], dict]],

@@ -215,6 +215,54 @@ def check_overview_keyword_purchase_contract(root: Path) -> list[str]:
     return ['ok | overview 키워드 상세 구매완료/총전환 분리 계약 유지']
 
 
+
+def _get_function_def(tree: ast.AST, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+            return node
+    return None
+
+
+def check_collector_runner_contract(root: Path) -> list[str]:
+    collector_path = root / 'collector.py'
+    runner_path = root / 'collector_runner.py'
+    if not collector_path.exists() or not runner_path.exists():
+        raise RegressionFailure('collector.py 또는 collector_runner.py 가 없습니다')
+
+    collector_tree = _read_ast(collector_path)
+    runner_tree = _read_ast(runner_path)
+    runner_fn = _get_function_def(runner_tree, 'process_account')
+    if runner_fn is None:
+        raise RegressionFailure('collector_runner.py process_account 함수가 없습니다')
+
+    accepted = {arg.arg for arg in runner_fn.args.args}
+    accepted.update(arg.arg for arg in runner_fn.args.kwonlyargs)
+    has_kwargs = runner_fn.args.kwarg is not None
+
+    passed: set[str] = set()
+    for node in ast.walk(collector_tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Attribute) and func.attr == 'process_account':
+            base = func.value
+            if isinstance(base, ast.Name) and base.id == 'collector_runner_mod':
+                passed.update(kw.arg for kw in node.keywords if kw.arg)
+
+    missing = sorted(k for k in passed if k not in accepted and not has_kwargs)
+    if missing:
+        raise RegressionFailure(f'collector.py → collector_runner.process_account 미지원 keyword: {", ".join(missing)}')
+
+    collector_text = collector_path.read_text(encoding='utf-8')
+    required = {
+        '전 계정 오류 시 workflow 실패 처리': '_collection_run_has_fatal_errors' in collector_text and '수집이 전 계정에서 실패했습니다' in collector_text,
+        'PC/M breakdown dependency 계약 유지': 'get_stats_breakdown_range_fn' in passed and 'get_stats_breakdown_range_fn' in accepted,
+    }
+    missing_contracts = [name for name, ok in required.items() if not ok]
+    if missing_contracts:
+        raise RegressionFailure(f'collector runner 계약 누락: {", ".join(missing_contracts)}')
+    return ['ok | collector.py ↔ collector_runner.process_account keyword 계약 유지']
+
 def check_device_breakdown_contract(root: Path) -> list[str]:
     device_path = root / 'device_collector_helpers.py'
     view_path = root / 'view_time_age.py'
@@ -269,6 +317,7 @@ def main() -> int:
         check_targeting_breakdown_contract,
         check_overview_keyword_purchase_contract,
         check_device_breakdown_contract,
+        check_collector_runner_contract,
     ]
     for fn in checks:
         try:

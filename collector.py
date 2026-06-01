@@ -293,6 +293,22 @@ def _markdown_escape(value: Any) -> str:
     return s.replace("|", "\\|").replace("\n", " ").strip()
 
 
+def _collection_run_has_fatal_errors(results: List[Dict[str, Any]]) -> bool:
+    """Return True when a collection run ended in a systemic failure.
+
+    A few account-level errors can happen because of permissions or account state,
+    but a run with zero successful accounts and at least one error should not be
+    reported as a green GitHub Actions step. That masks regressions like a runner
+    function signature mismatch and leaves purchase split data completely empty.
+    """
+    rows = [r for r in (results or []) if isinstance(r, dict)]
+    if not rows:
+        return False
+    ok_cnt = sum(1 for r in rows if r.get("status") == "ok")
+    err_cnt = sum(1 for r in rows if r.get("status") == "error")
+    return ok_cnt == 0 and err_cnt > 0
+
+
 def emit_collection_run_summary(results: List[Dict[str, Any]], target_date: date, collect_mode: str, shopping_only: bool = False, sa_scope: str = "full"):
     rows = [r for r in (results or []) if isinstance(r, dict)]
     if not rows:
@@ -1408,6 +1424,8 @@ def main():
     log(f"📋 최종 수집 대상 계정: {len(accounts_info)}개 / 동시 작업: {args.workers}개")
     results = run_account_collection_tasks(engine, accounts_info, target_date, args)
     emit_collection_run_summary(results, target_date, args.collect_mode, args.shopping_only, args.sa_scope)
+    if _collection_run_has_fatal_errors(results):
+        die("수집이 전 계정에서 실패했습니다. 실행 요약의 error/stage를 확인하세요.")
 
 
 if __name__ == "__main__":

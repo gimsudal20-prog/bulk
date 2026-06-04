@@ -269,6 +269,12 @@ _CAMPAIGN_TYPE_ALIASES = {
 }
 
 _NAVER_CAMPAIGN_TYPE_FILTER_VALUES = _CAMPAIGN_TYPE_ALIASES["네이버"]
+_BUDGET_CAMPAIGN_TYPE_OPTIONS = ("파워링크", "쇼핑검색")
+_BUDGET_CAMPAIGN_TYPE_FILTER_VALUES = tuple(
+    value
+    for label in _BUDGET_CAMPAIGN_TYPE_OPTIONS
+    for value in _CAMPAIGN_TYPE_ALIASES.get(label, [label])
+)
 
 
 def _expand_campaign_type_filter_values(type_sel: tuple | list) -> list[str]:
@@ -1719,6 +1725,221 @@ def query_budget_bundle(_engine, cids: tuple, yesterday: date, avg_d1: date, avg
     df["platform"] = "네이버"
     return df
 
+
+def _budget_campaign_type_case_sql(type_sql: str) -> str:
+    powerlink_values = ", ".join(f"'{value}'" for value in _CAMPAIGN_TYPE_ALIASES["파워링크"])
+    shopping_values = ", ".join(f"'{value}'" for value in _CAMPAIGN_TYPE_ALIASES["쇼핑검색"])
+    return (
+        f"CASE "
+        f"WHEN {type_sql} IN ({powerlink_values}) THEN '파워링크' "
+        f"WHEN {type_sql} IN ({shopping_values}) THEN '쇼핑검색' "
+        f"ELSE NULL END"
+    )
+
+
+def _ensure_customer_type_budget_table(_engine) -> None:
+    sql_exec(
+        _engine,
+        """
+        CREATE TABLE IF NOT EXISTS dim_customer_type_budget (
+            customer_id TEXT NOT NULL,
+            campaign_type TEXT NOT NULL,
+            monthly_budget BIGINT DEFAULT 0,
+            updated_at TIMESTAMPTZ DEFAULT NOW(),
+            PRIMARY KEY (customer_id, campaign_type)
+        )
+        """,
+    )
+    st.session_state.pop("_table_names_cache", None)
+    get_table_columns.clear()
+
+
+def _read_type_budget_settings(_engine, cids_tuple: tuple) -> pd.DataFrame:
+    _ensure_customer_type_budget_table(_engine)
+    where_cid, cid_params = _build_in_filter("REGEXP_REPLACE(CAST(customer_id AS TEXT), '\\.0+$', '')", cids_tuple, "type_budget_cid")
+    return sql_read(
+        _engine,
+        f"""
+        SELECT
+            REGEXP_REPLACE(CAST(customer_id AS TEXT), '\\.0+$', '') AS customer_id,
+            campaign_type,
+            monthly_budget
+        FROM dim_customer_type_budget
+        WHERE campaign_type IN ('파워링크', '쇼핑검색') {where_cid}
+        """,
+        cid_params,
+    )
+
+
+def _read_budget_campaign_type_metrics(_engine, avg_d1: date, avg_d2: date, month_d1: date, month_d2: date, prev_month_d1: date, prev_month_d2: date, avg_days: int, where_cid: str, cid_params: dict) -> pd.DataFrame:
+    outer_d1 = min(avg_d1, month_d1, prev_month_d1)
+    outer_d2 = max(avg_d2, month_d2, prev_month_d2)
+
+    def _run_type_metric_query(table_name: str, sales_expr: str) -> pd.DataFrame:
+        try:
+            table_cols = get_table_columns(_engine, table_name)
+        except Exception:
+            table_cols = []
+
+        if table_name == "overview_campaign_daily_cache" and "campaign_type" in table_cols:
+            type_expr = _budget_campaign_type_case_sql("f.campaign_type")
+            join_sql = ""
+            type_filter_sql, type_params = _build_in_filter("f.campaign_type", _BUDGET_CAMPAIGN_TYPE_FILTER_VALUES, f"{table_name}_budget_type")
+        elif "campaign_id" in table_cols and table_exists(_engine, "dim_campaign"):
+            dim_cols = get_table_columns(_engine, "dim_campaign")
+            cp_col = "campaign_tp" if "campaign_tp" in dim_cols else ("campaign_type_label" if "campaign_type_label" in dim_cols else "campaign_type")
+            if cp_col not in dim_cols:
+                return pd.DataFrame()
+            join_sql = f"JOIN dim_campaign c ON f.campaign_id = c.campaign_id AND f.customer_id = c.customer_id"
+            type_expr = _budget_campaign_type_case_sql(f"c.{cp_col}")
+            type_filter_sql, type_params = _build_in_filter(f"c.{cp_col}", _BUDGET_CAMPAIGN_TYPE_FILTER_VALUES, f"{table_name}_budget_type")
+        else:
+            return pd.DataFrame()
+
+        sql = f"""
+            SELECT
+                CAST(f.customer_id AS TEXT) AS customer_id,
+                {type_expr} AS campaign_type,
+                SUM(CASE WHEN f.dt BETWEEN :avg_d1 AND :avg_d2 THEN f.cost ELSE 0 END)/:avg_days as avg_cost,
+                SUM(CASE WHEN f.dt BETWEEN :month_d1 AND :month_d2 THEN f.cost ELSE 0 END) as current_month_cost,
+                SUM(CASE WHEN f.dt BETWEEN :month_d1 AND :month_d2 THEN {sales_expr} ELSE 0 END) as current_month_sales,
+                SUM(CASE WHEN f.dt BETWEEN :prev_month_d1 AND :prev_month_d2 THEN f.cost ELSE 0 END) as prev_month_cost
+            FROM {table_name} f
+            {join_sql}
+            WHERE f.dt BETWEEN :outer_d1 AND :outer_d2 {where_cid.replace('customer_id', 'f.customer_id')} {type_filter_sql}
+            GROUP BY CAST(f.customer_id AS TEXT), {type_expr}
+        """
+        return sql_read(
+            _engine,
+            sql,
+            {
+                "avg_d1": str(avg_d1),
+                "avg_d2": str(avg_d2),
+                "month_d1": str(month_d1),
+                "month_d2": str(month_d2),
+                "prev_month_d1": str(prev_month_d1),
+                "prev_month_d2": str(prev_month_d2),
+                "outer_d1": str(outer_d1),
+                "outer_d2": str(outer_d2),
+                "avg_days": max(int(avg_days), 1),
+                **cid_params,
+                **type_params,
+            },
+        )
+
+    fact_df = pd.DataFrame()
+    cache_df = pd.DataFrame()
+    cache_is_fresh = False
+
+    if table_exists(_engine, "fact_campaign_daily"):
+        fact_df = _run_type_metric_query("fact_campaign_daily", "COALESCE(f.sales, 0)")
+
+    if table_exists(_engine, "overview_campaign_daily_cache"):
+        latest_cache_df = sql_read(_engine, "SELECT MAX(dt) as dt FROM overview_campaign_daily_cache")
+        latest_cache_dt = None if latest_cache_df.empty else latest_cache_df.iloc[0].get("dt")
+        if pd.notna(latest_cache_dt):
+            try:
+                cache_is_fresh = pd.to_datetime(latest_cache_dt).date() >= outer_d2
+            except Exception:
+                cache_is_fresh = False
+        cache_df = _run_type_metric_query("overview_campaign_daily_cache", "COALESCE(f.tot_sales, f.sales, 0)")
+
+    if fact_df.empty and cache_df.empty:
+        return pd.DataFrame()
+    if fact_df.empty:
+        return cache_df
+    if cache_df.empty or not cache_is_fresh:
+        return fact_df
+
+    merged = fact_df.merge(cache_df, on=["customer_id", "campaign_type"], how="outer", suffixes=("_fact", "_cache"))
+    for col in ["avg_cost", "current_month_cost", "current_month_sales", "prev_month_cost"]:
+        cache_col = f"{col}_cache"
+        fact_col = f"{col}_fact"
+        merged[col] = merged[cache_col].where(merged[cache_col].notna(), merged[fact_col])
+    return merged[["customer_id", "campaign_type", "avg_cost", "current_month_cost", "current_month_sales", "prev_month_cost"]]
+
+
+def _merge_customer_type_metric_frame(base_df: pd.DataFrame, metric_df: pd.DataFrame) -> pd.DataFrame:
+    if metric_df.empty:
+        return base_df
+    metric_df = metric_df.copy()
+    metric_df["customer_id"] = _normalize_customer_id_series(metric_df["customer_id"])
+    return base_df.merge(metric_df, on=["customer_id", "campaign_type"], how="left")
+
+
+@st.cache_data(ttl=300, max_entries=30, show_spinner=False)
+def query_budget_type_bundle(_engine, cids: tuple, yesterday: date, avg_d1: date, avg_d2: date, month_d1: date, month_d2: date, prev_month_d1: date, prev_month_d2: date, avg_days: int) -> pd.DataFrame:
+    df = _budget_naver_scope_df(_engine)
+    if df.empty:
+        return pd.DataFrame()
+
+    cids_tuple = _normalize_filter_values(cids)
+    where_cid, cid_params = _build_in_filter("CAST(customer_id AS TEXT)", cids_tuple, "budget_type_cid")
+
+    df = df.copy()
+    df["customer_id"] = _normalize_customer_id_series(df["customer_id"])
+    if cids_tuple:
+        df = df[df["customer_id"].isin(cids_tuple)]
+    if df.empty:
+        return pd.DataFrame()
+
+    base = df[["customer_id", "account_name", "manager", "operating_weekdays", "platform"]].drop_duplicates("customer_id").copy()
+    type_rows = pd.DataFrame({"campaign_type": list(_BUDGET_CAMPAIGN_TYPE_OPTIONS)})
+    base = base.merge(type_rows, how="cross")
+
+    budget_settings = _read_type_budget_settings(_engine, cids_tuple)
+    base = _merge_customer_type_metric_frame(base, budget_settings)
+    if "monthly_budget" not in base.columns:
+        base["monthly_budget"] = 0
+
+    metric_frames = [
+        _read_budget_campaign_type_metrics(_engine, avg_d1, avg_d2, month_d1, month_d2, prev_month_d1, prev_month_d2, avg_days, where_cid, cid_params),
+    ]
+
+    if table_exists(_engine, "fact_bizmoney_daily"):
+        metric_frames.append(
+            sql_read(
+                _engine,
+                f"""
+                WITH latest AS (
+                    SELECT CAST(customer_id AS TEXT) AS customer_id, MAX(dt) AS bizmoney_dt
+                    FROM fact_bizmoney_daily
+                    WHERE 1=1 {where_cid}
+                    GROUP BY CAST(customer_id AS TEXT)
+                )
+                SELECT
+                    CAST(f.customer_id AS TEXT) AS customer_id,
+                    MAX(f.bizmoney_balance) AS bizmoney_balance,
+                    MAX(f.dt) AS bizmoney_dt
+                FROM fact_bizmoney_daily f
+                JOIN latest l
+                  ON CAST(f.customer_id AS TEXT) = l.customer_id
+                 AND f.dt = l.bizmoney_dt
+                GROUP BY CAST(f.customer_id AS TEXT)
+                """,
+                cid_params,
+            )
+        )
+
+    for metric_df in metric_frames:
+        if not metric_df.empty and "campaign_type" in metric_df.columns:
+            base = _merge_customer_type_metric_frame(base, metric_df)
+        else:
+            base = _merge_customer_metric_frame(base, metric_df)
+
+    base = _fill_numeric_columns(
+        base,
+        ["avg_cost", "current_month_cost", "current_month_sales", "prev_month_cost", "bizmoney_balance", "monthly_budget"],
+    )
+
+    if "manager" not in base.columns:
+        base["manager"] = "미배정"
+    if "account_name" not in base.columns:
+        base["account_name"] = base["customer_id"].astype(str)
+    base["platform"] = "네이버"
+    return base
+
+
 def update_monthly_budget(_engine, cid: int, val: int):
     try:
         cols = get_table_columns(_engine, "dim_customer")
@@ -1748,6 +1969,37 @@ def update_monthly_budget(_engine, cid: int, val: int):
         )
     except Exception as e:
         st.error(f"예산 업데이트 실패: {e}")
+
+
+def update_monthly_budget_by_campaign_type(_engine, cid: int, campaign_type: str, val: int):
+    try:
+        type_norm = str(campaign_type or "").strip()
+        if type_norm not in _BUDGET_CAMPAIGN_TYPE_OPTIONS:
+            raise ValueError(f"지원하지 않는 예산 유형입니다: {campaign_type}")
+        _ensure_customer_type_budget_table(_engine)
+        cid_norm = _normalize_customer_id_value(cid)
+        sql_exec(
+            _engine,
+            """
+            INSERT INTO dim_customer_type_budget (customer_id, campaign_type, monthly_budget, updated_at)
+            VALUES (:cid, :campaign_type, :val, NOW())
+            ON CONFLICT (customer_id, campaign_type)
+            DO UPDATE SET monthly_budget = EXCLUDED.monthly_budget, updated_at = NOW()
+            """,
+            {"cid": cid_norm, "campaign_type": type_norm, "val": int(val or 0)},
+        )
+        query_budget_type_bundle.clear()
+        sql_read.clear()
+        log_dashboard_audit(
+            _engine,
+            "update_monthly_budget_by_campaign_type",
+            "customer",
+            f"{cid_norm}:{type_norm}",
+            "유형별 월 예산 변경",
+            after={"customer_id": cid_norm, "campaign_type": type_norm, "monthly_budget": int(val or 0)},
+        )
+    except Exception as e:
+        st.error(f"유형별 예산 업데이트 실패: {e}")
 
 
 def update_customer_operating_weekdays(_engine, cid: int, weekdays: str):

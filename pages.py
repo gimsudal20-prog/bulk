@@ -28,7 +28,6 @@ PAGE_DESCRIPTIONS = {
 }
 
 NAV_CONFIG = [
-    ("운영 센터", "운영 센터", ":material/task_alt:"),
     ("요약", "대시보드 요약", ":material/dashboard:"),
     ("예산 및 잔액", "예산·잔액", ":material/account_balance_wallet:"),
     ("성과 분석 · 캠페인", "캠페인 분석", ":material/campaign:"),
@@ -37,6 +36,7 @@ NAV_CONFIG = [
     ("쇼핑 검색어 분석", "쇼핑 검색어", ":material/manage_search:"),
     ("시간·연령 분석", "시간·연령", ":material/schedule:"),
     ("Meta 도구", "Meta 도구", ":material/linked_services:"),
+    ("운영 센터", "운영 센터", ":material/task_alt:"),
     ("설정 및 연결", "설정·연결", ":material/settings:"),
 ]
 

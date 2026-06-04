@@ -23,6 +23,14 @@ def _cached_budget_bundle(_engine, cids: tuple, yesterday: date, avg_d1: date, a
         return pd.DataFrame()
 
 
+@st.cache_data(ttl=300, show_spinner=False, max_entries=20)
+def _cached_budget_type_bundle(_engine, cids: tuple, yesterday: date, avg_d1: date, avg_d2: date, month_d1: date, month_d2: date, prev_month_d1: date, prev_month_d2: date, topup_avg_days: int) -> pd.DataFrame:
+    try:
+        return query_budget_type_bundle(_engine, cids, yesterday, avg_d1, avg_d2, month_d1, month_d2, prev_month_d1, prev_month_d2, topup_avg_days)
+    except Exception:
+        return pd.DataFrame()
+
+
 @st.cache_data(ttl=180, show_spinner=False, max_entries=20)
 def _prepare_biz_view(bundle: pd.DataFrame) -> pd.DataFrame:
     if bundle is None or bundle.empty:
@@ -284,6 +292,34 @@ def _build_budget_editor_view(
     return _sort_budget_view(budget_view)
 
 
+@st.cache_data(ttl=180, show_spinner=False, max_entries=20)
+def _build_budget_type_editor_view(
+    biz_view: pd.DataFrame,
+    month_d1: date,
+    month_d2: date,
+    end_dt: date,
+) -> pd.DataFrame:
+    if biz_view is None or biz_view.empty:
+        return pd.DataFrame()
+    for col in ["customer_id", "account_name", "manager", "campaign_type", "monthly_budget", "prev_month_cost", "current_month_cost", "operating_weekdays"]:
+        if col not in biz_view.columns:
+            biz_view[col] = "" if col in {"customer_id", "account_name", "manager", "campaign_type"} else 0
+    budget_view = biz_view[[
+        "customer_id", "account_name", "manager", "campaign_type", "monthly_budget", "prev_month_cost", "current_month_cost", "operating_weekdays"
+    ]].copy()
+    budget_view["monthly_budget_val"] = safe_numeric_col(budget_view, "monthly_budget").astype(int)
+    budget_view["prev_month_cost_val"] = safe_numeric_col(budget_view, "prev_month_cost").astype(int)
+    budget_view["current_month_cost_val"] = safe_numeric_col(budget_view, "current_month_cost").astype(int)
+    budget_view = _recompute_operating_day_fields(budget_view, month_d1, month_d2, end_dt)
+    budget_view = _recalculate_budget_metrics(budget_view)
+    if budget_view.empty:
+        return pd.DataFrame()
+    return budget_view.sort_values(
+        ["_rank", "usage_rate", "account_name", "campaign_type"],
+        ascending=[True, False, True, True],
+    ).reset_index(drop=True)
+
+
 def _ensure_budget_input_js_once():
     if st.session_state.get("_budget_input_js_once"):
         return
@@ -536,6 +572,139 @@ def render_budget_editor(
 
 
 @st.fragment
+def render_budget_type_editor(
+    budget_view: pd.DataFrame,
+    engine,
+    end_dt: date,
+):
+    prev_month_dt = (end_dt.replace(day=1) - timedelta(days=1))
+    prev_m_num = prev_month_dt.month
+
+    for col in ["current_daily_avg_val", "recommended_daily_avg_val", "operating_label", "operating_days_label", "campaign_type"]:
+        if col not in budget_view.columns:
+            budget_view[col] = 0 if col.endswith("_val") else "-"
+    editor_df = budget_view[[
+        "customer_id", "account_name", "manager", "campaign_type", "operating_label", "operating_days_label",
+        "monthly_budget_val", "prev_month_cost_val", "current_month_cost_val",
+        "current_daily_avg_val", "recommended_daily_avg_val", "usage_pct", "상태"
+    ]].copy()
+
+    editor_df["월 예산"] = editor_df["monthly_budget_val"].apply(lambda x: f"{int(x):,}".rjust(15, ' ') if pd.notna(x) else "0".rjust(15, ' '))
+    editor_df[f"{end_dt.month}월 사용액"] = editor_df["current_month_cost_val"].apply(lambda x: f"{int(x):,}".rjust(15, ' ') if pd.notna(x) else "0".rjust(15, ' '))
+    editor_df["현재 일평균 소진액"] = safe_numeric_col(editor_df, "current_daily_avg_val").round(0).astype(int)
+    editor_df["일 평균 권장 소진액"] = safe_numeric_col(editor_df, "recommended_daily_avg_val").round(0).astype(int)
+    editor_df[f"{prev_m_num}월 사용액"] = editor_df["prev_month_cost_val"].apply(lambda x: f"{int(x):,}".rjust(15, ' ') if pd.notna(x) else "0".rjust(15, ' '))
+
+    editor_df = editor_df.rename(columns={
+        "account_name": "업체명",
+        "manager": "담당자",
+        "campaign_type": "유형",
+        "operating_label": "운영 요일",
+        "operating_days_label": "운영일 기준",
+        "usage_pct": "집행률(%)"
+    })
+
+    ordered_cols = [
+        "customer_id", "monthly_budget_val", "prev_month_cost_val", "current_month_cost_val",
+        "current_daily_avg_val", "recommended_daily_avg_val",
+        "업체명", "담당자", "유형", "운영 요일", "운영일 기준", "월 예산", f"{end_dt.month}월 사용액",
+        "현재 일평균 소진액", "일 평균 권장 소진액", f"{prev_m_num}월 사용액", "집행률(%)", "상태"
+    ]
+    editor_df = editor_df[ordered_cols]
+
+    def update_type_budget_from_table():
+        if "budget_type_table_editor" in st.session_state:
+            edits = st.session_state["budget_type_table_editor"].get("edited_rows", {})
+            updated_count = 0
+
+            if "local_type_budget_overrides" not in st.session_state:
+                st.session_state["local_type_budget_overrides"] = {}
+
+            for row_idx, col_data in edits.items():
+                if "월 예산" in col_data:
+                    raw_input = str(col_data["월 예산"]).replace(",", "").replace("원", "").strip()
+                    if raw_input.isdigit():
+                        new_budget = int(raw_input)
+                        cid = str(editor_df.iloc[row_idx]["customer_id"])
+                        campaign_type = str(editor_df.iloc[row_idx]["유형"])
+
+                        update_monthly_budget_by_campaign_type(engine, cid, campaign_type, new_budget)
+                        st.session_state["local_type_budget_overrides"][(cid, campaign_type)] = new_budget
+                        updated_count += 1
+
+            if updated_count > 0:
+                _cached_budget_type_bundle.clear()
+                _build_budget_type_editor_view.clear()
+                st.toast("유형별 예산이 저장되었습니다.")
+
+    st.markdown(f"<div style='font-size:14px; font-weight:700; margin-bottom:4px;'>{end_dt.strftime('%Y년 %m월')} 유형별 예산 집행률</div>", unsafe_allow_html=True)
+    st.caption(
+        "파워링크와 쇼핑검색 예산을 계정별로 따로 입력할 수 있습니다. 사용액과 집행률은 해당 유형 캠페인 비용만 기준으로 계산합니다."
+    )
+    _ensure_budget_input_js_once()
+
+    st.data_editor(
+        editor_df,
+        key="budget_type_table_editor",
+        on_change=update_type_budget_from_table,
+        hide_index=True,
+        use_container_width=True,
+        height=550,
+        column_config={
+            "customer_id": None,
+            "monthly_budget_val": None,
+            "prev_month_cost_val": None,
+            "current_month_cost_val": None,
+            "current_daily_avg_val": None,
+            "recommended_daily_avg_val": None,
+            "업체명": st.column_config.TextColumn("업체명", disabled=True),
+            "담당자": st.column_config.TextColumn("담당자", disabled=True),
+            "유형": st.column_config.TextColumn("유형", disabled=True, width="small"),
+            "운영 요일": st.column_config.TextColumn("운영 요일", disabled=True, width="small"),
+            "운영일 기준": st.column_config.TextColumn(
+                "운영일 기준",
+                disabled=True,
+                width="small",
+                help="현재 운영 경과일 / 해당 월 전체 운영일"
+            ),
+            "월 예산": st.column_config.TextColumn(
+                "월 예산(원)",
+                help="더블클릭하여 유형별 예산을 바로 수정하세요.",
+                required=True
+            ),
+            f"{end_dt.month}월 사용액": st.column_config.TextColumn(
+                f"{end_dt.month}월 사용액",
+                disabled=True
+            ),
+            "현재 일평균 소진액": st.column_config.NumberColumn(
+                "현재 일평균 소진액",
+                disabled=True,
+                format="%,.0f 원",
+                help="이번 달 유형별 누적 사용액을 업체별 운영 경과일로 나눈 값입니다."
+            ),
+            "일 평균 권장 소진액": st.column_config.NumberColumn(
+                "일 평균 권장 소진액",
+                disabled=True,
+                format="%,.0f 원",
+                help="유형별 월 예산을 업체별 월 운영일로 나눈 권장 일평균입니다."
+            ),
+            f"{prev_m_num}월 사용액": st.column_config.TextColumn(
+                f"{prev_m_num}월 사용액",
+                disabled=True
+            ),
+            "집행률(%)": st.column_config.ProgressColumn(
+                "집행률(%)",
+                help="유형별 월 예산 대비 현재 사용액 비율",
+                format="%.1f%%",
+                min_value=0,
+                max_value=100
+            ),
+            "상태": st.column_config.TextColumn("상태", disabled=True)
+        }
+    )
+
+
+@st.fragment
 def render_alert_table(alert_view: pd.DataFrame):
     display_df = _build_alert_display(alert_view)
     st.markdown("<div style='font-size:14px; font-weight:700; margin-bottom:12px; margin-top:20px;'>비즈머니 잔액 관리 계정</div>", unsafe_allow_html=True)
@@ -579,8 +748,11 @@ def render_alert_table(alert_view: pd.DataFrame):
 
 
 @st.fragment
-def render_budget_kpis(biz_view: pd.DataFrame, end_dt: date):
-    total_balance = int(safe_numeric_col(biz_view, "bizmoney_balance").sum())
+def render_budget_kpis(biz_view: pd.DataFrame, end_dt: date, unique_balance_by_customer: bool = False):
+    balance_view = biz_view
+    if unique_balance_by_customer and "customer_id" in biz_view.columns:
+        balance_view = biz_view.drop_duplicates("customer_id")
+    total_balance = int(safe_numeric_col(balance_view, "bizmoney_balance").sum())
     total_month_cost = int(safe_numeric_col(biz_view, "current_month_cost").sum())
     monthly_budget_src = biz_view["monthly_budget"] if "monthly_budget" in biz_view.columns else pd.Series([0] * len(biz_view.index))
     avg_cost_src = biz_view["avg_cost"] if "avg_cost" in biz_view.columns else pd.Series([0] * len(biz_view.index))
@@ -632,38 +804,84 @@ def page_budget(meta: pd.DataFrame, engine, f: Dict) -> None:
     prev_month_d2 = prev_month_last_day
 
     if selected_view == "월 예산 현황":
-        bundle = _cached_budget_bundle(engine, cids, yesterday, avg_d1, avg_d2, month_d1, month_d2, prev_month_d1, prev_month_d2, TOPUP_AVG_DAYS)
-        biz_view = _prepare_biz_view(bundle)
-        if biz_view.empty:
-            st.info("예산 현황 데이터가 없습니다.")
+        budget_unit = st.radio(
+            "예산 단위",
+            ["업체별", "유형별"],
+            horizontal=True,
+            key="budget_unit_mode",
+            help="유형별은 파워링크와 쇼핑검색 예산을 따로 저장합니다.",
+        )
+
+        if budget_unit == "유형별":
+            bundle = _cached_budget_type_bundle(engine, cids, yesterday, avg_d1, avg_d2, month_d1, month_d2, prev_month_d1, prev_month_d2, TOPUP_AVG_DAYS)
+            biz_view = _prepare_biz_view(bundle)
+            if biz_view.empty:
+                st.info("유형별 예산 현황 데이터가 없습니다.")
+            else:
+                render_budget_kpis(biz_view.copy(), end_dt, unique_balance_by_customer=True)
+
+                if "local_operating_weekday_overrides" in st.session_state and not biz_view.empty:
+                    if "operating_weekdays" not in biz_view.columns:
+                        biz_view["operating_weekdays"] = globals().get("DEFAULT_OPERATING_WEEKDAYS", "0,1,2,3,4,5,6")
+                    for cid, weekdays in st.session_state["local_operating_weekday_overrides"].items():
+                        m_cid = biz_view["customer_id"].astype(str) == str(cid)
+                        biz_view.loc[m_cid, "operating_weekdays"] = _normalize_weekday_csv(weekdays)
+
+                budget_view = _build_budget_type_editor_view(biz_view, month_d1, month_d2, end_dt)
+
+                if "local_type_budget_overrides" in st.session_state and not budget_view.empty:
+                    for key, new_val in st.session_state["local_type_budget_overrides"].items():
+                        cid, campaign_type = key
+                        m_key = (budget_view["customer_id"].astype(str) == str(cid)) & (budget_view["campaign_type"].astype(str) == str(campaign_type))
+                        budget_view.loc[m_key, "monthly_budget"] = new_val
+                        budget_view.loc[m_key, "monthly_budget_val"] = int(new_val)
+                    budget_view = _recalculate_budget_metrics(budget_view)
+                    budget_view = budget_view.sort_values(
+                        ["_rank", "usage_rate", "account_name", "campaign_type"],
+                        ascending=[True, False, True, True],
+                    ).reset_index(drop=True)
+
+                status_counts = budget_view["상태"].value_counts().to_dict() if not budget_view.empty and "상태" in budget_view.columns else {}
+                render_ops_cards([
+                    {"title": "즉시 점검", "value": f"{int(status_counts.get('예산 초과', 0)):,}개", "note": "유형별 월 예산을 초과한 행", "tone": "danger"},
+                    {"title": "과속 소진", "value": f"{int(status_counts.get('과속 소진', 0)):,}개", "note": "권장 페이스보다 빠른 유형", "tone": "warning"},
+                    {"title": "정상 페이스", "value": f"{int(status_counts.get('적정 페이스', 0)):,}개", "note": "현재 기준 안정 범위", "tone": "success"},
+                ])
+                render_operating_weekday_editor(budget_view, engine)
+                render_budget_type_editor(budget_view, engine, end_dt)
         else:
-            render_budget_kpis(biz_view.copy(), end_dt)
+            bundle = _cached_budget_bundle(engine, cids, yesterday, avg_d1, avg_d2, month_d1, month_d2, prev_month_d1, prev_month_d2, TOPUP_AVG_DAYS)
+            biz_view = _prepare_biz_view(bundle)
+            if biz_view.empty:
+                st.info("예산 현황 데이터가 없습니다.")
+            else:
+                render_budget_kpis(biz_view.copy(), end_dt)
 
-            if "local_operating_weekday_overrides" in st.session_state and not biz_view.empty:
-                if "operating_weekdays" not in biz_view.columns:
-                    biz_view["operating_weekdays"] = globals().get("DEFAULT_OPERATING_WEEKDAYS", "0,1,2,3,4,5,6")
-                for cid, weekdays in st.session_state["local_operating_weekday_overrides"].items():
-                    m_cid = biz_view["customer_id"].astype(str) == str(cid)
-                    biz_view.loc[m_cid, "operating_weekdays"] = _normalize_weekday_csv(weekdays)
+                if "local_operating_weekday_overrides" in st.session_state and not biz_view.empty:
+                    if "operating_weekdays" not in biz_view.columns:
+                        biz_view["operating_weekdays"] = globals().get("DEFAULT_OPERATING_WEEKDAYS", "0,1,2,3,4,5,6")
+                    for cid, weekdays in st.session_state["local_operating_weekday_overrides"].items():
+                        m_cid = biz_view["customer_id"].astype(str) == str(cid)
+                        biz_view.loc[m_cid, "operating_weekdays"] = _normalize_weekday_csv(weekdays)
 
-            budget_view = _build_budget_editor_view(biz_view, month_d1, month_d2, end_dt)
+                budget_view = _build_budget_editor_view(biz_view, month_d1, month_d2, end_dt)
 
-            if "local_budget_overrides" in st.session_state and not budget_view.empty:
-                for cid, new_val in st.session_state["local_budget_overrides"].items():
-                    m_cid = budget_view["customer_id"].astype(str) == str(cid)
-                    budget_view.loc[m_cid, "monthly_budget"] = new_val
-                    budget_view.loc[m_cid, "monthly_budget_val"] = int(new_val)
-                budget_view = _recalculate_budget_metrics(budget_view)
-                budget_view = _sort_budget_view(budget_view)
+                if "local_budget_overrides" in st.session_state and not budget_view.empty:
+                    for cid, new_val in st.session_state["local_budget_overrides"].items():
+                        m_cid = budget_view["customer_id"].astype(str) == str(cid)
+                        budget_view.loc[m_cid, "monthly_budget"] = new_val
+                        budget_view.loc[m_cid, "monthly_budget_val"] = int(new_val)
+                    budget_view = _recalculate_budget_metrics(budget_view)
+                    budget_view = _sort_budget_view(budget_view)
 
-            status_counts = budget_view["상태"].value_counts().to_dict() if not budget_view.empty and "상태" in budget_view.columns else {}
-            render_ops_cards([
-                {"title": "즉시 점검", "value": f"{int(status_counts.get('예산 초과', 0)):,}개", "note": "월 예산을 초과한 계정", "tone": "danger"},
-                {"title": "과속 소진", "value": f"{int(status_counts.get('과속 소진', 0)):,}개", "note": "권장 페이스보다 빠른 계정", "tone": "warning"},
-                {"title": "정상 페이스", "value": f"{int(status_counts.get('적정 페이스', 0)):,}개", "note": "현재 기준 안정 범위", "tone": "success"},
-            ])
-            render_operating_weekday_editor(budget_view, engine)
-            render_budget_editor(budget_view, engine, end_dt)
+                status_counts = budget_view["상태"].value_counts().to_dict() if not budget_view.empty and "상태" in budget_view.columns else {}
+                render_ops_cards([
+                    {"title": "즉시 점검", "value": f"{int(status_counts.get('예산 초과', 0)):,}개", "note": "월 예산을 초과한 계정", "tone": "danger"},
+                    {"title": "과속 소진", "value": f"{int(status_counts.get('과속 소진', 0)):,}개", "note": "권장 페이스보다 빠른 계정", "tone": "warning"},
+                    {"title": "정상 페이스", "value": f"{int(status_counts.get('적정 페이스', 0)):,}개", "note": "현재 기준 안정 범위", "tone": "success"},
+                ])
+                render_operating_weekday_editor(budget_view, engine)
+                render_budget_editor(budget_view, engine, end_dt)
     else:
         alert_avg_d2 = end_dt
         alert_avg_d1 = alert_avg_d2 - timedelta(days=max(TOPUP_AVG_DAYS, 1) - 1)

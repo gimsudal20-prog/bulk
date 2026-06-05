@@ -66,6 +66,10 @@ OPS_WARNING_THRESHOLDS = {
         "ctr_warning_drop": 0.30,
         "click_danger_drop": 0.50,
         "imp_keep_rate": 0.80,
+        "daily_purchase_base_min": 1.0,
+        "daily_roas_cost_min": 10000,
+        "daily_imp_base_min": 50,
+        "daily_click_base_min": 10,
     },
 }
 
@@ -595,6 +599,24 @@ def _merge_periods(df: pd.DataFrame, keys: list[str], windows: dict[str, date], 
     return base
 
 
+def _merge_pair_periods(df: pd.DataFrame, keys: list[str], target_date: date, compare_date: date, conversion_col: str, sales_col: str) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame(columns=keys)
+    dt = df["dt"]
+    frames = [
+        _prefixed_agg(df, keys, dt == target_date, "target", conversion_col, sales_col),
+        _prefixed_agg(df, keys, dt == compare_date, "base", conversion_col, sales_col),
+    ]
+    base = df[[k for k in keys if k in df.columns]].drop_duplicates().copy()
+    for frame in frames:
+        if frame is not None and not frame.empty:
+            base = base.merge(frame, on=[k for k in keys if k in frame.columns], how="left")
+    for col in base.columns:
+        if col.startswith("target_") or col.startswith("base_"):
+            base[col] = pd.to_numeric(base[col], errors="coerce").fillna(0.0)
+    return base
+
+
 def _build_powerlink_warning_rows(meta: pd.DataFrame, engine, f: dict) -> pd.DataFrame:
     cids = tuple(f.get("customer_ids") or [])
     if not cids:
@@ -799,7 +821,223 @@ def _shopping_subject(row) -> str:
     return query_text
 
 
-def _build_shopping_warning_rows(meta: pd.DataFrame, engine, f: dict) -> pd.DataFrame:
+def _build_shopping_pair_warning_rows(meta: pd.DataFrame, engine, f: dict, compare_config: dict) -> pd.DataFrame:
+    cids = tuple(f.get("customer_ids") or [])
+    if not cids:
+        return pd.DataFrame()
+    target_date = compare_config.get("target_date")
+    compare_date = compare_config.get("compare_date")
+    if not isinstance(target_date, date) or not isinstance(compare_date, date):
+        return pd.DataFrame()
+    max_ready_date = _today_kst() - timedelta(days=1)
+    target_date = min(target_date, max_ready_date)
+    compare_date = min(compare_date, max_ready_date)
+    if target_date == compare_date:
+        return pd.DataFrame()
+    d1, d2 = sorted([target_date, compare_date])
+    try:
+        source = query_shopping_warning_source(engine, d1, d2, cids)
+    except Exception:
+        return pd.DataFrame()
+    source = _normalize_warning_source(source)
+    if source.empty:
+        return pd.DataFrame()
+
+    keys = ["customer_id", "campaign_id", "adgroup_id", "ad_id", "campaign_name", "adgroup_name", "ad_name", "ad_title", "query_text"]
+    work = _merge_pair_periods(source, keys, target_date, compare_date, "purchase_conv", "purchase_sales")
+    th = OPS_WARNING_THRESHOLDS["shopping"]
+    period_label = f"{target_date} vs {compare_date}"
+    rows = []
+    for _, row in work.iterrows():
+        campaign = str(row.get("campaign_name", "") or row.get("campaign_id", ""))
+        adgroup = str(row.get("adgroup_name", "") or row.get("adgroup_id", ""))
+        subject = _shopping_subject(row)
+        item_key = f"shopping_pair:{target_date}:{compare_date}:{row.get('customer_id')}:{row.get('ad_id')}:{row.get('query_text')}"
+        target_imp, target_clk, target_cost = [_to_num(row.get(f"target_{c}")) for c in ["imp", "clk", "cost"]]
+        base_imp, base_clk, base_cost = [_to_num(row.get(f"base_{c}")) for c in ["imp", "clk", "cost"]]
+        target_purchase, base_purchase = _to_num(row.get("target_conv")), _to_num(row.get("base_conv"))
+        target_sales, base_sales = _to_num(row.get("target_sales")), _to_num(row.get("base_sales"))
+        target_roas = _safe_rate(target_sales, target_cost) * 100
+        base_roas = _safe_rate(base_sales, base_cost) * 100
+
+        purchase_drop = _drop_rate(target_purchase, base_purchase)
+        if base_purchase >= th["daily_purchase_base_min"] and purchase_drop >= th["purchase_yesterday_warning_drop"]:
+            severity = "danger" if purchase_drop >= th["purchase_yesterday_danger_drop"] else "warning"
+            rows.append(_warning_row(
+                severity=severity,
+                warning_type="쇼핑검색",
+                campaign=campaign,
+                adgroup=adgroup,
+                subject=subject,
+                warning_name="구매완료 급감",
+                reason=f"기준일 구매완료수가 비교일 대비 {_fmt_signed_pct(purchase_drop)} 감소했습니다.",
+                yesterday_value=f"{target_date}: {_fmt_metric(target_purchase, '건')}",
+                recent_avg="-",
+                recent_sum=f"{target_date}: {_fmt_metric(target_purchase, '건')}",
+                prev_sum=f"{compare_date}: {_fmt_metric(base_purchase, '건')}",
+                delta_rate=_fmt_signed_pct(purchase_drop),
+                cost=target_cost,
+                clicks=target_clk,
+                conversions=target_purchase,
+                roas=target_roas,
+                period_filter=period_label,
+                item_key=item_key,
+                has_purchase=target_purchase > 0,
+            ))
+
+        if target_purchase <= 0 and target_cost >= th["no_purchase_cost_warning"]:
+            severity = "danger" if target_cost >= th["no_purchase_cost_danger"] else "warning"
+            rows.append(_warning_row(
+                severity=severity,
+                warning_type="쇼핑검색",
+                campaign=campaign,
+                adgroup=adgroup,
+                subject=subject,
+                warning_name="비용 소진 무구매",
+                reason=f"기준일 비용 {_fmt_metric(target_cost, '원')}을 소진했지만 구매완료가 없습니다.",
+                yesterday_value=f"{target_date}: {_fmt_metric(target_cost, '원')}",
+                recent_avg="-",
+                recent_sum=f"{target_date}: {_fmt_metric(target_cost, '원')}",
+                prev_sum=f"{compare_date}: {_fmt_metric(base_cost, '원')}",
+                delta_rate="-",
+                cost=target_cost,
+                clicks=target_clk,
+                conversions=target_purchase,
+                roas=target_roas,
+                period_filter=period_label,
+                item_key=item_key,
+                has_purchase=False,
+            ))
+
+        if target_purchase <= 0 and target_clk >= th["no_purchase_click_warning"]:
+            severity = "danger" if target_clk >= th["no_purchase_click_danger"] else "warning"
+            rows.append(_warning_row(
+                severity=severity,
+                warning_type="쇼핑검색",
+                campaign=campaign,
+                adgroup=adgroup,
+                subject=subject,
+                warning_name="클릭 누적 무구매",
+                reason=f"기준일 클릭수 {_fmt_metric(target_clk, '회')}가 누적됐지만 구매완료가 없습니다.",
+                yesterday_value=f"{target_date}: {_fmt_metric(target_clk, '회')}",
+                recent_avg="-",
+                recent_sum=f"{target_date}: {_fmt_metric(target_clk, '회')}",
+                prev_sum=f"{compare_date}: {_fmt_metric(base_clk, '회')}",
+                delta_rate="-",
+                cost=target_cost,
+                clicks=target_clk,
+                conversions=target_purchase,
+                roas=target_roas,
+                period_filter=period_label,
+                item_key=item_key,
+                has_purchase=False,
+            ))
+
+        roas_drop = _drop_rate(target_roas, base_roas)
+        if base_roas > 0 and target_cost >= th["daily_roas_cost_min"] and base_purchase >= th["daily_purchase_base_min"] and roas_drop >= th["roas_warning_drop"]:
+            severity = "danger" if roas_drop >= th["roas_danger_drop"] or (target_cost > base_cost and target_purchase < base_purchase) else "warning"
+            rows.append(_warning_row(
+                severity=severity,
+                warning_type="쇼핑검색",
+                campaign=campaign,
+                adgroup=adgroup,
+                subject=subject,
+                warning_name="ROAS 급락",
+                reason=f"기준일 ROAS가 비교일 대비 {_fmt_signed_pct(roas_drop)} 하락했습니다.",
+                yesterday_value=f"{target_date}: {_fmt_metric(target_roas, '%')}",
+                recent_avg="-",
+                recent_sum=f"{target_date}: {_fmt_metric(target_sales, '원 매출')}",
+                prev_sum=f"{compare_date}: {_fmt_metric(base_sales, '원 매출')}",
+                delta_rate=_fmt_signed_pct(roas_drop),
+                cost=target_cost,
+                clicks=target_clk,
+                conversions=target_purchase,
+                roas=target_roas,
+                period_filter=period_label,
+                item_key=item_key,
+                has_purchase=target_purchase > 0,
+            ))
+
+        imp_drop = _drop_rate(target_imp, base_imp)
+        if base_imp >= th["daily_imp_base_min"] and imp_drop >= th["imp_warning_drop"]:
+            rows.append(_warning_row(
+                severity="warning",
+                warning_type="쇼핑검색",
+                campaign=campaign,
+                adgroup=adgroup,
+                subject=subject,
+                warning_name="노출 급감",
+                reason=f"기준일 노출수가 비교일 대비 {_fmt_signed_pct(imp_drop)} 감소했습니다.",
+                yesterday_value=f"{target_date}: {_fmt_metric(target_imp, '회')}",
+                recent_avg="-",
+                recent_sum=f"{target_date}: {_fmt_metric(target_imp, '회')}",
+                prev_sum=f"{compare_date}: {_fmt_metric(base_imp, '회')}",
+                delta_rate=_fmt_signed_pct(imp_drop),
+                cost=target_cost,
+                clicks=target_clk,
+                conversions=target_purchase,
+                roas=target_roas,
+                period_filter=period_label,
+                item_key=item_key,
+                has_purchase=target_purchase > 0,
+            ))
+
+        target_ctr = _safe_rate(target_clk, target_imp)
+        base_ctr = _safe_rate(base_clk, base_imp)
+        ctr_drop = _drop_rate(target_ctr, base_ctr)
+        click_drop = _drop_rate(target_clk, base_clk)
+        if base_clk >= th["daily_click_base_min"] and target_imp >= base_imp * th["imp_keep_rate"] and ctr_drop >= th["ctr_warning_drop"]:
+            rows.append(_warning_row(
+                severity="warning",
+                warning_type="쇼핑검색",
+                campaign=campaign,
+                adgroup=adgroup,
+                subject=subject,
+                warning_name="CTR 급감",
+                reason=f"노출은 유지됐지만 기준일 CTR이 비교일 대비 {_fmt_signed_pct(ctr_drop)} 하락했습니다.",
+                yesterday_value=f"{target_date}: {_fmt_metric(target_ctr * 100, '%')}",
+                recent_avg="-",
+                recent_sum=f"{target_date}: {_fmt_metric(target_clk, '회 클릭')}",
+                prev_sum=f"{compare_date}: {_fmt_metric(base_clk, '회 클릭')}",
+                delta_rate=_fmt_signed_pct(ctr_drop),
+                cost=target_cost,
+                clicks=target_clk,
+                conversions=target_purchase,
+                roas=target_roas,
+                period_filter=period_label,
+                item_key=item_key,
+                has_purchase=target_purchase > 0,
+            ))
+        if base_clk >= th["daily_click_base_min"] and target_imp >= base_imp * th["imp_keep_rate"] and click_drop >= th["click_danger_drop"]:
+            rows.append(_warning_row(
+                severity="danger",
+                warning_type="쇼핑검색",
+                campaign=campaign,
+                adgroup=adgroup,
+                subject=subject,
+                warning_name="클릭 급감",
+                reason=f"노출은 유지됐지만 기준일 클릭수가 비교일 대비 {_fmt_signed_pct(click_drop)} 감소했습니다.",
+                yesterday_value=f"{target_date}: {_fmt_metric(target_clk, '회')}",
+                recent_avg="-",
+                recent_sum=f"{target_date}: {_fmt_metric(target_clk, '회')}",
+                prev_sum=f"{compare_date}: {_fmt_metric(base_clk, '회')}",
+                delta_rate=_fmt_signed_pct(click_drop),
+                cost=target_cost,
+                clicks=target_clk,
+                conversions=target_purchase,
+                roas=target_roas,
+                period_filter=period_label,
+                item_key=item_key,
+                has_purchase=target_purchase > 0,
+            ))
+    return pd.DataFrame(rows)
+
+
+def _build_shopping_warning_rows(meta: pd.DataFrame, engine, f: dict, compare_config: dict | None = None) -> pd.DataFrame:
+    compare_config = compare_config or {}
+    if compare_config.get("mode") in {"yesterday_vs_day_before", "custom_dates"}:
+        return _build_shopping_pair_warning_rows(meta, engine, f, compare_config)
+
     cids = tuple(f.get("customer_ids") or [])
     if not cids:
         return pd.DataFrame()
@@ -1113,10 +1351,10 @@ def _sort_warning_rows(df: pd.DataFrame) -> pd.DataFrame:
     return out.sort_values(["_item_severity_sort", "_severity_sort", "_cost_sort"], ascending=[True, True, False]).reset_index(drop=True)
 
 
-def _build_all_warning_rows(meta: pd.DataFrame, engine, f: dict) -> pd.DataFrame:
+def _build_all_warning_rows(meta: pd.DataFrame, engine, f: dict, shopping_compare: dict | None = None) -> pd.DataFrame:
     frames = [
         _build_powerlink_warning_rows(meta, engine, f),
-        _build_shopping_warning_rows(meta, engine, f),
+        _build_shopping_warning_rows(meta, engine, f, shopping_compare),
         _build_collection_warning_rows(meta, engine, f),
     ]
     frames = [x for x in frames if x is not None and not x.empty]
@@ -1207,9 +1445,52 @@ def _render_warning_table(df: pd.DataFrame, key_prefix: str, *, fixed_type: str 
     )
 
 
+def _shopping_compare_controls(f: dict) -> dict:
+    max_ready_date = _today_kst() - timedelta(days=1)
+    anchor = min(_ops_anchor_date(f), max_ready_date)
+    yesterday = max_ready_date
+    day_before = yesterday - timedelta(days=1)
+
+    with st.container(border=True):
+        c1, c2, c3 = st.columns([1.5, 1, 1])
+        mode_label = c1.selectbox(
+            "쇼핑검색 비교 기준",
+            ["기본 7일 비교", "어제 vs 엊그제", "직접 날짜 비교"],
+            key="ops_shopping_compare_mode",
+            help="오늘 데이터는 수집 전일 수 있어 비교 대상에서 제외합니다.",
+        )
+
+        target_date = anchor
+        compare_date = anchor - timedelta(days=1)
+        mode = "default"
+        if mode_label == "어제 vs 엊그제":
+            mode = "yesterday_vs_day_before"
+            target_date = yesterday
+            compare_date = day_before
+            c2.date_input("기준일", value=target_date, max_value=max_ready_date, key="ops_shopping_compare_y_target", disabled=True)
+            c3.date_input("비교일", value=compare_date, max_value=max_ready_date, key="ops_shopping_compare_y_base", disabled=True)
+        elif mode_label == "직접 날짜 비교":
+            mode = "custom_dates"
+            target_date = c2.date_input("기준일", value=anchor, max_value=max_ready_date, key="ops_shopping_compare_target")
+            compare_default = min(anchor - timedelta(days=1), max_ready_date)
+            compare_date = c3.date_input("비교일", value=compare_default, max_value=max_ready_date, key="ops_shopping_compare_base")
+            if target_date == compare_date:
+                st.warning("기준일과 비교일이 같습니다. 서로 다른 날짜를 선택해야 경고를 판단합니다.")
+        else:
+            c2.caption(f"전일 기준: {anchor}")
+            c3.caption(f"오늘({ _today_kst() })은 제외")
+
+    return {
+        "mode": mode,
+        "target_date": target_date,
+        "compare_date": compare_date,
+    }
+
+
 def _render_warning_center(meta: pd.DataFrame, engine, f: dict) -> None:
+    shopping_compare = _shopping_compare_controls(f)
     with st.spinner("경고 기준을 계산하고 있습니다."):
-        warning_df = _build_all_warning_rows(meta, engine, f)
+        warning_df = _build_all_warning_rows(meta, engine, f, shopping_compare)
 
     tab_summary, tab_power, tab_shop, tab_ops = st.tabs(["전체 경고 요약", "파워링크 경고", "쇼핑검색 경고", "수집/운영 경고"])
     with tab_summary:

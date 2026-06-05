@@ -52,7 +52,19 @@ DB_URL = os.getenv("DATABASE_URL", "").strip()
 BASE_URL = "https://api.searchad.naver.com"
 TIMEOUT = 60
 DEBUG_DIR = Path(os.getenv("DEBUG_REPORT_DIR", "debug_reports"))
-PLACEMENT_REPORT_TYPES = ["AD", "AD_DETAIL"]
+
+
+def resolve_placement_report_types() -> List[str]:
+    raw = (os.getenv("PLACEMENT_REPORT_TYPES") or "AD").strip()
+    out = []
+    for item in raw.replace(";", ",").split(","):
+        report_type = item.strip().upper()
+        if report_type and report_type not in out:
+            out.append(report_type)
+    return out or ["AD"]
+
+
+PLACEMENT_REPORT_TYPES = resolve_placement_report_types()
 
 thread_local = threading.local()
 

@@ -39,7 +39,7 @@ on:
 
 concurrency:
   group: placement-collector
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   run-placement-collector:
@@ -52,6 +52,7 @@ jobs:
       NAVER_ADS_SECRET: ${{ secrets.NAVER_ADS_SECRET }}
       ACCOUNT_MASTER_FILE: account_master.xlsx
       ACCOUNT_MASTER_XLSX_B64: ${{ secrets.ACCOUNT_MASTER_XLSX_B64 }}
+      PLACEMENT_REPORT_TYPES: AD
 
     steps:
       - name: 코드 체크아웃
@@ -74,7 +75,7 @@ jobs:
           {
             echo "## 09 검색콘텐츠 지면 수집"
             echo
-            echo "- 리포트: AD / AD_DETAIL"
+            echo "- 리포트: ${PLACEMENT_REPORT_TYPES:-AD}"
             echo "- 저장 테이블: fact_adgroup_placement_daily"
             echo "- 스케줄: 매일 KST 05:10, 기본 수집일은 어제"
           } >> "$GITHUB_STEP_SUMMARY"

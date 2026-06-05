@@ -29,11 +29,13 @@ from placement_collector_helpers import (
     build_ad_id_lookup,
     build_adgroup_id_lookup,
     build_adgroup_name_lookup,
+    build_media_placement_lookup,
     build_placement_rows_from_existing_facts,
     build_placement_rows_from_report,
     ensure_placement_tables,
     build_placement_rows_from_stats,
     fetch_stats_placement_breakdown_rows,
+    read_adgroup_metric_split_lookup,
     read_adgroup_purchase_split_lookup,
     replace_placement_fact_range,
 )
@@ -52,6 +54,10 @@ DB_URL = os.getenv("DATABASE_URL", "").strip()
 BASE_URL = "https://api.searchad.naver.com"
 TIMEOUT = 60
 DEBUG_DIR = Path(os.getenv("DEBUG_REPORT_DIR", "debug_reports"))
+MEDIA_LIST_URLS = {
+    "naver_ad_media.xlsx": "https://manage.searchad.naver.com/file/static/naver_ad_media.xlsx",
+    "naver_ad_blog_webtoon.xlsx": "https://manage.searchad.naver.com/file/static/naver_ad_blog_webtoon.xlsx",
+}
 
 
 def resolve_placement_report_types() -> List[str]:
@@ -65,6 +71,7 @@ def resolve_placement_report_types() -> List[str]:
 
 
 PLACEMENT_REPORT_TYPES = resolve_placement_report_types()
+UNKNOWN_MEDIA_AS_CONTENT = str(os.getenv("PLACEMENT_UNKNOWN_MEDIA_AS_CONTENT", "1")).strip().lower() in {"1", "true", "yes", "y"}
 
 thread_local = threading.local()
 
@@ -201,6 +208,29 @@ def cleanup_ghost_reports(customer_id: str) -> None:
     return collector_api.cleanup_ghost_reports(customer_id, request_json, safe_call)
 
 
+def load_media_placement_lookup() -> Dict[str, Dict[str, Any]]:
+    if str(os.getenv("PLACEMENT_MEDIA_LOOKUP", "1")).strip().lower() not in {"1", "true", "yes", "y"}:
+        return {}
+    media_dir = DEBUG_DIR / "media_lists"
+    media_dir.mkdir(parents=True, exist_ok=True)
+    paths: List[str] = []
+    session = requests.Session()
+    for filename, url in MEDIA_LIST_URLS.items():
+        path = media_dir / filename
+        try:
+            response = session.get(url, timeout=60)
+            response.raise_for_status()
+            path.write_bytes(response.content)
+            paths.append(str(path))
+        except Exception as exc:
+            log(f"⚠️ 매체 목록 다운로드 실패: {filename} | {type(exc).__name__}: {exc}")
+            if path.exists():
+                paths.append(str(path))
+    lookup = build_media_placement_lookup(paths)
+    log(f"매체 ID 지면 매핑 로드: {len(lookup)}개 | unknown_as_content={UNKNOWN_MEDIA_AS_CONTENT}")
+    return lookup
+
+
 def fetch_placement_report(customer_id: str, target_date: date, report_type: str) -> pd.DataFrame | None:
     dfs = collector_api.fetch_multiple_stat_reports(
         customer_id,
@@ -229,12 +259,14 @@ def fetch_placement_rows_from_sources(
     customer_id: str,
     target_date: date,
     *,
+    media_lookup: Dict[str, Dict[str, Any]] | None = None,
     allowed_campaign_ids: set[str] | None = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     adgroup_lookup = build_adgroup_id_lookup(engine, customer_id)
     ad_id_lookup = build_ad_id_lookup(engine, customer_id)
     adgroup_name_lookup = build_adgroup_name_lookup(engine, customer_id)
     purchase_lookup = read_adgroup_purchase_split_lookup(engine, customer_id, target_date)
+    metric_lookup = read_adgroup_metric_split_lookup(engine, customer_id, target_date)
     report_attempts: List[Dict[str, Any]] = []
     best_rows: List[Dict[str, Any]] = []
     best_meta: Dict[str, Any] = {}
@@ -250,6 +282,9 @@ def fetch_placement_rows_from_sources(
             adgroup_lookup=adgroup_lookup,
             adgroup_name_lookup=adgroup_name_lookup,
             purchase_split_lookup=purchase_lookup,
+            metric_split_lookup=metric_lookup,
+            media_lookup=media_lookup,
+            unknown_media_as_content=UNKNOWN_MEDIA_AS_CONTENT,
             allowed_campaign_ids=allowed_campaign_ids,
         )
         report_attempts.append(report_meta)
@@ -458,7 +493,7 @@ def read_saved_placement_summary(engine, target_date: date, customer_ids: List[s
     }
 
 
-def collect_account(engine, account: Dict[str, str], target_date: date, skip_dim: bool = False) -> Dict[str, Any]:
+def collect_account(engine, account: Dict[str, str], target_date: date, skip_dim: bool = False, media_lookup: Dict[str, Dict[str, Any]] | None = None) -> Dict[str, Any]:
     customer_id = str(account.get("id") or "").strip()
     account_name = str(account.get("name") or customer_id).strip()
     result: Dict[str, Any] = {
@@ -486,6 +521,7 @@ def collect_account(engine, account: Dict[str, str], target_date: date, skip_dim
             engine,
             customer_id,
             target_date,
+            media_lookup=media_lookup,
             allowed_campaign_ids=campaign_ids,
         )
         counts = placement_type_counts(rows)
@@ -560,9 +596,10 @@ def main() -> None:
         die("수집할 네이버 검색광고 계정이 없습니다.")
 
     log(f"검색/콘텐츠 지면 수집 대상: {len(accounts)}개 / 날짜={target_date} / workers={args.workers}")
+    media_lookup = load_media_placement_lookup()
     results: List[Dict[str, Any]] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, int(args.workers or 1))) as executor:
-        futures = [executor.submit(collect_account, engine, account, target_date, args.skip_dim) for account in accounts]
+        futures = [executor.submit(collect_account, engine, account, target_date, args.skip_dim, media_lookup) for account in accounts]
         for future in concurrent.futures.as_completed(futures):
             results.append(future.result())
 

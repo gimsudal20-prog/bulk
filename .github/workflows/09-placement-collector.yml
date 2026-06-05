@@ -53,6 +53,8 @@ jobs:
       ACCOUNT_MASTER_FILE: account_master.xlsx
       ACCOUNT_MASTER_XLSX_B64: ${{ secrets.ACCOUNT_MASTER_XLSX_B64 }}
       PLACEMENT_REPORT_TYPES: AD
+      PLACEMENT_MEDIA_LOOKUP: "1"
+      PLACEMENT_UNKNOWN_MEDIA_AS_CONTENT: "1"
 
     steps:
       - name: 코드 체크아웃
@@ -104,5 +106,6 @@ jobs:
             debug_reports/*placement*.json
             debug_reports/*_AD_*.txt
             debug_reports/*_AD_DETAIL_*.txt
+            debug_reports/media_lists/*.xlsx
           if-no-files-found: ignore
           retention-days: 7

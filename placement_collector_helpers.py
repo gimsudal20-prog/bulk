@@ -54,6 +54,27 @@ PURCHASE_CONV_HEADER_CANDIDATES = ["구매완료 전환수", "구매완료전환
 PURCHASE_SALES_HEADER_CANDIDATES = ["구매완료 전환매출액(원)", "구매완료전환매출액", "purchase sales"]
 TOTAL_ROAS_HEADER_CANDIDATES = ["총 광고수익률(%)", "총광고수익률", "roas"]
 PURCHASE_ROAS_HEADER_CANDIDATES = ["구매완료 광고수익률(%)", "구매완료광고수익률", "purchase roas"]
+MEDIA_LIST_HEADER_MEDIA_ID = "매체ID"
+MEDIA_LIST_HEADER_MEDIA_NAME = "매체이름"
+MEDIA_LIST_HEADER_MEDIA_URL = "매체URL"
+MEDIA_LIST_HEADER_SEARCH = "검색영역포함"
+MEDIA_LIST_HEADER_CONTENT = "콘텐츠영역포함"
+MEDIA_LIST_HEADER_SEARCH_PORTAL = "검색포탈"
+AD_FIXED_COLS = {
+    "dt": 0,
+    "customer_id": 1,
+    "campaign_id": 2,
+    "adgroup_id": 3,
+    "keyword_id": 4,
+    "ad_id": 5,
+    "business_channel_id": 6,
+    "media_id": 7,
+    "device": 8,
+    "imp": 9,
+    "clk": 10,
+    "cost": 11,
+    "rank": 12,
+}
 STAT_ID_ALIASES = ["id", "nccAdgroupId", "adgroupId", "adgroup_id", "광고그룹ID", "광고그룹id"]
 STAT_METRIC_ALIASES = {
     "imp": ["impCnt", "impressions", "impression", "imp", "노출수"],
@@ -257,6 +278,91 @@ def normalize_placement_type(value: Any) -> str:
 
 def _normalize_name(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip())
+
+
+def _is_o(value: Any) -> bool:
+    return str(value or "").strip().upper() == "O"
+
+
+def classify_media_list_placement(
+    media_name: Any,
+    media_url: Any,
+    *,
+    search_included: bool,
+    content_included: bool,
+    search_portal: bool,
+) -> str:
+    if content_included and not search_included:
+        return "CONTENT"
+    if search_included and not content_included:
+        return "SEARCH"
+    if content_included and search_included:
+        text = f"{media_name or ''} {media_url or ''}".lower()
+        content_words = ["블로그", "카페", "지식", "웹툰", "밴드", "포스트", "blog", "cafe", "kin", "webtoon", "band", "in.naver"]
+        search_words = ["검색", "search", "zum.com", "daum.net"]
+        if any(word in text for word in content_words):
+            return "CONTENT"
+        if search_portal or any(word in text for word in search_words):
+            return "SEARCH"
+        return "CONTENT"
+    return "UNKNOWN"
+
+
+def build_media_placement_lookup(media_list_paths: List[str]) -> Dict[str, Dict[str, Any]]:
+    try:
+        from openpyxl import load_workbook
+    except Exception:
+        return {}
+
+    lookup: Dict[str, Dict[str, Any]] = {}
+    for path in media_list_paths or []:
+        if not path:
+            continue
+        try:
+            workbook = load_workbook(path, read_only=True, data_only=True)
+        except Exception:
+            continue
+        for sheet in workbook.worksheets:
+            try:
+                sheet.reset_dimensions()
+            except Exception:
+                pass
+            headers: List[str] | None = None
+            for row in sheet.iter_rows(values_only=True):
+                values = list(row)
+                normalized = [str(x or "").strip() for x in values]
+                if headers is None:
+                    if MEDIA_LIST_HEADER_MEDIA_ID in normalized:
+                        headers = normalized
+                    continue
+                row_map = {
+                    headers[idx]: values[idx]
+                    for idx in range(min(len(headers), len(values)))
+                    if headers[idx]
+                }
+                media_id = str(row_map.get(MEDIA_LIST_HEADER_MEDIA_ID) or "").strip()
+                if not media_id or media_id == MEDIA_LIST_HEADER_MEDIA_ID:
+                    continue
+                search_included = _is_o(row_map.get(MEDIA_LIST_HEADER_SEARCH))
+                content_included = _is_o(row_map.get(MEDIA_LIST_HEADER_CONTENT))
+                search_portal = _is_o(row_map.get(MEDIA_LIST_HEADER_SEARCH_PORTAL))
+                media_name = str(row_map.get(MEDIA_LIST_HEADER_MEDIA_NAME) or "").strip()
+                media_url = str(row_map.get(MEDIA_LIST_HEADER_MEDIA_URL) or "").strip()
+                lookup[media_id] = {
+                    "placement_type": classify_media_list_placement(
+                        media_name,
+                        media_url,
+                        search_included=search_included,
+                        content_included=content_included,
+                        search_portal=search_portal,
+                    ),
+                    "media_name": media_name,
+                    "media_url": media_url,
+                    "search_included": search_included,
+                    "content_included": content_included,
+                    "search_portal": search_portal,
+                }
+    return lookup
 
 
 def ensure_placement_tables(engine: Engine):
@@ -512,6 +618,72 @@ def _read_grouped_fact_rows(
     except Exception:
         return []
     return [dict(row) for row in rows or []]
+
+
+def read_adgroup_metric_split_lookup(engine: Engine, customer_id: str, target_date: date) -> Dict[str, Dict[str, float]]:
+    out: Dict[str, Dict[str, float]] = {}
+
+    def add_row(row: Dict[str, Any], *, fill_only: bool = False, shopping_only: bool | None = None) -> None:
+        adgroup_id = str(row.get("adgroup_id") or "").strip()
+        campaign_type = str(row.get("campaign_type") or "").strip()
+        if not adgroup_id:
+            return
+        is_shop = _is_shopping_campaign_type(campaign_type)
+        if shopping_only is True and not is_shop:
+            return
+        if shopping_only is False and is_shop:
+            return
+        if fill_only and adgroup_id in out:
+            return
+        out[adgroup_id] = {
+            "conv": float(row.get("conv") or 0.0),
+            "sales": float(row.get("sales") or 0.0),
+            "purchase_conv": float(row.get("purchase_conv") or 0.0),
+            "purchase_sales": float(row.get("purchase_sales") or 0.0),
+        }
+
+    adgroup_cols = _table_columns(engine, "fact_adgroup_daily")
+    if {"customer_id", "dt", "adgroup_id"}.issubset(adgroup_cols):
+        for row in _read_grouped_fact_rows(
+            engine,
+            table_name="fact_adgroup_daily",
+            id_join_sql="",
+            id_alias="f",
+            customer_id=customer_id,
+            target_date=target_date,
+        ):
+            add_row(row)
+
+    kw_cols = _table_columns(engine, "fact_keyword_daily")
+    dim_kw_cols = _table_columns(engine, "dim_keyword")
+    if {"customer_id", "dt", "keyword_id"}.issubset(kw_cols) and {"customer_id", "keyword_id", "adgroup_id"}.issubset(dim_kw_cols):
+        id_join = "JOIN dim_keyword k ON k.customer_id::text = f.customer_id::text AND k.keyword_id::text = f.keyword_id::text"
+        for row in _read_grouped_fact_rows(
+            engine,
+            table_name="fact_keyword_daily",
+            id_join_sql=id_join,
+            id_alias="k",
+            customer_id=customer_id,
+            target_date=target_date,
+        ):
+            add_row(row, fill_only=True, shopping_only=False)
+
+    ad_cols = _table_columns(engine, "fact_ad_daily")
+    dim_ad_cols = _table_columns(engine, "dim_ad")
+    if {"customer_id", "dt", "ad_id"}.issubset(ad_cols) and {"customer_id", "ad_id", "adgroup_id"}.issubset(dim_ad_cols):
+        id_join = "JOIN dim_ad d ON d.customer_id::text = f.customer_id::text AND d.ad_id::text = f.ad_id::text"
+        for row in _read_grouped_fact_rows(
+            engine,
+            table_name="fact_ad_daily",
+            id_join_sql=id_join,
+            id_alias="d",
+            customer_id=customer_id,
+            target_date=target_date,
+        ):
+            add_row(row, fill_only=True, shopping_only=True)
+            add_row(row, fill_only=True, shopping_only=False)
+
+    return out
 
 
 def build_placement_rows_from_existing_facts(
@@ -910,6 +1082,169 @@ def _top_values(counter: Dict[str, int], limit: int = 20) -> List[Dict[str, Any]
     ]
 
 
+def _apply_metric_split(
+    rows: List[Dict[str, Any]],
+    metric_split_lookup: Dict[str, Dict[str, float]] | None,
+    *,
+    fill_total: bool,
+    fill_purchase: bool,
+) -> None:
+    metric_split_lookup = metric_split_lookup or {}
+    if not rows or not metric_split_lookup:
+        return
+    cost_by_adgroup: Dict[str, int] = {}
+    for rec in rows:
+        adgroup_id = str(rec.get("adgroup_id") or "").strip()
+        cost_by_adgroup[adgroup_id] = cost_by_adgroup.get(adgroup_id, 0) + int(rec.get("cost") or 0)
+    for rec in rows:
+        adgroup_id = str(rec.get("adgroup_id") or "").strip()
+        split = metric_split_lookup.get(adgroup_id) or {}
+        total_cost = cost_by_adgroup.get(adgroup_id, 0)
+        ratio = (float(rec.get("cost") or 0) / float(total_cost)) if total_cost > 0 else 0.0
+        if fill_total:
+            rec["conv"] = round(float(split.get("conv", 0.0) or 0.0) * ratio, 6)
+            rec["sales"] = int(round(float(split.get("sales", 0.0) or 0.0) * ratio))
+        if fill_purchase:
+            rec["purchase_conv"] = round(float(split.get("purchase_conv", 0.0) or 0.0) * ratio, 6)
+            rec["purchase_sales"] = int(round(float(split.get("purchase_sales", 0.0) or 0.0) * ratio))
+
+
+def build_placement_rows_from_ad_fixed_report(
+    df: pd.DataFrame,
+    *,
+    customer_id: str,
+    target_date: date,
+    media_lookup: Dict[str, Dict[str, Any]] | None = None,
+    metric_split_lookup: Dict[str, Dict[str, float]] | None = None,
+    allowed_campaign_ids: set[str] | None = None,
+    unknown_media_as_content: bool = True,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    meta: Dict[str, Any] = {
+        "status": "empty",
+        "parser": PLACEMENT_PARSER_VERSION,
+        "source_report": "AD",
+        "mode": "ad_fixed",
+        "raw_rows": 0,
+        "parsed_rows": 0,
+        "placement_type_counts": {},
+        "media_lookup_rows": len(media_lookup or {}),
+        "media_values": [],
+        "unknown_media_values": [],
+        "rejected": {
+            "short_row": 0,
+            "out_of_scope": 0,
+            "missing_id": 0,
+            "missing_placement": 0,
+            "zero_metric": 0,
+        },
+    }
+    if df is None or df.empty:
+        return [], meta
+
+    media_lookup = media_lookup or {}
+    allowed = {str(x).strip() for x in (allowed_campaign_ids or set()) if str(x).strip()} or None
+    grouped: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
+    raw_media_counts: Dict[str, int] = {}
+    unknown_media_counts: Dict[str, int] = {}
+    max_idx = max(AD_FIXED_COLS.values())
+
+    for _, row in df.reset_index(drop=True).iterrows():
+        meta["raw_rows"] += 1
+        if len(row) <= max_idx:
+            meta["rejected"]["short_row"] += 1
+            continue
+        campaign_id = _cell(row, AD_FIXED_COLS["campaign_id"])
+        adgroup_id = _cell(row, AD_FIXED_COLS["adgroup_id"])
+        if not campaign_id or not adgroup_id or campaign_id == "-" or adgroup_id == "-":
+            meta["rejected"]["missing_id"] += 1
+            continue
+        if allowed and campaign_id not in allowed:
+            meta["rejected"]["out_of_scope"] += 1
+            continue
+
+        media_id = _cell(row, AD_FIXED_COLS["media_id"])
+        media_info = media_lookup.get(media_id) or {}
+        placement_type = str(media_info.get("placement_type") or "").strip()
+        if not placement_type or placement_type == "UNKNOWN":
+            if unknown_media_as_content and media_id:
+                placement_type = "CONTENT"
+                unknown_media_counts[media_id] = unknown_media_counts.get(media_id, 0) + 1
+            else:
+                meta["rejected"]["missing_placement"] += 1
+                continue
+        if placement_type not in {"SEARCH", "CONTENT"}:
+            meta["rejected"]["missing_placement"] += 1
+            continue
+        if media_id:
+            raw_media_counts[media_id] = raw_media_counts.get(media_id, 0) + 1
+
+        imp = _safe_int(_cell(row, AD_FIXED_COLS["imp"]))
+        clk = _safe_int(_cell(row, AD_FIXED_COLS["clk"]))
+        cost = _safe_int(_cell(row, AD_FIXED_COLS["cost"]))
+        if imp == 0 and clk == 0 and cost == 0:
+            meta["rejected"]["zero_metric"] += 1
+            continue
+
+        row_dt = _parse_dt(_cell(row, AD_FIXED_COLS["dt"]), target_date)
+        device_name = normalize_device_name(_cell(row, AD_FIXED_COLS["device"])) or "UNSEGMENTED"
+        campaign_type = ""
+        if "-01-" in campaign_id:
+            campaign_type = "WEB_SITE"
+        elif "-02-" in campaign_id:
+            campaign_type = "SHOPPING"
+        key = (row_dt, str(customer_id), campaign_id, adgroup_id, device_name, placement_type)
+        rec = grouped.setdefault(key, {
+            "dt": row_dt,
+            "customer_id": str(customer_id),
+            "campaign_id": campaign_id,
+            "adgroup_id": adgroup_id,
+            "campaign_type": campaign_type,
+            "device_name": device_name,
+            "placement_type": placement_type,
+            "imp": 0,
+            "clk": 0,
+            "cost": 0,
+            "conv": 0.0,
+            "sales": 0,
+            "purchase_conv": 0.0,
+            "purchase_sales": 0,
+            "roas": 0.0,
+            "purchase_roas": 0.0,
+            "data_source": "REPORT_AD_MEDIA_CODE" if media_info else "REPORT_AD_MEDIA_CODE_UNMAPPED_CONTENT",
+            "source_report": "AD",
+        })
+        rec["imp"] += imp
+        rec["clk"] += clk
+        rec["cost"] += cost
+
+    rows = list(grouped.values())
+    _apply_metric_split(rows, metric_split_lookup, fill_total=True, fill_purchase=True)
+    for rec in rows:
+        rec["roas"] = round((float(rec["sales"] or 0) / float(rec["cost"] or 0)) * 100, 4) if rec.get("cost") else 0.0
+        rec["purchase_roas"] = round((float(rec["purchase_sales"] or 0) / float(rec["cost"] or 0)) * 100, 4) if rec.get("cost") else 0.0
+
+    counts = _placement_type_counts(rows)
+    meta["parsed_rows"] = int(len(rows))
+    meta["placement_type_counts"] = counts
+    meta["media_values"] = [
+        {
+            **item,
+            "placement_type": str((media_lookup.get(item["value"]) or {}).get("placement_type") or ("CONTENT" if item["value"] in unknown_media_counts else "UNKNOWN")),
+            "media_name": str((media_lookup.get(item["value"]) or {}).get("media_name") or ""),
+        }
+        for item in _top_values(raw_media_counts)
+    ]
+    meta["unknown_media_values"] = _top_values(unknown_media_counts)
+    meta["metric_split_rows"] = len(metric_split_lookup or {})
+    if rows and int(counts.get("CONTENT", 0) or 0) > 0:
+        meta["status"] = "ok"
+    elif rows:
+        meta["status"] = "no_content_rows"
+    else:
+        meta["status"] = "no_mapped_rows"
+    return rows, meta
+
+
 def build_placement_rows_from_report(
     df: pd.DataFrame | None,
     *,
@@ -920,6 +1255,9 @@ def build_placement_rows_from_report(
     adgroup_lookup: Dict[str, Dict[str, str]] | None = None,
     adgroup_name_lookup: Dict[Tuple[str, str], Dict[str, str] | None] | None = None,
     purchase_split_lookup: Dict[str, Dict[str, float]] | None = None,
+    metric_split_lookup: Dict[str, Dict[str, float]] | None = None,
+    media_lookup: Dict[str, Dict[str, Any]] | None = None,
+    unknown_media_as_content: bool = True,
     allowed_campaign_ids: set[str] | None = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     meta: Dict[str, Any] = {
@@ -946,6 +1284,16 @@ def build_placement_rows_from_report(
     raw_df = df.reset_index(drop=True).copy()
     header_idx = _detect_report_header_idx(raw_df)
     if header_idx == -1:
+        if str(source_report or "").upper() == "AD":
+            return build_placement_rows_from_ad_fixed_report(
+                raw_df,
+                customer_id=customer_id,
+                target_date=target_date,
+                media_lookup=media_lookup,
+                metric_split_lookup=metric_split_lookup or purchase_split_lookup,
+                allowed_campaign_ids=allowed_campaign_ids,
+                unknown_media_as_content=unknown_media_as_content,
+            )
         meta["status"] = "header_missing"
         meta["sample_rows"] = [
             [str(x) for x in raw_df.iloc[i].fillna("").tolist()[:20]]
@@ -1007,6 +1355,8 @@ def build_placement_rows_from_report(
         if raw_placement:
             raw_placement_counts[raw_placement] = raw_placement_counts.get(raw_placement, 0) + 1
         placement_type = normalize_placement_type(raw_placement)
+        if placement_type not in {"SEARCH", "CONTENT"} and media_lookup and raw_placement in media_lookup:
+            placement_type = str((media_lookup.get(raw_placement) or {}).get("placement_type") or "UNKNOWN")
         if placement_type not in {"SEARCH", "CONTENT"}:
             meta["rejected"]["missing_placement"] += 1
             continue
@@ -1091,16 +1441,9 @@ def build_placement_rows_from_report(
 
     rows = list(grouped.values())
     direct_purchase = any(float(r.get("purchase_conv") or 0.0) or int(r.get("purchase_sales") or 0) for r in rows)
-    cost_by_adgroup: Dict[str, int] = {}
+    direct_total = any(float(r.get("conv") or 0.0) or int(r.get("sales") or 0) for r in rows)
+    _apply_metric_split(rows, metric_split_lookup or purchase_split_lookup, fill_total=not direct_total, fill_purchase=not direct_purchase)
     for rec in rows:
-        cost_by_adgroup[rec["adgroup_id"]] = cost_by_adgroup.get(rec["adgroup_id"], 0) + int(rec.get("cost") or 0)
-    for rec in rows:
-        if not direct_purchase:
-            split = purchase_split_lookup.get(str(rec.get("adgroup_id") or "").strip()) or {}
-            total_cost = cost_by_adgroup.get(str(rec.get("adgroup_id") or "").strip(), 0)
-            ratio = (float(rec.get("cost") or 0) / float(total_cost)) if total_cost > 0 else 0.0
-            rec["purchase_conv"] = round(float(split.get("purchase_conv", 0.0) or 0.0) * ratio, 6)
-            rec["purchase_sales"] = int(round(float(split.get("purchase_sales", 0.0) or 0.0) * ratio))
         rec["roas"] = round((float(rec["sales"] or 0) / float(rec["cost"] or 0)) * 100, 4) if rec.get("cost") else 0.0
         rec["purchase_roas"] = round((float(rec["purchase_sales"] or 0) / float(rec["cost"] or 0)) * 100, 4) if rec.get("cost") else 0.0
 
@@ -1108,7 +1451,8 @@ def build_placement_rows_from_report(
     meta["parsed_rows"] = int(len(rows))
     meta["placement_type_counts"] = counts
     meta["placement_values"] = _top_values(raw_placement_counts)
-    meta["purchase_split_rows"] = len(purchase_split_lookup)
+    meta["metric_split_rows"] = len(metric_split_lookup or {})
+    meta["purchase_split_rows"] = len(purchase_split_lookup or {})
     if rows and int(counts.get("CONTENT", 0) or 0) > 0:
         meta["status"] = "ok"
     elif rows:

@@ -25,9 +25,11 @@ from sqlalchemy import text
 import collector_api
 import collector_db
 from placement_collector_helpers import (
-    build_adgroup_name_lookup,
+    build_adgroup_id_lookup,
     ensure_placement_tables,
-    parse_da_raw_ssa_placement_report,
+    build_placement_rows_from_stats,
+    fetch_stats_placement_breakdown_rows,
+    read_adgroup_purchase_split_lookup,
     replace_placement_fact_range,
 )
 
@@ -183,6 +185,48 @@ def fetch_placement_report(customer_id: str, target_date: date) -> pd.DataFrame 
     return dfs.get("DA_RAW_SSA")
 
 
+def fetch_placement_rows_from_stats(
+    engine,
+    customer_id: str,
+    target_date: date,
+    *,
+    allowed_campaign_ids: set[str] | None = None,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    adgroup_lookup = build_adgroup_id_lookup(engine, customer_id)
+    adgroup_ids = sorted(adgroup_lookup.keys())
+    if allowed_campaign_ids:
+        allowed = {str(x).strip() for x in allowed_campaign_ids if str(x).strip()}
+        adgroup_ids = [
+            gid for gid in adgroup_ids
+            if str((adgroup_lookup.get(gid) or {}).get("campaign_id") or "").strip() in allowed
+        ]
+    raw_rows, fetch_meta = fetch_stats_placement_breakdown_rows(
+        customer_id,
+        adgroup_ids,
+        target_date,
+        request_json_fn=request_json,
+        log_fn=log,
+    )
+    purchase_lookup = read_adgroup_purchase_split_lookup(engine, customer_id, target_date)
+    rows, parse_meta = build_placement_rows_from_stats(
+        raw_rows,
+        customer_id=customer_id,
+        target_date=target_date,
+        adgroup_lookup=adgroup_lookup,
+        purchase_split_lookup=purchase_lookup,
+        selected_breakdown=str(fetch_meta.get("selected_breakdown") or ""),
+        allowed_campaign_ids=allowed_campaign_ids,
+    )
+    meta = {
+        "status": "ok" if rows else str(fetch_meta.get("status") or parse_meta.get("status") or "no_rows"),
+        "source": "stats_breakdown",
+        "fetch": fetch_meta,
+        "parse": parse_meta,
+        "adgroup_scope": len(adgroup_ids),
+    }
+    return rows, meta
+
+
 def list_campaigns(customer_id: str) -> List[dict]:
     ok, data = safe_call("GET", "/ncc/campaigns", customer_id)
     return data if ok and isinstance(data, list) else []
@@ -280,23 +324,10 @@ def collect_account(engine, account: Dict[str, str], target_date: date, skip_dim
             result["adgroup_dim_rows"] = g_cnt
             log(f"[{account_name}] 구조 동기화 완료: 캠페인 {c_cnt} / 광고그룹 {g_cnt}")
 
-        df = fetch_placement_report(customer_id, target_date)
-        if df is None:
-            result["status"] = "report_error"
-            result["report_status"] = "missing"
-            return result
-        if getattr(df, "empty", False):
-            replace_placement_fact_range(engine, [], customer_id, target_date)
-            result["status"] = "ok"
-            result["report_status"] = "empty"
-            return result
-
-        lookup = build_adgroup_name_lookup(engine, customer_id)
-        rows, meta = parse_da_raw_ssa_placement_report(
-            df,
-            customer_id=customer_id,
-            target_date=target_date,
-            adgroup_lookup=lookup,
+        rows, meta = fetch_placement_rows_from_stats(
+            engine,
+            customer_id,
+            target_date,
             allowed_campaign_ids=campaign_ids,
         )
         replace_placement_fact_range(engine, rows, customer_id, target_date)

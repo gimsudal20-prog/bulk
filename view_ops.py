@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import io
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -1417,6 +1418,46 @@ def _apply_warning_filters(df: pd.DataFrame, key_prefix: str, *, fixed_type: str
     return _sort_warning_rows(filtered)
 
 
+def _warning_export_frame(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame(columns=WARNING_DISPLAY_COLS)
+    return df[[c for c in WARNING_DISPLAY_COLS if c in df.columns]].copy()
+
+
+def _warning_xlsx_bytes(df: pd.DataFrame, sheet_name: str = "warnings") -> bytes:
+    buffer = io.BytesIO()
+    safe_sheet = str(sheet_name or "warnings")[:31] or "warnings"
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name=safe_sheet)
+    return buffer.getvalue()
+
+
+def _render_warning_downloads(df: pd.DataFrame, key_prefix: str, label: str) -> None:
+    export_df = _warning_export_frame(df)
+    if export_df.empty:
+        return
+    today = _today_kst().strftime("%Y%m%d")
+    safe_label = str(label or "전체").replace("/", "_").replace(" ", "_")
+    filename_prefix = f"검색광고_경고_{safe_label}_{today}"
+    c_csv, c_xlsx = st.columns([1, 1])
+    c_csv.download_button(
+        "CSV 다운로드",
+        data=export_df.to_csv(index=False).encode("utf-8-sig"),
+        file_name=f"{filename_prefix}.csv",
+        mime="text/csv",
+        key=f"{key_prefix}_download_csv_{len(export_df)}_{len(export_df.columns)}",
+        use_container_width=True,
+    )
+    c_xlsx.download_button(
+        "엑셀 다운로드",
+        data=_warning_xlsx_bytes(export_df, sheet_name=safe_label),
+        file_name=f"{filename_prefix}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key=f"{key_prefix}_download_xlsx_{len(export_df)}_{len(export_df.columns)}",
+        use_container_width=True,
+    )
+
+
 def _render_warning_table(df: pd.DataFrame, key_prefix: str, *, fixed_type: str = "") -> None:
     filtered = _apply_warning_filters(df, key_prefix, fixed_type=fixed_type)
     if filtered.empty:
@@ -1429,7 +1470,9 @@ def _render_warning_table(df: pd.DataFrame, key_prefix: str, *, fixed_type: str 
             {"label": "Warning", "value": f"{int((filtered['심각도'] == 'warning').sum()):,}개", "sub": "점검 필요", "accent": "amber"},
         ]
     )
-    display = filtered[[c for c in WARNING_DISPLAY_COLS if c in filtered.columns]].head(700).copy()
+    label = fixed_type or "전체"
+    _render_warning_downloads(filtered, key_prefix, label)
+    display = _warning_export_frame(filtered).head(700).copy()
     st.dataframe(
         display,
         key=f"{key_prefix}_table",

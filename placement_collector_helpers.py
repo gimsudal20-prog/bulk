@@ -15,7 +15,7 @@ from device_collector_helpers import normalize_device_name
 from targeting_collector_helpers import _flatten_stat_rows
 
 
-PLACEMENT_PARSER_VERSION = "placement_v20260605_stats_breakdown1"
+PLACEMENT_PARSER_VERSION = "placement_v20260605_existing_fact_fallback1"
 PLACEMENT_TABLE = "fact_adgroup_placement_daily"
 PLACEMENT_BREAKDOWN_CANDIDATES = [
     "mediaTp",
@@ -402,6 +402,194 @@ def read_adgroup_purchase_split_lookup(engine: Engine, customer_id: str, target_
             "purchase_sales": float(row[2] or 0.0),
         }
     return out
+
+
+def _is_shopping_campaign_type(value: Any) -> bool:
+    raw = str(value or "").strip()
+    return "쇼핑" in raw or raw.upper() in {"SHOPPING", "SSA", "SHOPPING_SEARCH"}
+
+
+def _read_grouped_fact_rows(
+    engine: Engine,
+    *,
+    table_name: str,
+    id_join_sql: str,
+    id_alias: str,
+    customer_id: str,
+    target_date: date,
+) -> List[Dict[str, Any]]:
+    fact_cols = _table_columns(engine, table_name)
+    if not {"customer_id", "dt"}.issubset(fact_cols):
+        return []
+    imp_expr = _coalesce_existing(fact_cols, ["imp"])
+    clk_expr = _coalesce_existing(fact_cols, ["clk"])
+    cost_expr = _coalesce_existing(fact_cols, ["cost"])
+    conv_expr = _coalesce_existing(fact_cols, ["conv", "total_conv"])
+    sales_expr = _coalesce_existing(fact_cols, ["sales", "total_sales"])
+    purchase_conv_expr = _coalesce_existing(fact_cols, ["purchase_conv", "primary_conv"])
+    purchase_sales_expr = _coalesce_existing(fact_cols, ["purchase_sales", "primary_sales"])
+    avg_rnk_expr = _coalesce_existing(fact_cols, ["avg_rnk"])
+    sql = f"""
+    SELECT
+        COALESCE({id_alias}.adgroup_id, '') AS adgroup_id,
+        COALESCE(c.campaign_id, a.campaign_id, '') AS campaign_id,
+        COALESCE(c.campaign_tp, '') AS campaign_type,
+        SUM({imp_expr}) AS imp,
+        SUM({clk_expr}) AS clk,
+        SUM({cost_expr}) AS cost,
+        SUM({conv_expr}) AS conv,
+        SUM({sales_expr}) AS sales,
+        SUM({purchase_conv_expr}) AS purchase_conv,
+        SUM({purchase_sales_expr}) AS purchase_sales,
+        AVG(NULLIF({avg_rnk_expr}, 0)) AS avg_rnk
+    FROM {table_name} f
+    {id_join_sql}
+    LEFT JOIN dim_adgroup a
+      ON a.customer_id::text = f.customer_id::text
+     AND a.adgroup_id::text = {id_alias}.adgroup_id::text
+    LEFT JOIN dim_campaign c
+      ON c.customer_id::text = f.customer_id::text
+     AND c.campaign_id::text = a.campaign_id::text
+    WHERE f.customer_id::text = :cid
+      AND f.dt = :dt
+    GROUP BY
+        COALESCE({id_alias}.adgroup_id, ''),
+        COALESCE(c.campaign_id, a.campaign_id, ''),
+        COALESCE(c.campaign_tp, '')
+    """
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text(sql), {"cid": str(customer_id), "dt": target_date}).mappings().all()
+    except Exception:
+        return []
+    return [dict(row) for row in rows or []]
+
+
+def build_placement_rows_from_existing_facts(
+    engine: Engine,
+    customer_id: str,
+    target_date: date,
+    *,
+    allowed_campaign_ids: set[str] | None = None,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Fallback placement rows from already-collected daily facts.
+
+    The SearchAd API spec does not expose a search/content placement breakdown.
+    Keep the dashboard populated by mapping existing adgroup-level totals to
+    SEARCH, while marking the source clearly for later audit.
+    """
+    allowed = {str(x).strip() for x in (allowed_campaign_ids or set()) if str(x).strip()} or None
+    grouped: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
+    source_counts = {"fact_adgroup_daily": 0, "fact_keyword_daily": 0, "fact_ad_daily": 0}
+
+    def add_row(row: Dict[str, Any], source: str, *, shopping_only: bool | None = None, fill_only: bool = False) -> None:
+        adgroup_id = str(row.get("adgroup_id") or "").strip()
+        campaign_id = str(row.get("campaign_id") or "").strip()
+        campaign_type = str(row.get("campaign_type") or "").strip()
+        if not adgroup_id or not campaign_id:
+            return
+        if allowed and campaign_id not in allowed:
+            return
+        is_shop = _is_shopping_campaign_type(campaign_type)
+        if shopping_only is True and not is_shop:
+            return
+        if shopping_only is False and is_shop:
+            return
+        imp = int(float(row.get("imp") or 0))
+        clk = int(float(row.get("clk") or 0))
+        cost = int(float(row.get("cost") or 0))
+        conv = float(row.get("conv") or 0.0)
+        sales = int(float(row.get("sales") or 0))
+        purchase_conv = float(row.get("purchase_conv") or 0.0)
+        purchase_sales = int(float(row.get("purchase_sales") or 0))
+        if imp == 0 and clk == 0 and cost == 0 and conv == 0 and sales == 0 and purchase_conv == 0 and purchase_sales == 0:
+            return
+        key = (target_date, str(customer_id), campaign_id, adgroup_id, "UNSEGMENTED", "SEARCH")
+        if fill_only and key in grouped:
+            return
+        rec = grouped.setdefault(key, {
+            "dt": target_date,
+            "customer_id": str(customer_id),
+            "campaign_id": campaign_id,
+            "adgroup_id": adgroup_id,
+            "campaign_type": campaign_type,
+            "device_name": "UNSEGMENTED",
+            "placement_type": "SEARCH",
+            "imp": 0,
+            "clk": 0,
+            "cost": 0,
+            "conv": 0.0,
+            "sales": 0,
+            "purchase_conv": 0.0,
+            "purchase_sales": 0,
+            "roas": 0.0,
+            "purchase_roas": 0.0,
+            "data_source": f"FALLBACK_{source}_SEARCH",
+            "source_report": "EXISTING_FACTS",
+        })
+        rec["imp"] += imp
+        rec["clk"] += clk
+        rec["cost"] += cost
+        rec["conv"] += conv
+        rec["sales"] += sales
+        rec["purchase_conv"] += purchase_conv
+        rec["purchase_sales"] += purchase_sales
+        source_counts[source] = source_counts.get(source, 0) + 1
+
+    adgroup_cols = _table_columns(engine, "fact_adgroup_daily")
+    if {"customer_id", "dt", "adgroup_id"}.issubset(adgroup_cols):
+        for row in _read_grouped_fact_rows(
+            engine,
+            table_name="fact_adgroup_daily",
+            id_join_sql="",
+            id_alias="f",
+            customer_id=customer_id,
+            target_date=target_date,
+        ):
+            add_row(row, "fact_adgroup_daily")
+
+    kw_cols = _table_columns(engine, "fact_keyword_daily")
+    dim_kw_cols = _table_columns(engine, "dim_keyword")
+    if {"customer_id", "dt", "keyword_id"}.issubset(kw_cols) and {"customer_id", "keyword_id", "adgroup_id"}.issubset(dim_kw_cols):
+        id_join = "JOIN dim_keyword k ON k.customer_id::text = f.customer_id::text AND k.keyword_id::text = f.keyword_id::text"
+        for row in _read_grouped_fact_rows(
+            engine,
+            table_name="fact_keyword_daily",
+            id_join_sql=id_join,
+            id_alias="k",
+            customer_id=customer_id,
+            target_date=target_date,
+        ):
+            add_row(row, "fact_keyword_daily", shopping_only=False, fill_only=True)
+
+    ad_cols = _table_columns(engine, "fact_ad_daily")
+    dim_ad_cols = _table_columns(engine, "dim_ad")
+    if {"customer_id", "dt", "ad_id"}.issubset(ad_cols) and {"customer_id", "ad_id", "adgroup_id"}.issubset(dim_ad_cols):
+        id_join = "JOIN dim_ad d ON d.customer_id::text = f.customer_id::text AND d.ad_id::text = f.ad_id::text"
+        for row in _read_grouped_fact_rows(
+            engine,
+            table_name="fact_ad_daily",
+            id_join_sql=id_join,
+            id_alias="d",
+            customer_id=customer_id,
+            target_date=target_date,
+        ):
+            add_row(row, "fact_ad_daily", shopping_only=True, fill_only=True)
+            add_row(row, "fact_ad_daily", shopping_only=False, fill_only=True)
+
+    rows = list(grouped.values())
+    for rec in rows:
+        rec["roas"] = round((float(rec["sales"] or 0) / float(rec["cost"] or 0)) * 100, 4) if rec.get("cost") else 0.0
+        rec["purchase_roas"] = round((float(rec["purchase_sales"] or 0) / float(rec["cost"] or 0)) * 100, 4) if rec.get("cost") else 0.0
+
+    return rows, {
+        "status": "fallback_existing_facts" if rows else "fallback_no_rows",
+        "parser": PLACEMENT_PARSER_VERSION,
+        "source_report": "EXISTING_FACTS",
+        "parsed_rows": len(rows),
+        "placement_type": "SEARCH",
+        "source_counts": source_counts,
+    }
 
 
 def fetch_stats_placement_breakdown_rows(

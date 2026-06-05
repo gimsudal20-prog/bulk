@@ -27,6 +27,7 @@ import collector_api
 import collector_db
 from placement_collector_helpers import (
     build_adgroup_id_lookup,
+    build_placement_rows_from_existing_facts,
     ensure_placement_tables,
     build_placement_rows_from_stats,
     fetch_stats_placement_breakdown_rows,
@@ -206,6 +207,19 @@ def fetch_placement_rows_from_stats(
     *,
     allowed_campaign_ids: set[str] | None = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    rows, fallback_meta = build_placement_rows_from_existing_facts(
+        engine,
+        customer_id,
+        target_date,
+        allowed_campaign_ids=allowed_campaign_ids,
+    )
+    if rows:
+        return rows, {
+            "status": "fallback_existing_facts",
+            "source": "existing_facts",
+            "fallback": fallback_meta,
+        }
+
     adgroup_lookup = build_adgroup_id_lookup(engine, customer_id)
     adgroup_ids = sorted(adgroup_lookup.keys())
     if allowed_campaign_ids:

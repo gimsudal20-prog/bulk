@@ -2766,3 +2766,66 @@ def query_shopping_search_terms(_engine, d1: date, d2: date, cids: tuple) -> pd.
     df = sql_read(_engine, sql, {"d1": str(d1), "d2": str(d2), **cid_params, **type_params})
     return df
 
+
+@st.cache_data(ttl=DASHBOARD_DATA_CACHE_TTL, max_entries=40, show_spinner=False)
+def query_shopping_placement_performance(_engine, d1: date, d2: date, cids: tuple) -> pd.DataFrame:
+    if not table_exists(_engine, "fact_adgroup_placement_daily"):
+        return pd.DataFrame()
+    cols = set(get_table_columns(_engine, "fact_adgroup_placement_daily"))
+    required = {"customer_id", "campaign_id", "adgroup_id", "device_name", "placement_type"}
+    if not required.issubset(cols):
+        return pd.DataFrame()
+
+    cids_tuple = _normalize_filter_values(cids)
+    where_cid, cid_params = _build_in_filter("f.customer_id", cids_tuple, "shopping_place_cid")
+
+    def _sum_col(col: str, alias: str) -> str:
+        return f"SUM(COALESCE(f.{col}, 0)) AS {alias}" if col in cols else f"0 AS {alias}"
+
+    type_where_sql = ""
+    type_params = {}
+    if table_exists(_engine, "dim_campaign"):
+        dim_cols = get_table_columns(_engine, "dim_campaign")
+        cp_col = "campaign_tp" if "campaign_tp" in dim_cols else ("campaign_type_label" if "campaign_type_label" in dim_cols else "campaign_type")
+        if cp_col in dim_cols:
+            raw_type_where, type_params = _build_in_filter(f"c.{cp_col}", _CAMPAIGN_TYPE_ALIASES["쇼핑검색"], "shopping_place_type")
+            if raw_type_where:
+                type_where_sql = raw_type_where.replace("AND ", f"AND (c.{cp_col} IS NULL OR ", 1) + ")"
+
+    sql = f"""
+        SELECT
+            f.customer_id,
+            f.campaign_id,
+            f.adgroup_id,
+            COALESCE(c.campaign_name, f.campaign_id) AS campaign_name,
+            COALESCE(a.adgroup_name, f.adgroup_id) AS adgroup_name,
+            COALESCE(NULLIF(TRIM(f.device_name), ''), 'UNKNOWN') AS device_name,
+            COALESCE(NULLIF(TRIM(f.placement_type), ''), 'UNKNOWN') AS placement_type,
+            {_sum_col("imp", "imp")},
+            {_sum_col("clk", "clk")},
+            {_sum_col("cost", "cost")},
+            {_sum_col("conv", "conv")},
+            {_sum_col("sales", "sales")},
+            {_sum_col("purchase_conv", "purchase_conv")},
+            {_sum_col("purchase_sales", "purchase_sales")}
+        FROM fact_adgroup_placement_daily f
+        LEFT JOIN dim_campaign c ON f.campaign_id = c.campaign_id AND f.customer_id = c.customer_id
+        LEFT JOIN dim_adgroup a ON f.adgroup_id = a.adgroup_id AND f.customer_id = a.customer_id
+        WHERE f.dt BETWEEN :d1 AND :d2 {where_cid} {type_where_sql}
+        GROUP BY
+            f.customer_id,
+            f.campaign_id,
+            f.adgroup_id,
+            COALESCE(c.campaign_name, f.campaign_id),
+            COALESCE(a.adgroup_name, f.adgroup_id),
+            COALESCE(NULLIF(TRIM(f.device_name), ''), 'UNKNOWN'),
+            COALESCE(NULLIF(TRIM(f.placement_type), ''), 'UNKNOWN')
+        HAVING SUM(COALESCE(f.imp, 0)) > 0
+            OR SUM(COALESCE(f.clk, 0)) > 0
+            OR SUM(COALESCE(f.cost, 0)) > 0
+            OR SUM(COALESCE(f.conv, 0)) > 0
+            OR SUM(COALESCE(f.purchase_conv, 0)) > 0
+        ORDER BY SUM(COALESCE(f.cost, 0)) DESC, SUM(COALESCE(f.clk, 0)) DESC
+        LIMIT 10000
+    """
+    return sql_read(_engine, sql, {"d1": str(d1), "d2": str(d2), **cid_params, **type_params})

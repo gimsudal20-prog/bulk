@@ -1062,6 +1062,7 @@ def query_collection_status(_engine, cids: tuple = tuple()) -> pd.DataFrame:
         ("fact_keyword_daily", "키워드 일별"),
         ("fact_ad_daily", "소재 일별"),
         ("fact_shopping_query_daily", "쇼핑 검색어"),
+        ("fact_adgroup_placement_daily", "검색/콘텐츠 지면"),
         ("fact_campaign_hourly_daily", "시간대"),
         ("fact_campaign_age_daily", "연령대"),
         ("fact_campaign_device_daily", "디바이스"),

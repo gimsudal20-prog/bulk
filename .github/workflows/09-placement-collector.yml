@@ -74,7 +74,7 @@ jobs:
           {
             echo "## 09 검색콘텐츠 지면 수집"
             echo
-            echo "- 리포트: DA_RAW_SSA"
+            echo "- 리포트: AD / AD_DETAIL"
             echo "- 저장 테이블: fact_adgroup_placement_daily"
             echo "- 스케줄: 매일 KST 05:10, 기본 수집일은 어제"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -99,6 +99,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: placement-debug-${{ github.run_id }}
-          path: debug_reports/*placement*.json
+          path: |
+            debug_reports/*placement*.json
+            debug_reports/*_AD_*.txt
+            debug_reports/*_AD_DETAIL_*.txt
           if-no-files-found: ignore
           retention-days: 7

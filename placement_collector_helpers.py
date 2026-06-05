@@ -15,7 +15,7 @@ from device_collector_helpers import normalize_device_name
 from targeting_collector_helpers import _flatten_stat_rows
 
 
-PLACEMENT_PARSER_VERSION = "placement_v20260605_existing_fact_fallback1"
+PLACEMENT_PARSER_VERSION = "placement_v20260605_report_media1"
 PLACEMENT_TABLE = "fact_adgroup_placement_daily"
 PLACEMENT_BREAKDOWN_CANDIDATES = [
     "mediaTp",
@@ -29,16 +29,27 @@ PLACEMENT_BREAKDOWN_CANDIDATES = [
 ]
 
 DATE_HEADER_CANDIDATES = ["일별", "날짜", "date", "dt", "statdt"]
-DEVICE_HEADER_CANDIDATES = ["PC/모바일 매체", "PC/모바일", "pc/mobile", "pc mobile", "device"]
+DEVICE_HEADER_CANDIDATES = [
+    "PC/모바일 매체", "PC/모바일", "PC Mobile Type", "pc/mobile", "pc mobile",
+    "pc mobile type", "pc_mobile_type", "device", "device name", "platform",
+]
 CAMPAIGN_TYPE_HEADER_CANDIDATES = ["캠페인유형", "campaign type", "campaigntp"]
 CAMPAIGN_HEADER_CANDIDATES = ["캠페인", "campaign", "campaign name", "campaignname"]
 ADGROUP_HEADER_CANDIDATES = ["광고그룹", "adgroup", "ad group", "adgroup name", "adgroupname"]
 PLACEMENT_HEADER_CANDIDATES = ["검색/콘텐츠 매체", "검색콘텐츠매체", "검색/콘텐츠", "placement", "media"]
-IMP_HEADER_CANDIDATES = ["노출수", "impression", "impressions", "imp"]
-CLK_HEADER_CANDIDATES = ["클릭수", "click", "clicks", "clk"]
-COST_HEADER_CANDIDATES = ["총비용", "비용", "cost"]
-TOTAL_CONV_HEADER_CANDIDATES = ["총 전환수", "총전환수", "전환수", "total conversion", "conversions"]
-TOTAL_SALES_HEADER_CANDIDATES = ["총 전환매출액(원)", "총전환매출액", "전환매출액", "conversion sales"]
+REPORT_PLACEMENT_HEADER_CANDIDATES = [
+    *PLACEMENT_HEADER_CANDIDATES,
+    "매체이름", "매체명", "매체", "노출매체", "지면", "노출지면", "네트워크", "광고매체",
+    "media name", "media type", "network", "ad network", "publisher",
+]
+AD_ID_HEADER_CANDIDATES = ["광고id", "소재id", "adid", "ad id", "nccadid"]
+ADGROUP_ID_HEADER_CANDIDATES = ["광고그룹id", "adgroupid", "ad group id", "nccadgroupid"]
+CAMPAIGN_ID_HEADER_CANDIDATES = ["캠페인id", "campaignid", "campaign id", "ncccampaignid"]
+IMP_HEADER_CANDIDATES = ["노출수", "impression", "impressions", "imp", "impcnt"]
+CLK_HEADER_CANDIDATES = ["클릭수", "click", "clicks", "clk", "clkcnt"]
+COST_HEADER_CANDIDATES = ["총비용", "비용", "광고비", "cost", "salesamt"]
+TOTAL_CONV_HEADER_CANDIDATES = ["총 전환수", "총전환수", "전환수", "total conversion", "conversions", "ccnt"]
+TOTAL_SALES_HEADER_CANDIDATES = ["총 전환매출액(원)", "총전환매출액", "전환매출액", "conversion sales", "convamt", "sales"]
 PURCHASE_CONV_HEADER_CANDIDATES = ["구매완료 전환수", "구매완료전환수", "purchase conversion"]
 PURCHASE_SALES_HEADER_CANDIDATES = ["구매완료 전환매출액(원)", "구매완료전환매출액", "purchase sales"]
 TOTAL_ROAS_HEADER_CANDIDATES = ["총 광고수익률(%)", "총광고수익률", "roas"]
@@ -233,13 +244,13 @@ def normalize_placement_type(value: Any) -> str:
     raw = str(value or "").strip()
     lowered = raw.lower()
     compact = _normalize_header(raw)
-    if raw in {"2", "02"}:
+    if raw in {"2", "02"} or compact in {"c", "contentnetwork", "contentsnetwork", "contentad", "contentsad"}:
         return "CONTENT"
     if "콘텐츠" in raw or "컨텐츠" in raw or "content" in lowered or "contents" in lowered:
         return "CONTENT"
-    if raw in {"1", "01"}:
+    if raw in {"1", "01"} or compact in {"s", "searchnetwork", "searchad", "searchmedia", "powerlink"}:
         return "SEARCH"
-    if "검색" in raw or "search" in lowered or compact in {"searchnetwork", "powerlink"}:
+    if "검색" in raw or "search" in lowered:
         return "SEARCH"
     return raw.upper() if raw else "UNKNOWN"
 
@@ -363,6 +374,44 @@ def _coalesce_existing(cols: set[str], candidates: List[str]) -> str:
     if not existing:
         return "0"
     return f"COALESCE({', '.join(existing)}, 0)"
+
+
+def build_ad_id_lookup(engine: Engine, customer_id: str) -> Dict[str, Dict[str, str]]:
+    required = {"customer_id", "ad_id", "adgroup_id"}
+    if not required.issubset(_table_columns(engine, "dim_ad")):
+        return {}
+    sql = """
+    SELECT
+        COALESCE(d.ad_id, '') AS ad_id,
+        COALESCE(d.adgroup_id, '') AS adgroup_id,
+        COALESCE(c.campaign_id, a.campaign_id, '') AS campaign_id,
+        COALESCE(c.campaign_tp, '') AS campaign_type
+    FROM dim_ad d
+    LEFT JOIN dim_adgroup a
+      ON d.customer_id::text = a.customer_id::text
+     AND d.adgroup_id::text = a.adgroup_id::text
+    LEFT JOIN dim_campaign c
+      ON a.customer_id::text = c.customer_id::text
+     AND a.campaign_id::text = c.campaign_id::text
+    WHERE d.customer_id::text = :cid
+    """
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text(sql), {"cid": str(customer_id)}).fetchall()
+    except Exception:
+        return {}
+    out: Dict[str, Dict[str, str]] = {}
+    for row in rows or []:
+        ad_id = str(row[0] or "").strip()
+        adgroup_id = str(row[1] or "").strip()
+        if not ad_id or not adgroup_id:
+            continue
+        out[ad_id] = {
+            "adgroup_id": adgroup_id,
+            "campaign_id": str(row[2] or "").strip(),
+            "campaign_type": str(row[3] or "").strip(),
+        }
+    return out
 
 
 def read_adgroup_purchase_split_lookup(engine: Engine, customer_id: str, target_date: date) -> Dict[str, Dict[str, float]]:
@@ -763,6 +812,312 @@ def build_placement_rows_from_stats(
     }
 
 
+def _is_device_header(header: Any) -> bool:
+    raw = str(header or "").strip()
+    if not raw:
+        return False
+    return _get_col_idx([raw], DEVICE_HEADER_CANDIDATES) != -1
+
+
+def _get_report_placement_col_idx(headers: List[str]) -> int:
+    norm_headers = [_normalize_header(h) for h in headers]
+    norm_candidates = [_normalize_header(c) for c in REPORT_PLACEMENT_HEADER_CANDIDATES]
+
+    for cand in norm_candidates:
+        for idx, header in enumerate(norm_headers):
+            if cand and cand == header and not _is_device_header(headers[idx]):
+                return idx
+    for cand in norm_candidates:
+        for idx, header in enumerate(norm_headers):
+            if cand and cand in header and not _is_device_header(headers[idx]):
+                return idx
+    return -1
+
+
+def _score_report_header_row(row_vals: List[str]) -> int:
+    score = 0
+    if (
+        _get_col_idx(row_vals, AD_ID_HEADER_CANDIDATES) != -1
+        or _get_col_idx(row_vals, ADGROUP_ID_HEADER_CANDIDATES) != -1
+        or _get_col_idx(row_vals, CAMPAIGN_ID_HEADER_CANDIDATES) != -1
+    ):
+        score += 2
+    if _get_report_placement_col_idx(row_vals) != -1:
+        score += 3
+    metric_hits = sum(
+        1
+        for candidates in [IMP_HEADER_CANDIDATES, CLK_HEADER_CANDIDATES, COST_HEADER_CANDIDATES, TOTAL_CONV_HEADER_CANDIDATES, TOTAL_SALES_HEADER_CANDIDATES]
+        if _get_col_idx(row_vals, candidates) != -1
+    )
+    score += min(metric_hits, 3)
+    return score
+
+
+def _detect_report_header_idx(df: pd.DataFrame) -> int:
+    if df is None or df.empty:
+        return -1
+    best_idx = -1
+    best_score = -1
+    scan_limit = min(60, len(df.index))
+    for idx in range(scan_limit):
+        row_vals = [str(x or "") for x in df.iloc[idx].fillna("").tolist()]
+        score = _score_report_header_row(row_vals)
+        if score > best_score:
+            best_idx = idx
+            best_score = score
+        if score >= 6:
+            return idx
+    return best_idx if best_score >= 4 else -1
+
+
+def _sample_report_rows(data_df: pd.DataFrame, idx: Dict[str, int], limit: int = 5) -> List[Dict[str, Any]]:
+    samples: List[Dict[str, Any]] = []
+    if data_df is None or data_df.empty:
+        return samples
+    for row_no, (_, row) in enumerate(data_df.head(100).iterrows(), start=1):
+        raw_placement = _cell(row, idx.get("placement", -1))
+        if not raw_placement and len(samples) >= limit:
+            continue
+        samples.append({
+            "row_no": row_no,
+            "ad_id": _cell(row, idx.get("ad_id", -1)),
+            "adgroup_id": _cell(row, idx.get("adgroup_id", -1)),
+            "campaign_id": _cell(row, idx.get("campaign_id", -1)),
+            "device": _cell(row, idx.get("device", -1)),
+            "placement_raw": raw_placement,
+            "placement_type": normalize_placement_type(raw_placement),
+            "imp": _cell(row, idx.get("imp", -1)),
+            "clk": _cell(row, idx.get("clk", -1)),
+            "cost": _cell(row, idx.get("cost", -1)),
+        })
+        if len(samples) >= limit:
+            break
+    return samples
+
+
+def _placement_type_counts(rows: List[Dict[str, Any]]) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for row in rows or []:
+        key = str(row.get("placement_type") or "UNKNOWN").strip() or "UNKNOWN"
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _top_values(counter: Dict[str, int], limit: int = 20) -> List[Dict[str, Any]]:
+    return [
+        {"value": value, "count": count}
+        for value, count in sorted(counter.items(), key=lambda item: (-item[1], item[0]))[:limit]
+    ]
+
+
+def build_placement_rows_from_report(
+    df: pd.DataFrame | None,
+    *,
+    customer_id: str,
+    target_date: date,
+    source_report: str,
+    ad_id_lookup: Dict[str, Dict[str, str]] | None = None,
+    adgroup_lookup: Dict[str, Dict[str, str]] | None = None,
+    adgroup_name_lookup: Dict[Tuple[str, str], Dict[str, str] | None] | None = None,
+    purchase_split_lookup: Dict[str, Dict[str, float]] | None = None,
+    allowed_campaign_ids: set[str] | None = None,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    meta: Dict[str, Any] = {
+        "status": "empty",
+        "parser": PLACEMENT_PARSER_VERSION,
+        "source_report": source_report,
+        "raw_rows": 0,
+        "parsed_rows": 0,
+        "placement_type_counts": {},
+        "rejected": {
+            "missing_mapping": 0,
+            "ambiguous_mapping": 0,
+            "out_of_scope": 0,
+            "missing_placement": 0,
+            "zero_metric": 0,
+            "short_row": 0,
+        },
+        "samples": [],
+        "placement_values": [],
+    }
+    if df is None or getattr(df, "empty", False):
+        return [], meta
+
+    raw_df = df.reset_index(drop=True).copy()
+    header_idx = _detect_report_header_idx(raw_df)
+    if header_idx == -1:
+        meta["status"] = "header_missing"
+        meta["sample_rows"] = [
+            [str(x) for x in raw_df.iloc[i].fillna("").tolist()[:20]]
+            for i in range(min(5, len(raw_df.index)))
+        ]
+        return [], meta
+
+    headers = [str(x or "") for x in raw_df.iloc[header_idx].fillna("").tolist()]
+    data_df = raw_df.iloc[header_idx + 1:].reset_index(drop=True)
+    meta["raw_rows"] = int(len(data_df.index))
+    meta["header_idx"] = int(header_idx)
+    meta["headers"] = headers[:40]
+
+    idx = {
+        "dt": _get_col_idx(headers, DATE_HEADER_CANDIDATES),
+        "ad_id": _get_col_idx(headers, AD_ID_HEADER_CANDIDATES),
+        "adgroup_id": _get_col_idx(headers, ADGROUP_ID_HEADER_CANDIDATES),
+        "campaign_id": _get_col_idx(headers, CAMPAIGN_ID_HEADER_CANDIDATES),
+        "campaign": _get_col_idx(headers, CAMPAIGN_HEADER_CANDIDATES),
+        "adgroup": _get_col_idx(headers, ADGROUP_HEADER_CANDIDATES),
+        "device": _get_col_idx(headers, DEVICE_HEADER_CANDIDATES),
+        "placement": _get_report_placement_col_idx(headers),
+        "imp": _get_col_idx(headers, IMP_HEADER_CANDIDATES),
+        "clk": _get_col_idx(headers, CLK_HEADER_CANDIDATES),
+        "cost": _get_col_idx(headers, COST_HEADER_CANDIDATES),
+        "conv": _get_col_idx(headers, TOTAL_CONV_HEADER_CANDIDATES),
+        "sales": _get_col_idx(headers, TOTAL_SALES_HEADER_CANDIDATES),
+        "purchase_conv": _get_col_idx(headers, PURCHASE_CONV_HEADER_CANDIDATES),
+        "purchase_sales": _get_col_idx(headers, PURCHASE_SALES_HEADER_CANDIDATES),
+    }
+    meta["column_indices"] = idx
+    meta["samples"] = _sample_report_rows(data_df, idx)
+
+    if idx["placement"] == -1:
+        meta["status"] = "placement_column_missing"
+        return [], meta
+    if idx["ad_id"] == -1 and idx["adgroup_id"] == -1 and (idx["campaign"] == -1 or idx["adgroup"] == -1):
+        meta["status"] = "id_columns_missing"
+        return [], meta
+    if idx["imp"] == -1 and idx["clk"] == -1 and idx["cost"] == -1 and idx["conv"] == -1 and idx["sales"] == -1:
+        meta["status"] = "metric_columns_missing"
+        return [], meta
+
+    ad_id_lookup = ad_id_lookup or {}
+    adgroup_lookup = adgroup_lookup or {}
+    adgroup_name_lookup = adgroup_name_lookup or {}
+    purchase_split_lookup = purchase_split_lookup or {}
+    allowed = {str(x).strip() for x in (allowed_campaign_ids or set()) if str(x).strip()} or None
+    grouped: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
+    raw_placement_counts: Dict[str, int] = {}
+
+    max_idx = max([x for x in idx.values() if x != -1], default=0)
+    for _, row in data_df.iterrows():
+        if len(row) <= max_idx:
+            meta["rejected"]["short_row"] += 1
+            continue
+
+        raw_placement = _cell(row, idx["placement"])
+        if raw_placement:
+            raw_placement_counts[raw_placement] = raw_placement_counts.get(raw_placement, 0) + 1
+        placement_type = normalize_placement_type(raw_placement)
+        if placement_type not in {"SEARCH", "CONTENT"}:
+            meta["rejected"]["missing_placement"] += 1
+            continue
+
+        ad_id = _cell(row, idx["ad_id"])
+        adgroup_id = _cell(row, idx["adgroup_id"])
+        campaign_id = _cell(row, idx["campaign_id"])
+        campaign_type = ""
+
+        mapping = ad_id_lookup.get(ad_id) if ad_id else None
+        if mapping:
+            adgroup_id = adgroup_id or str(mapping.get("adgroup_id") or "").strip()
+            campaign_id = campaign_id or str(mapping.get("campaign_id") or "").strip()
+            campaign_type = str(mapping.get("campaign_type") or "").strip()
+
+        if adgroup_id:
+            ag_mapping = adgroup_lookup.get(adgroup_id)
+            if ag_mapping:
+                campaign_id = campaign_id or str(ag_mapping.get("campaign_id") or "").strip()
+                campaign_type = campaign_type or str(ag_mapping.get("campaign_type") or "").strip()
+
+        if (not adgroup_id or not campaign_id) and idx["campaign"] != -1 and idx["adgroup"] != -1:
+            name_key = (_normalize_name(_cell(row, idx["campaign"])), _normalize_name(_cell(row, idx["adgroup"])))
+            name_mapping = adgroup_name_lookup.get(name_key)
+            if name_mapping is None and name_key in adgroup_name_lookup:
+                meta["rejected"]["ambiguous_mapping"] += 1
+                continue
+            if name_mapping:
+                adgroup_id = adgroup_id or str(name_mapping.get("adgroup_id") or "").strip()
+                campaign_id = campaign_id or str(name_mapping.get("campaign_id") or "").strip()
+                campaign_type = campaign_type or str(name_mapping.get("campaign_type") or "").strip()
+
+        if not adgroup_id or not campaign_id:
+            meta["rejected"]["missing_mapping"] += 1
+            continue
+        if allowed and campaign_id not in allowed:
+            meta["rejected"]["out_of_scope"] += 1
+            continue
+
+        imp = _safe_int(_cell(row, idx["imp"])) if idx["imp"] != -1 else 0
+        clk = _safe_int(_cell(row, idx["clk"])) if idx["clk"] != -1 else 0
+        cost = _safe_int(_cell(row, idx["cost"])) if idx["cost"] != -1 else 0
+        conv = _safe_float(_cell(row, idx["conv"])) if idx["conv"] != -1 else 0.0
+        sales = _safe_int(_cell(row, idx["sales"])) if idx["sales"] != -1 else 0
+        purchase_conv = _safe_float(_cell(row, idx["purchase_conv"])) if idx["purchase_conv"] != -1 else 0.0
+        purchase_sales = _safe_int(_cell(row, idx["purchase_sales"])) if idx["purchase_sales"] != -1 else 0
+        if imp == 0 and clk == 0 and cost == 0 and conv == 0 and sales == 0 and purchase_conv == 0 and purchase_sales == 0:
+            meta["rejected"]["zero_metric"] += 1
+            continue
+
+        row_dt = _parse_dt(_cell(row, idx["dt"]), target_date) if idx["dt"] != -1 else target_date
+        device_name = normalize_device_name(_cell(row, idx["device"])) if idx["device"] != -1 else ""
+        device_name = device_name or "UNSEGMENTED"
+        key = (row_dt, str(customer_id), campaign_id, adgroup_id, device_name, placement_type)
+        rec = grouped.setdefault(key, {
+            "dt": row_dt,
+            "customer_id": str(customer_id),
+            "campaign_id": campaign_id,
+            "adgroup_id": adgroup_id,
+            "campaign_type": campaign_type,
+            "device_name": device_name,
+            "placement_type": placement_type,
+            "imp": 0,
+            "clk": 0,
+            "cost": 0,
+            "conv": 0.0,
+            "sales": 0,
+            "purchase_conv": 0.0,
+            "purchase_sales": 0,
+            "roas": 0.0,
+            "purchase_roas": 0.0,
+            "data_source": f"REPORT_{source_report}_PLACEMENT",
+            "source_report": source_report,
+        })
+        rec["imp"] += imp
+        rec["clk"] += clk
+        rec["cost"] += cost
+        rec["conv"] += conv
+        rec["sales"] += sales
+        rec["purchase_conv"] += purchase_conv
+        rec["purchase_sales"] += purchase_sales
+
+    rows = list(grouped.values())
+    direct_purchase = any(float(r.get("purchase_conv") or 0.0) or int(r.get("purchase_sales") or 0) for r in rows)
+    cost_by_adgroup: Dict[str, int] = {}
+    for rec in rows:
+        cost_by_adgroup[rec["adgroup_id"]] = cost_by_adgroup.get(rec["adgroup_id"], 0) + int(rec.get("cost") or 0)
+    for rec in rows:
+        if not direct_purchase:
+            split = purchase_split_lookup.get(str(rec.get("adgroup_id") or "").strip()) or {}
+            total_cost = cost_by_adgroup.get(str(rec.get("adgroup_id") or "").strip(), 0)
+            ratio = (float(rec.get("cost") or 0) / float(total_cost)) if total_cost > 0 else 0.0
+            rec["purchase_conv"] = round(float(split.get("purchase_conv", 0.0) or 0.0) * ratio, 6)
+            rec["purchase_sales"] = int(round(float(split.get("purchase_sales", 0.0) or 0.0) * ratio))
+        rec["roas"] = round((float(rec["sales"] or 0) / float(rec["cost"] or 0)) * 100, 4) if rec.get("cost") else 0.0
+        rec["purchase_roas"] = round((float(rec["purchase_sales"] or 0) / float(rec["cost"] or 0)) * 100, 4) if rec.get("cost") else 0.0
+
+    counts = _placement_type_counts(rows)
+    meta["parsed_rows"] = int(len(rows))
+    meta["placement_type_counts"] = counts
+    meta["placement_values"] = _top_values(raw_placement_counts)
+    meta["purchase_split_rows"] = len(purchase_split_lookup)
+    if rows and int(counts.get("CONTENT", 0) or 0) > 0:
+        meta["status"] = "ok"
+    elif rows:
+        meta["status"] = "no_content_rows"
+    else:
+        meta["status"] = "no_mapped_rows"
+    return rows, meta
+
+
 def parse_da_raw_ssa_placement_report(
     df: pd.DataFrame | None,
     *,
@@ -895,10 +1250,11 @@ def replace_placement_fact_range(engine: Engine, rows: List[Dict[str, Any]], cus
             try:
                 with engine.begin() as conn:
                     conn.execute(text(f"DELETE FROM {table} WHERE customer_id=:cid AND dt=:dt"), {"cid": str(customer_id), "dt": target_date})
-                return
-            except Exception:
+                return 0
+            except Exception as exc:
+                last_exc = exc
                 time.sleep(2)
-        return
+        raise RuntimeError(f"{table} empty replace failed: {type(last_exc).__name__}: {last_exc}")
 
     pk_cols = ["dt", "customer_id", "adgroup_id", "device_name", "placement_type"]
     df = pd.DataFrame(rows).drop_duplicates(subset=pk_cols, keep="last").sort_values(by=pk_cols).astype(object).where(pd.notnull, None)
@@ -913,15 +1269,18 @@ def replace_placement_fact_range(engine: Engine, rows: List[Dict[str, Any]], cus
     sql = f"INSERT INTO {table} ({col_names}) VALUES %s {conflict_clause}"
     tuples = list(df.itertuples(index=False, name=None))
 
+    last_exc: Exception | None = None
     for _ in range(3):
         raw_conn, cur = None, None
         try:
             raw_conn = engine.raw_connection()
             cur = raw_conn.cursor()
+            cur.execute(f"DELETE FROM {table} WHERE customer_id=%s AND dt=%s", (str(customer_id), target_date))
             psycopg2.extras.execute_values(cur, sql, tuples, page_size=5000)
             raw_conn.commit()
-            return
-        except Exception:
+            return len(df)
+        except Exception as exc:
+            last_exc = exc
             if raw_conn:
                 try:
                     raw_conn.rollback()
@@ -939,3 +1298,4 @@ def replace_placement_fact_range(engine: Engine, rows: List[Dict[str, Any]], cus
                     raw_conn.close()
                 except Exception:
                     pass
+    raise RuntimeError(f"{table} replace failed: {type(last_exc).__name__}: {last_exc}")

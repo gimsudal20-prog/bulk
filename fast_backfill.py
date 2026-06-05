@@ -171,6 +171,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--with_gfa", action="store_true", help="collector_gfa.py도 함께 실행")
     p.add_argument("--with_shop_ext", action="store_true", help="collector_shop_ext.py도 함께 실행")
+    p.add_argument("--with_placement", action="store_true", help="placement_collector.py도 함께 실행해 검색/콘텐츠 지면 성과를 수집")
     p.add_argument("--shopping_only", action="store_true", help="쇼핑검색(SSA) 캠페인만 수집/백필")
     p.add_argument("--skip_time_age", action="store_true", help="collector.py 시간대/연령대 breakdown 수집 건너뛰기")
     p.add_argument("--collect_mode", default="검색광고 전체+기기", help="검색광고 전체만 / 기기만 / 검색광고 전체+기기")
@@ -260,6 +261,13 @@ def build_shop_ext_cmd(args: argparse.Namespace, d_str: str) -> List[str]:
     return cmd
 
 
+def build_placement_cmd(args: argparse.Namespace, d_str: str) -> List[str]:
+    cmd: List[str] = [sys.executable, "placement_collector.py", "--date", d_str, "--workers", str(args.workers)]
+    if args.account_name:
+        cmd += ["--account_name", args.account_name]
+    return cmd
+
+
 def build_gfa_cmd(args: argparse.Namespace, d_str: str) -> List[str]:
     cmd: List[str] = [sys.executable, "collector_gfa.py", "--date", d_str]
     if args.account_name:
@@ -277,6 +285,8 @@ def _build_effective_plan(args: argparse.Namespace) -> tuple[dict[str, Any], lis
         "collector_sa_scope": _supports_cli_arg("collector.py", "--sa_scope"),
         "shop_ext_bucket": _supports_cli_arg("collector_shop_ext.py", "--ext_bucket"),
         "gfa_collect_mode": _supports_cli_arg("collector_gfa.py", "--collect_mode"),
+        "placement_collector": os.path.exists("placement_collector.py"),
+        "placement_account_names": _supports_cli_arg("placement_collector.py", "--account_names"),
     }
 
     effective: dict[str, Any] = {
@@ -286,6 +296,7 @@ def _build_effective_plan(args: argparse.Namespace) -> tuple[dict[str, Any], lis
         "fast": args.fast,
         "with_gfa": args.with_gfa,
         "with_shop_ext": args.with_shop_ext,
+        "with_placement": args.with_placement,
         "shopping_only": args.shopping_only,
         "shop_ext_bucket": args.shop_ext_bucket,
         "run_target": args.run_target,
@@ -322,6 +333,10 @@ def _build_effective_plan(args: argparse.Namespace) -> tuple[dict[str, Any], lis
         notes.append("현재 collector_shop_ext.py 는 --ext_bucket 을 지원하지 않아 확장소재 구분 설정은 실제 실행에서 무시됩니다.")
     if effective["with_gfa"] and not support["gfa_collect_mode"]:
         notes.append("현재 collector_gfa.py 는 --collect_mode 를 지원하지 않아 GFA 실행에는 collect_mode 값이 전달되지 않습니다.")
+    if effective["with_placement"] and not support["placement_collector"]:
+        notes.append("placement_collector.py 파일이 없어 검색/콘텐츠 지면 수집은 실제 실행에서 스킵됩니다.")
+    if effective["with_placement"] and args.account_names and not support["placement_account_names"]:
+        notes.append("현재 placement_collector.py 는 --account_names 를 지원하지 않아 지면 수집에는 단일 --account_name 필터만 전달됩니다.")
 
     return effective, notes, support
 
@@ -346,12 +361,14 @@ def _print_plan_summary(
     print(f"🧱 첫날만 구조 수집: {_bool_label(effective['sync_dim_first_day'])}", flush=True)
     print(f"🛍️ 쇼핑검색(SSA) 전용: {_bool_label(effective['shopping_only'])}", flush=True)
     print(f"🧩 확장소재 포함: {_bool_label(effective['with_shop_ext'])} | 구분: {_label_shop_ext_bucket(effective['shop_ext_bucket'])}", flush=True)
+    print(f"🧭 검색/콘텐츠 지면 포함: {_bool_label(effective['with_placement'])}", flush=True)
     print(f"📺 GFA 포함: {_bool_label(effective['with_gfa'])}", flush=True)
     print(
-        "🧪 CLI 지원 확인 | collector.py --sa_scope={} | collector_shop_ext.py --ext_bucket={} | collector_gfa.py --collect_mode={}".format(
+        "🧪 CLI 지원 확인 | collector.py --sa_scope={} | collector_shop_ext.py --ext_bucket={} | collector_gfa.py --collect_mode={} | placement_collector.py={}".format(
             "지원" if support["collector_sa_scope"] else "미지원",
             "지원" if support["shop_ext_bucket"] else "미지원",
             "지원" if support["gfa_collect_mode"] else "미지원",
+            "있음" if support["placement_collector"] else "없음",
         ),
         flush=True,
     )
@@ -371,13 +388,14 @@ def _print_plan_summary(
         f"- 검색광고 수집 범위: `{_label_sa_scope(effective['sa_scope'])}`",
         f"- 실행 대상: `{_label_run_target(effective['run_target'])}`",
         f"- workers: `{effective['workers']}` / fast: `{_bool_label(effective['fast'])}` / 첫날만 구조 수집: `{_bool_label(effective['sync_dim_first_day'])}`",
-        f"- 쇼핑검색 전용: `{_bool_label(effective['shopping_only'])}` / 확장소재 포함: `{_bool_label(effective['with_shop_ext'])}` / 확장소재 구분: `{_label_shop_ext_bucket(effective['shop_ext_bucket'])}` / GFA 포함: `{_bool_label(effective['with_gfa'])}`",
+        f"- 쇼핑검색 전용: `{_bool_label(effective['shopping_only'])}` / 확장소재 포함: `{_bool_label(effective['with_shop_ext'])}` / 확장소재 구분: `{_label_shop_ext_bucket(effective['shop_ext_bucket'])}` / 검색/콘텐츠 지면 포함: `{_bool_label(effective['with_placement'])}` / GFA 포함: `{_bool_label(effective['with_gfa'])}`",
         "",
         "### CLI 지원 확인",
         "",
         f"- `collector.py --sa_scope`: {'지원' if support['collector_sa_scope'] else '미지원'}",
         f"- `collector_shop_ext.py --ext_bucket`: {'지원' if support['shop_ext_bucket'] else '미지원'}",
         f"- `collector_gfa.py --collect_mode`: {'지원' if support['gfa_collect_mode'] else '미지원'}",
+        f"- `placement_collector.py`: {'있음' if support['placement_collector'] else '없음'}",
     ]
     if notes:
         lines += ["", "### 자동 보정/주의사항", ""] + [f"- {n}" for n in notes]
@@ -488,6 +506,19 @@ def main() -> None:
                 reason = "collector_shop_ext.py 파일 없음"
                 print(f"   ⏭️ [확장소재] {reason}으로 스킵합니다.", flush=True)
                 records.append({"date": d_str, "label": "확장소재", "status": "skipped", "reason": reason, "cmd": []})
+
+        if args.with_placement and args.run_target != "shop_ext_only":
+            if os.path.exists("placement_collector.py"):
+                cmd_placement = build_placement_cmd(args, d_str)
+                ok, reason = run_cmd(cmd_placement, "검색/콘텐츠 지면", d_str)
+                records.append({"date": d_str, "label": "검색/콘텐츠 지면", "status": "ok" if ok else "failed", "reason": reason, "cmd": cmd_placement})
+                if not ok:
+                    failed = True
+                    break
+            else:
+                reason = "placement_collector.py 파일 없음"
+                print(f"   ⏭️ [검색/콘텐츠 지면] {reason}으로 스킵합니다.", flush=True)
+                records.append({"date": d_str, "label": "검색/콘텐츠 지면", "status": "skipped", "reason": reason, "cmd": []})
 
         if args.with_gfa:
             if os.path.exists("collector_gfa.py"):

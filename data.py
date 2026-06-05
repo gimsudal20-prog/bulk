@@ -2782,21 +2782,30 @@ def query_shopping_placement_performance(_engine, d1: date, d2: date, cids: tupl
     def _sum_col(col: str, alias: str) -> str:
         return f"SUM(COALESCE(f.{col}, 0)) AS {alias}" if col in cols else f"0 AS {alias}"
 
-    type_where_sql = ""
+    type_source_sql = "NULL"
+    type_filter_source_sql = ""
     type_params = {}
+    fact_type_expr = "NULLIF(CAST(f.campaign_type AS TEXT), '')" if "campaign_type" in cols else "NULL"
     if table_exists(_engine, "dim_campaign"):
         dim_cols = get_table_columns(_engine, "dim_campaign")
         cp_col = "campaign_tp" if "campaign_tp" in dim_cols else ("campaign_type_label" if "campaign_type_label" in dim_cols else "campaign_type")
         if cp_col in dim_cols:
-            raw_type_where, type_params = _build_in_filter(f"c.{cp_col}", _CAMPAIGN_TYPE_ALIASES["쇼핑검색"], "shopping_place_type")
-            if raw_type_where:
-                type_where_sql = raw_type_where.replace("AND ", f"AND (c.{cp_col} IS NULL OR ", 1) + ")"
+            type_source_sql = f"COALESCE(NULLIF(CAST(c.{cp_col} AS TEXT), ''), {fact_type_expr})"
+            type_filter_source_sql = type_source_sql
+    if not type_filter_source_sql and "campaign_type" in cols:
+        type_source_sql = fact_type_expr
+        type_filter_source_sql = fact_type_expr
+    type_label_sql = _budget_campaign_type_case_sql(type_source_sql)
+    type_where_sql = ""
+    if type_filter_source_sql:
+        type_where_sql, type_params = _build_in_filter(type_filter_source_sql, _BUDGET_CAMPAIGN_TYPE_FILTER_VALUES, "placement_campaign_type")
 
     sql = f"""
         SELECT
             f.customer_id,
             f.campaign_id,
             f.adgroup_id,
+            {type_label_sql} AS campaign_type_label,
             COALESCE(c.campaign_name, f.campaign_id) AS campaign_name,
             COALESCE(a.adgroup_name, f.adgroup_id) AS adgroup_name,
             COALESCE(NULLIF(TRIM(f.device_name), ''), 'UNKNOWN') AS device_name,
@@ -2816,6 +2825,7 @@ def query_shopping_placement_performance(_engine, d1: date, d2: date, cids: tupl
             f.customer_id,
             f.campaign_id,
             f.adgroup_id,
+            {type_label_sql},
             COALESCE(c.campaign_name, f.campaign_id),
             COALESCE(a.adgroup_name, f.adgroup_id),
             COALESCE(NULLIF(TRIM(f.device_name), ''), 'UNKNOWN'),

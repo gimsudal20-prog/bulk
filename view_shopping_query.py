@@ -342,13 +342,17 @@ def _render_placement_filter_panel(view: pd.DataFrame) -> tuple[pd.DataFrame, Di
     with st.container(border=True):
         st.markdown("<div style='font-size:15px;font-weight:700;color:#1F2937;margin-bottom:12px;'>검색/콘텐츠 지면 필터</div>", unsafe_allow_html=True)
         filtered = view.copy()
-        r1c1, r1c2, r1c3 = st.columns(3)
+        r1c1, r1c2, r1c3, r1c4 = st.columns(4)
+        types = ["전체"] + sorted([str(x) for x in filtered.get("캠페인유형", pd.Series(dtype=str)).dropna().unique() if str(x).strip()])
         placements = ["전체"] + sorted([str(x) for x in filtered.get("지면", pd.Series(dtype=str)).dropna().unique() if str(x).strip()])
         devices = ["전체"] + sorted([str(x) for x in filtered.get("기기", pd.Series(dtype=str)).dropna().unique() if str(x).strip()])
         camps = ["전체"] + sorted([str(x) for x in filtered.get("캠페인", pd.Series(dtype=str)).dropna().unique() if str(x).strip()])
-        sel_place = r1c1.selectbox("지면", placements, key="sq_place_filter")
-        sel_device = r1c2.selectbox("기기", devices, key="sq_place_device_filter")
-        sel_camp = r1c3.selectbox("캠페인", camps, key="sq_place_camp_filter")
+        sel_type = r1c1.selectbox("캠페인유형", types, key="sq_place_type_filter")
+        sel_place = r1c2.selectbox("지면", placements, key="sq_place_filter")
+        sel_device = r1c3.selectbox("기기", devices, key="sq_place_device_filter")
+        sel_camp = r1c4.selectbox("캠페인", camps, key="sq_place_camp_filter")
+        if sel_type != "전체":
+            filtered = filtered[filtered["캠페인유형"] == sel_type]
         if sel_place != "전체":
             filtered = filtered[filtered["지면"] == sel_place]
         if sel_device != "전체":
@@ -369,6 +373,7 @@ def _render_placement_filter_panel(view: pd.DataFrame) -> tuple[pd.DataFrame, Di
             filtered = filtered[pd.to_numeric(filtered["구매완료수"], errors="coerce").fillna(0) > 0]
 
     return filtered, {
+        "campaign_type": sel_type,
         "placement": sel_place,
         "device": sel_device,
         "campaign": sel_camp,
@@ -393,6 +398,7 @@ def _render_shopping_placement_tab(meta: pd.DataFrame, engine, f: Dict, cids: tu
     view = df.rename(columns={
         "account_name": "업체명",
         "manager": "담당자",
+        "campaign_type_label": "캠페인유형",
         "campaign_name": "캠페인",
         "adgroup_name": "광고그룹",
         "imp": "노출수",
@@ -410,7 +416,7 @@ def _render_shopping_placement_tab(meta: pd.DataFrame, engine, f: Dict, cids: tu
     _render_placement_cards(view)
     filtered, filter_state = _render_placement_filter_panel(view)
     display_cols = [
-        "업체명", "캠페인", "광고그룹", "지면", "기기",
+        "업체명", "캠페인유형", "캠페인", "광고그룹", "지면", "기기",
         "노출수", "클릭수", "CTR(%)", "CPC", "광고비",
         "구매완료수", "구매완료 매출", "구매완료 ROAS(%)",
         "총 전환수", "총 전환매출", "총 ROAS(%)",
@@ -437,7 +443,7 @@ def _render_shopping_placement_tab(meta: pd.DataFrame, engine, f: Dict, cids: tu
         st.markdown("<div style='font-size:15px;font-weight:700;margin-bottom:8px;'>지면 리포트 다운로드</div><div style='font-size:13px;color:#6B7280;margin-bottom:12px;'>현재 필터 기준 결과를 엑셀로 내려받습니다.</div>", unsafe_allow_html=True)
         cache_key = (
             f"sq_place_excel::{f['start']}::{f['end']}::{cmp_mode}::"
-            f"{filter_state['placement']}::{filter_state['device']}::{filter_state['campaign']}::"
+            f"{filter_state['campaign_type']}::{filter_state['placement']}::{filter_state['device']}::{filter_state['campaign']}::"
             f"{filter_state['adgroup']}::{filter_state['min_cost']}::{int(filter_state['only_purchase'])}"
         )
         if st.button("지면 엑셀 파일 준비", key="sq_place_prepare_excel_btn", use_container_width=True):

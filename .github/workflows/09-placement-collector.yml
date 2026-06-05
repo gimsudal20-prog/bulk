@@ -1,9 +1,19 @@
 name: 09 검색콘텐츠 지면 수집
-run-name: 09 검색콘텐츠 지면 수집 | ${{ github.event_name == 'workflow_dispatch' && '수동' || '스케줄' }}
+run-name: 09 검색콘텐츠 지면 수집 | ${{ github.event_name == 'workflow_dispatch' && '수동' || github.event_name == 'push' && '즉시' || '스케줄' }}
 
 on:
   schedule:
     - cron: "10 20 * * *" # KST 05:10
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/09-placement-collector.yml"
+      - "placement_collector.py"
+      - "placement_collector_helpers.py"
+      - "collector_api.py"
+      - "collector_db.py"
+      - "account_master.py"
   workflow_dispatch:
     inputs:
       date:

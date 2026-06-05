@@ -89,6 +89,11 @@ on:
         required: false
         default: false
         type: boolean
+      with_placement:
+        description: "검색/콘텐츠 지면 수집도 실행"
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: fast-backfill-${{ inputs.account_name || inputs.account_names || 'all' }}-${{ inputs.start_date }}-${{ inputs.end_date }}
@@ -152,6 +157,7 @@ jobs:
           [[ "${{ inputs.with_gfa }}" == "true" ]] && CMD+=(--with_gfa)
           [[ "${{ inputs.shopping_only }}" == "true" ]] && CMD+=(--shopping_only)
           [[ "${{ inputs.with_shop_ext }}" == "true" ]] && CMD+=(--with_shop_ext)
+          [[ "${{ inputs.with_placement }}" == "true" ]] && CMD+=(--with_placement)
 
           printf '실행 명령:'
           printf ' %q' "${CMD[@]}"

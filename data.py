@@ -982,19 +982,32 @@ def upsert_action_items(_engine, items: list[dict]) -> int:
     return written
 
 
-@st.cache_data(ttl=60, max_entries=20, show_spinner=False)
-def query_action_items(_engine, status: str = "open", limit: int = 500) -> pd.DataFrame:
+@st.cache_data(ttl=60, max_entries=40, show_spinner=False)
+def query_action_items(_engine, status: str = "open", limit: int = 500, customer_ids=None) -> pd.DataFrame:
     ensure_dashboard_workflow_tables(_engine)
     safe_limit = max(20, min(int(limit or 500), 2000))
     safe_status = str(status or "").strip()
+    cid_params = {}
+    cid_filter_sql = ""
+    if customer_ids is not None:
+        cids_tuple = _normalize_filter_values(customer_ids)
+        if cids_tuple:
+            cid_filter_sql, cid_params = _build_in_filter(
+                "REGEXP_REPLACE(CAST(customer_id AS TEXT), '\\.0+$', '')",
+                cids_tuple,
+                "action_item_cid",
+            )
+        else:
+            cid_filter_sql = "AND 1=0"
     return sql_read(
         _engine,
-        """
+        f"""
         SELECT
             id, item_key, category, severity, title, body, manager, account_name, customer_id,
             source_page, source_ref, status, owner, note, first_seen_at, last_seen_at, resolved_at
         FROM dashboard_action_items
         WHERE (:status = '' OR status = :status)
+          {cid_filter_sql}
         ORDER BY
             CASE severity
                 WHEN 'critical' THEN 0
@@ -1005,7 +1018,7 @@ def query_action_items(_engine, status: str = "open", limit: int = 500) -> pd.Da
             last_seen_at DESC
         LIMIT :limit
         """,
-        {"status": safe_status, "limit": safe_limit},
+        {"status": safe_status, "limit": safe_limit, **cid_params},
     )
 
 
@@ -2299,6 +2312,118 @@ def _override_with_shopping_query_purchase(df: pd.DataFrame, summary: pd.DataFra
     merged.loc[mask, "shopping_purchase_source"] = "검색어상세 구매완료"
     drop_cols = [c for c in merged.columns if c.endswith("__shopping_query")]
     return merged.drop(columns=drop_cols)
+
+
+@st.cache_data(ttl=DASHBOARD_DATA_CACHE_TTL, max_entries=30, show_spinner=False)
+def query_shopping_warning_source(_engine, d1: date, d2: date, cids: tuple) -> pd.DataFrame:
+    """Read shopping search rows broadly enough for warning detection.
+
+    The regular shopping search-term view keeps only rows with conversion value.
+    Warning detection also needs high-cost/no-purchase and click/no-purchase rows,
+    so this query intentionally keeps rows with impressions, clicks, cost, or any
+    conversion split.
+    """
+    if not table_exists(_engine, "fact_shopping_query_daily"):
+        return pd.DataFrame()
+    cids_tuple = _normalize_filter_values(cids)
+    where_cid, cid_params = _build_in_filter("f.customer_id", cids_tuple, "shopping_warning_cid")
+
+    sq_cols = set(get_table_columns(_engine, "fact_shopping_query_daily"))
+
+    def _sum_col(col: str, alias: str) -> str:
+        if col in sq_cols:
+            return f"SUM(COALESCE(f.{col}, 0)) as {alias}"
+        return f"0 as {alias}"
+
+    def _sum_expr(candidates: list[str], alias: str) -> str:
+        picked = [f"f.{col}" for col in candidates if col in sq_cols]
+        if not picked:
+            return f"0 as {alias}"
+        if len(picked) == 1:
+            expr = f"COALESCE({picked[0]}, 0)"
+        else:
+            expr = f"COALESCE({', '.join(picked)}, 0)"
+        return f"SUM({expr}) as {alias}"
+
+    def _greatest_sum_expr(candidates: list[str], alias: str) -> str:
+        picked = [f"COALESCE(f.{col}, 0)" for col in candidates if col in sq_cols]
+        if not picked:
+            return f"0 as {alias}"
+        expr = picked[0] if len(picked) == 1 else f"GREATEST({', '.join(picked)})"
+        return f"SUM({expr}) as {alias}"
+
+    query_expr = "COALESCE(NULLIF(TRIM(CAST(f.query_text AS TEXT)), ''), '(검색어 미제공 영역)')"
+    query_provided_select_sql = (
+        "BOOL_AND(COALESCE(f.query_provided, TRUE)) as query_provided"
+        if "query_provided" in sq_cols
+        else f"BOOL_AND(CASE WHEN {query_expr} IN ('-', '(검색어 미제공 영역)') THEN FALSE ELSE TRUE END) as query_provided"
+    )
+
+    type_where_sql = ""
+    type_params = {}
+    if table_exists(_engine, "dim_campaign"):
+        dim_cols = get_table_columns(_engine, "dim_campaign")
+        cp_col = "campaign_tp" if "campaign_tp" in dim_cols else ("campaign_type_label" if "campaign_type_label" in dim_cols else "campaign_type")
+        if cp_col in dim_cols:
+            raw_type_where, type_params = _build_in_filter(
+                f"c.{cp_col}",
+                _CAMPAIGN_TYPE_ALIASES.get("쇼핑검색", ["SHOPPING", "쇼핑검색"]),
+                "shopping_warning_type",
+            )
+            if raw_type_where:
+                type_where_sql = raw_type_where.replace("AND ", f"AND (c.{cp_col} IS NULL OR ", 1) + ")"
+
+    ad_join_sql = ""
+    ad_name_sql = "'' as ad_name"
+    ad_title_sql = "'' as ad_title"
+    group_ad_cols = ""
+    if table_exists(_engine, "dim_ad"):
+        ad_cols = get_table_columns(_engine, "dim_ad")
+        ad_name_expr = "ad.ad_name" if "ad_name" in ad_cols else "''"
+        ad_title_expr = "ad.ad_title" if "ad_title" in ad_cols else ad_name_expr
+        ad_name_sql = f"{ad_name_expr} as ad_name"
+        ad_title_sql = f"{ad_title_expr} as ad_title"
+        ad_join_sql = "LEFT JOIN dim_ad ad ON f.ad_id = ad.ad_id AND f.customer_id = ad.customer_id"
+        group_ad_cols = f", {ad_name_expr}, {ad_title_expr}"
+
+    metric_presence = []
+    for col in ["imp", "clk", "cost", "purchase_conv", "primary_conv", "purchase_sales", "primary_sales", "total_conv", "tot_conv", "conv", "total_sales", "tot_sales", "sales"]:
+        if col in sq_cols:
+            metric_presence.append(f"SUM(COALESCE(f.{col}, 0)) > 0")
+    having_sql = " OR ".join(metric_presence) if metric_presence else "COUNT(*) > 0"
+
+    sql = f"""
+        SELECT
+            f.dt,
+            f.customer_id,
+            f.campaign_id,
+            f.adgroup_id,
+            f.ad_id,
+            c.campaign_name,
+            a.adgroup_name,
+            {ad_name_sql},
+            {ad_title_sql},
+            {query_expr} AS query_text,
+            {query_provided_select_sql},
+            {_sum_col("imp", "imp")},
+            {_sum_col("clk", "clk")},
+            {_sum_col("cost", "cost")},
+            {_sum_expr(["purchase_conv", "primary_conv"], "purchase_conv")},
+            {_sum_expr(["purchase_sales", "primary_sales"], "purchase_sales")},
+            {_greatest_sum_expr(["total_conv", "tot_conv", "conv", "purchase_conv", "primary_conv"], "total_conv")},
+            {_greatest_sum_expr(["total_sales", "tot_sales", "sales", "purchase_sales", "primary_sales"], "total_sales")}
+        FROM fact_shopping_query_daily f
+        LEFT JOIN dim_campaign c ON f.campaign_id = c.campaign_id AND f.customer_id = c.customer_id
+        LEFT JOIN dim_adgroup a ON f.adgroup_id = a.adgroup_id AND f.customer_id = a.customer_id
+        {ad_join_sql}
+        WHERE f.dt BETWEEN :d1 AND :d2 {where_cid} {type_where_sql}
+        GROUP BY f.dt, f.customer_id, f.campaign_id, f.adgroup_id, f.ad_id, c.campaign_name, a.adgroup_name, {query_expr}{group_ad_cols}
+        HAVING {having_sql}
+    """
+    df = sql_read(_engine, sql, {"d1": str(d1), "d2": str(d2), **cid_params, **type_params})
+    if df is not None and not df.empty:
+        df["dt"] = pd.to_datetime(df["dt"])
+    return df
 
 
 @st.cache_data(ttl=DASHBOARD_DATA_CACHE_TTL, max_entries=40, show_spinner=False)

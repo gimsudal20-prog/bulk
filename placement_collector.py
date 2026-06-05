@@ -8,6 +8,7 @@ import csv
 import hashlib
 import hmac
 import io
+import json
 import os
 import random
 import sys
@@ -135,6 +136,19 @@ def save_debug_report(report_type: str, customer_id: str, job_id: str, content: 
         (DEBUG_DIR / f"{ts}_{customer_id}_{report_type}_{job_id}.txt").write_text(content or "", encoding="utf-8")
     except Exception as exc:
         log(f"debug report 저장 실패 무시: {type(exc).__name__}: {exc}")
+
+
+def save_debug_json(report_type: str, customer_id: str, payload: Dict[str, Any]) -> None:
+    if str(os.getenv("DEBUG_REPORTS", "1")).lower() not in {"1", "true", "yes", "y"}:
+        return
+    try:
+        DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = DEBUG_DIR / f"{ts}_{customer_id}_{report_type}.json"
+        path.write_text(json.dumps(payload, ensure_ascii=False, default=str, indent=2), encoding="utf-8")
+        log(f"debug json 저장: {path}")
+    except Exception as exc:
+        log(f"debug json 저장 실패 무시: {type(exc).__name__}: {exc}")
 
 
 def parse_variable_width_report_text(txt: str) -> pd.DataFrame:
@@ -330,7 +344,20 @@ def collect_account(engine, account: Dict[str, str], target_date: date, skip_dim
             target_date,
             allowed_campaign_ids=campaign_ids,
         )
-        replace_placement_fact_range(engine, rows, customer_id, target_date)
+        if rows:
+            replace_placement_fact_range(engine, rows, customer_id, target_date)
+        else:
+            save_debug_json(
+                "placement_stats_no_rows",
+                customer_id,
+                {
+                    "customer_id": customer_id,
+                    "account_name": account_name,
+                    "target_date": str(target_date),
+                    "meta": meta,
+                },
+            )
+            log(f"[{account_name}] 지면 원천 미확정/0건으로 기존 저장 데이터 삭제는 건너뜀")
         result["status"] = "ok"
         result["report_status"] = str(meta.get("status") or "unknown")
         result["placement_rows_saved"] = int(len(rows))

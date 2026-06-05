@@ -164,6 +164,49 @@ def _extract_placement_breakdown_value(row: dict, requested_breakdown: str = "")
     return str(name_val or "").strip()
 
 
+def _debug_value(value: Any) -> Any:
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        raw = value
+    elif isinstance(value, (dict, list)):
+        raw = value
+    else:
+        raw = str(value)
+    text = str(raw)
+    if len(text) > 500:
+        return text[:500] + "...<truncated>"
+    return raw
+
+
+def _sample_stat_rows(rows: List[dict], breakdown: str, limit: int = 3) -> List[Dict[str, Any]]:
+    samples: List[Dict[str, Any]] = []
+    aliases = list(dict.fromkeys([breakdown, *PLACEMENT_BREAKDOWN_ALIASES, "name"]))
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        candidate_values = {}
+        for alias in aliases:
+            val = _get_case_insensitive(row, [alias])
+            if val not in (None, ""):
+                candidate_values[alias] = _debug_value(val)
+        containers = {}
+        for key in ["breakdown", "breakdowns", "dimension", "dimensions", "segment", "segments", "metrics"]:
+            if key in row:
+                containers[key] = _debug_value(row.get(key))
+        samples.append({
+            "id": _extract_stat_id(row),
+            "requested_breakdown": breakdown,
+            "extracted": _extract_placement_breakdown_value(row, breakdown),
+            "normalized": normalize_placement_type(_extract_placement_breakdown_value(row, breakdown)),
+            "keys": list(row.keys())[:30],
+            "candidate_values": candidate_values,
+            "containers": containers,
+            "first_values": {k: _debug_value(row.get(k)) for k in list(row.keys())[:12]},
+        })
+        if len(samples) >= limit:
+            break
+    return samples
+
+
 def _cell(row, idx: int) -> str:
     if idx < 0 or idx >= len(row):
         return ""
@@ -376,6 +419,7 @@ def fetch_stats_placement_breakdown_rows(
         "selected_breakdown": "",
         "raw_rows": 0,
         "errors": [],
+        "debug_samples": {},
     }
     if not clean_ids:
         meta["status"] = "no_adgroups"
@@ -416,8 +460,16 @@ def fetch_stats_placement_breakdown_rows(
             return rows, meta
         if errors:
             meta["errors"].append({"breakdown": breakdown, "sample": errors[:2]})
-        elif rows and log_fn:
-            log_fn(f"   ↪ /stats breakdown={breakdown} raw={len(rows)} 이지만 검색/콘텐츠 값 미검출")
+        elif rows:
+            samples = _sample_stat_rows(rows, breakdown)
+            meta["debug_samples"][breakdown] = samples
+            if log_fn:
+                first = samples[0] if samples else {}
+                log_fn(
+                    f"   /stats breakdown={breakdown} raw={len(rows)} no search/content "
+                    f"sample_keys={first.get('keys', [])} extracted={first.get('extracted', '')} "
+                    f"candidate_values={first.get('candidate_values', {})}"
+                )
 
     meta["status"] = "no_supported_breakdown"
     return [], meta

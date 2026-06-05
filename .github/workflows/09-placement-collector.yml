@@ -93,3 +93,12 @@ jobs:
           printf ' %q' "${CMD[@]}"
           printf '\n'
           "${CMD[@]}"
+
+      - name: Upload placement debug artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: placement-debug-${{ github.run_id }}
+          path: debug_reports/*placement*.json
+          if-no-files-found: ignore
+          retention-days: 7

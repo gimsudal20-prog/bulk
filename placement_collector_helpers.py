@@ -735,6 +735,19 @@ def build_placement_rows_from_existing_facts(
             return
         key = (target_date, str(customer_id), campaign_id, adgroup_id, "UNSEGMENTED", "SEARCH")
         if fill_only and key in grouped:
+            rec = grouped[key]
+            for field, value in [
+                ("imp", imp),
+                ("clk", clk),
+                ("cost", cost),
+                ("conv", conv),
+                ("sales", sales),
+                ("purchase_conv", purchase_conv),
+                ("purchase_sales", purchase_sales),
+            ]:
+                if float(rec.get(field) or 0.0) == 0.0 and float(value or 0.0) != 0.0:
+                    rec[field] = value
+            source_counts[source] = source_counts.get(source, 0) + 1
             return
         rec = grouped.setdefault(key, {
             "dt": target_date,

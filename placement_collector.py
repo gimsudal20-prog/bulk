@@ -254,6 +254,39 @@ def placement_type_counts(rows: List[Dict[str, Any]]) -> Dict[str, int]:
     return counts
 
 
+def merge_missing_source_fact_rows(rows: List[Dict[str, Any]], fallback_rows: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    existing_adgroups = {
+        str(row.get("adgroup_id") or "").strip()
+        for row in rows or []
+        if str(row.get("adgroup_id") or "").strip()
+    }
+    additions = [
+        row
+        for row in fallback_rows or []
+        if str(row.get("adgroup_id") or "").strip()
+        and str(row.get("adgroup_id") or "").strip() not in existing_adgroups
+    ]
+    if not additions:
+        return rows, {"added_rows": 0, "fallback_rows": len(fallback_rows or [])}
+    return list(rows or []) + additions, {"added_rows": len(additions), "fallback_rows": len(fallback_rows or [])}
+
+
+def add_missing_source_fact_rows(
+    engine,
+    customer_id: str,
+    target_date: date,
+    rows: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    fallback_rows, fallback_meta = build_placement_rows_from_existing_facts(
+        engine,
+        customer_id,
+        target_date,
+        allowed_campaign_ids=None,
+    )
+    merged_rows, merge_meta = merge_missing_source_fact_rows(rows, fallback_rows)
+    return merged_rows, {**merge_meta, "fallback": fallback_meta}
+
+
 def fetch_placement_rows_from_sources(
     engine,
     customer_id: str,
@@ -291,11 +324,14 @@ def fetch_placement_rows_from_sources(
         counts = placement_type_counts(report_rows)
         log(f"   [{report_type}] 지면 리포트 파싱: status={report_meta.get('status')} rows={len(report_rows)} placements={counts}")
         if report_rows and int(counts.get("CONTENT", 0) or 0) > 0:
+            report_rows, source_backfill = add_missing_source_fact_rows(engine, customer_id, target_date, report_rows)
+            counts = placement_type_counts(report_rows)
             return report_rows, {
                 "status": "ok",
                 "source": f"report_{report_type}",
                 "report": report_meta,
                 "report_attempts": report_attempts,
+                "source_backfill": source_backfill,
                 "placement_type_counts": counts,
             }
         if report_rows and not best_rows:
@@ -341,7 +377,11 @@ def fetch_placement_rows_from_sources(
         "placement_type_counts": stats_counts,
     }
     if stats_rows and int(stats_counts.get("CONTENT", 0) or 0) > 0:
+        stats_rows, source_backfill = add_missing_source_fact_rows(engine, customer_id, target_date, stats_rows)
+        stats_counts = placement_type_counts(stats_rows)
         stats_meta["report_attempts"] = report_attempts
+        stats_meta["source_backfill"] = source_backfill
+        stats_meta["placement_type_counts"] = stats_counts
         return stats_rows, stats_meta
     if stats_rows and not best_rows:
         best_rows = stats_rows
@@ -357,7 +397,7 @@ def fetch_placement_rows_from_sources(
         engine,
         customer_id,
         target_date,
-        allowed_campaign_ids=allowed_campaign_ids,
+        allowed_campaign_ids=None,
     )
     fallback_counts = placement_type_counts(fallback_rows)
     if fallback_rows and not best_rows:
@@ -372,9 +412,12 @@ def fetch_placement_rows_from_sources(
         }
 
     if best_rows:
+        best_rows, source_backfill = merge_missing_source_fact_rows(best_rows, fallback_rows)
         best_meta.setdefault("stats", stats_meta)
         best_meta.setdefault("fallback", fallback_meta)
         best_meta.setdefault("report_attempts", report_attempts)
+        best_meta["source_backfill"] = source_backfill
+        best_meta["placement_type_counts"] = placement_type_counts(best_rows)
         return best_rows, best_meta
 
     return [], {
@@ -587,7 +630,7 @@ def collect_account(engine, account: Dict[str, str], target_date: date, skip_dim
             customer_id,
             target_date,
             media_lookup=media_lookup,
-            allowed_campaign_ids=campaign_ids,
+            allowed_campaign_ids=None,
         )
         counts = placement_type_counts(rows)
         if rows:

@@ -2637,7 +2637,12 @@ def query_overview_report_source_cache(_engine, source_kind: str, d1: date, d2: 
             "브랜드검색": "BRAND_SEARCH",
             "플레이스": "PLACE",
         }
-        db_types = tuple(rev_map.get(t, t) for t in normalized_types)
+        db_type_values = []
+        for t in normalized_types:
+            key = rev_map.get(t, t)
+            aliases = _CAMPAIGN_TYPE_ALIASES.get(t) or _CAMPAIGN_TYPE_ALIASES.get(key) or [key]
+            db_type_values.extend(aliases)
+        db_types = tuple(dict.fromkeys(str(v) for v in db_type_values if str(v).strip()))
         type_where_sql, type_params = _build_in_filter("c.campaign_type", db_types, f"report_cache_type_{source_kind}")
 
     sql = f"""

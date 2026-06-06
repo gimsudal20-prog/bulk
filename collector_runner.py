@@ -1230,7 +1230,9 @@ def process_account(
 
             if callable(refresh_overview_report_source_cache_fn) and result.get("status") == "ok":
                 try:
-                    if int(result.get("k_cnt", 0) or 0) > 0 or int(result.get("shopping_query_rows_saved", 0) or 0) > 0:
+                    keyword_rows_saved = int(result.get("keyword_rows_saved", k_cnt) or 0)
+                    shopping_query_rows_saved = int(result.get("shopping_query_rows_saved", 0) or 0)
+                    if keyword_rows_saved > 0 or shopping_query_rows_saved > 0:
                         refresh_overview_report_source_cache_fn(engine, customer_id, target_date, target_date)
                         log_fn(f"   ✅ [ {account_name} ] 오버뷰 보고서 소스 캐시 갱신 완료")
                 except Exception as e:

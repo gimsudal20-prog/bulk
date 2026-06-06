@@ -311,6 +311,7 @@ def refresh_overview_report_source_cache(engine: Engine, customer_id: str, d1, d
     camp_cols = _get_table_columns(engine, 'dim_campaign')
     cp_col = 'campaign_tp' if 'campaign_tp' in camp_cols else ('campaign_type' if 'campaign_type' in camp_cols else None)
     camp_type_sql = f"COALESCE(c.{cp_col}, 'WEB_SITE')" if cp_col else "'WEB_SITE'"
+    shopping_type_aliases = ['SHOPPING', '쇼핑검색', 'SHOP', 'SHOPPINGSEARCH']
     kw_conv_expr = _pick_expr(kw_cols, ['purchase_conv', 'primary_conv'], alias='f')
     kw_sales_expr = _pick_expr(kw_cols, ['purchase_sales', 'primary_sales'], alias='f')
     if 'split_available' in kw_cols:
@@ -349,8 +350,9 @@ def refresh_overview_report_source_cache(engine: Engine, customer_id: str, d1, d
                     )
                     SELECT dt, customer_id, campaign_type, 'powerlink_keyword', source_text, metric_value, sales_value, rn
                     FROM ranked
-                    WHERE rn <= 50 AND campaign_type <> 'SHOPPING'
-                """), {"cid": str(customer_id), "d1": d1, "d2": d2})
+                    WHERE rn <= 50
+                      AND NOT (UPPER(COALESCE(campaign_type, '')) = ANY(:shopping_type_aliases))
+                """), {"cid": str(customer_id), "d1": d1, "d2": d2, "shopping_type_aliases": shopping_type_aliases})
                 conn.execute(text(f"""
                     WITH agg AS (
                         SELECT

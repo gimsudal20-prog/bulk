@@ -415,6 +415,151 @@ def emit_collection_run_summary(results: List[Dict[str, Any]], target_date: date
         log(f"⚠️ GITHUB_STEP_SUMMARY 기록 실패: {e}")
 
 
+def _fmt_metric(value: Any, digits: int = 1) -> str:
+    try:
+        num = float(value or 0)
+    except Exception:
+        num = 0.0
+    if abs(num - round(num)) < 0.000001:
+        return f"{int(round(num)):,}"
+    return f"{num:,.{digits}f}"
+
+
+def _fetch_powerlink_purchase_collection_summary(engine: Engine, target_date: date, customer_ids: List[str]) -> List[Dict[str, Any]]:
+    cids = [str(cid).strip() for cid in (customer_ids or []) if str(cid).strip()]
+    if not cids:
+        return []
+
+    powerlink_types = ["WEB_SITE", "파워링크", "POWERLINK", "POWER_LINK"]
+    type_expr = "UPPER(COALESCE(NULLIF({col}, ''), 'WEB_SITE')) = ANY(:powerlink_types)"
+    queries = [
+        (
+            "캠페인 fact",
+            f"""
+            SELECT COUNT(*) AS rows,
+                   COUNT(*) FILTER (WHERE COALESCE(f.purchase_conv, f.primary_conv, 0) > 0 OR COALESCE(f.purchase_sales, f.primary_sales, 0) > 0) AS nonzero_rows,
+                   SUM(COALESCE(f.purchase_conv, f.primary_conv, 0)) AS purchase_conv,
+                   SUM(COALESCE(f.purchase_sales, f.primary_sales, 0)) AS purchase_sales
+            FROM fact_campaign_daily f
+            JOIN dim_campaign c ON f.customer_id = c.customer_id AND f.campaign_id = c.campaign_id
+            WHERE f.dt = :dt
+              AND f.customer_id = ANY(:cids)
+              AND {type_expr.format(col='c.campaign_tp')}
+            """,
+        ),
+        (
+            "키워드 fact",
+            f"""
+            SELECT COUNT(*) AS rows,
+                   COUNT(*) FILTER (WHERE COALESCE(f.purchase_conv, f.primary_conv, 0) > 0 OR COALESCE(f.purchase_sales, f.primary_sales, 0) > 0) AS nonzero_rows,
+                   SUM(COALESCE(f.purchase_conv, f.primary_conv, 0)) AS purchase_conv,
+                   SUM(COALESCE(f.purchase_sales, f.primary_sales, 0)) AS purchase_sales
+            FROM fact_keyword_daily f
+            JOIN dim_keyword k ON f.customer_id = k.customer_id AND f.keyword_id = k.keyword_id
+            JOIN dim_adgroup a ON k.customer_id = a.customer_id AND k.adgroup_id = a.adgroup_id
+            JOIN dim_campaign c ON a.customer_id = c.customer_id AND a.campaign_id = c.campaign_id
+            WHERE f.dt = :dt
+              AND f.customer_id = ANY(:cids)
+              AND {type_expr.format(col='c.campaign_tp')}
+            """,
+        ),
+        (
+            "소재 fact",
+            f"""
+            SELECT COUNT(*) AS rows,
+                   COUNT(*) FILTER (WHERE COALESCE(f.purchase_conv, f.primary_conv, 0) > 0 OR COALESCE(f.purchase_sales, f.primary_sales, 0) > 0) AS nonzero_rows,
+                   SUM(COALESCE(f.purchase_conv, f.primary_conv, 0)) AS purchase_conv,
+                   SUM(COALESCE(f.purchase_sales, f.primary_sales, 0)) AS purchase_sales
+            FROM fact_ad_daily f
+            JOIN dim_ad ad ON f.customer_id = ad.customer_id AND f.ad_id = ad.ad_id
+            JOIN dim_adgroup a ON ad.customer_id = a.customer_id AND ad.adgroup_id = a.adgroup_id
+            JOIN dim_campaign c ON a.customer_id = c.customer_id AND a.campaign_id = c.campaign_id
+            WHERE f.dt = :dt
+              AND f.customer_id = ANY(:cids)
+              AND {type_expr.format(col='c.campaign_tp')}
+            """,
+        ),
+        (
+            "원천 캐시",
+            f"""
+            SELECT COUNT(*) AS rows,
+                   COUNT(*) FILTER (WHERE COALESCE(metric_value, 0) > 0 OR COALESCE(sales_value, 0) > 0) AS nonzero_rows,
+                   SUM(COALESCE(metric_value, 0)) AS purchase_conv,
+                   SUM(COALESCE(sales_value, 0)) AS purchase_sales
+            FROM overview_report_source_cache c
+            WHERE c.dt = :dt
+              AND c.customer_id = ANY(:cids)
+              AND c.source_kind = 'powerlink_keyword'
+              AND {type_expr.format(col='c.campaign_type')}
+            """,
+        ),
+    ]
+    rows: List[Dict[str, Any]] = []
+    with engine.connect() as conn:
+        for label, sql in queries:
+            row = conn.execute(
+                text(sql),
+                {
+                    "dt": target_date,
+                    "cids": cids,
+                    "powerlink_types": powerlink_types,
+                },
+            ).mappings().first()
+            rows.append({
+                "source": label,
+                "rows": int((row or {}).get("rows") or 0),
+                "nonzero_rows": int((row or {}).get("nonzero_rows") or 0),
+                "purchase_conv": float((row or {}).get("purchase_conv") or 0),
+                "purchase_sales": int(float((row or {}).get("purchase_sales") or 0)),
+            })
+    return rows
+
+
+def emit_powerlink_purchase_collection_summary(engine: Engine, target_date: date, accounts_info: List[Dict[str, Any]]):
+    customer_ids = [str(acc.get("id") or "").strip() for acc in (accounts_info or []) if isinstance(acc, dict)]
+    try:
+        rows = _fetch_powerlink_purchase_collection_summary(engine, target_date, customer_ids)
+    except Exception as e:
+        log(f"⚠️ 파워링크 구매완료 저장 검증 실패: {_exc_label(e)}")
+        return
+    if not rows:
+        return
+
+    total_conv = sum(float(r.get("purchase_conv", 0) or 0) for r in rows if r.get("source") != "원천 캐시")
+    total_cache_conv = sum(float(r.get("purchase_conv", 0) or 0) for r in rows if r.get("source") == "원천 캐시")
+    status = "✅" if total_conv > 0 or total_cache_conv > 0 else "⚠️"
+
+    log("=" * 72)
+    log(f"{status} 파워링크 구매완료 저장 검증 | 대상일={target_date} | 계정={len(set(customer_ids))}개")
+    for r in rows:
+        log(
+            f"   - {r['source']}: rows={r['rows']:,} | 구매완료 행={r['nonzero_rows']:,} | "
+            f"전환수={_fmt_metric(r['purchase_conv'])} | 매출={_fmt_metric(r['purchase_sales'], 0)}"
+        )
+    log("=" * 72)
+
+    summary_path = (os.getenv("GITHUB_STEP_SUMMARY") or "").strip()
+    if not summary_path:
+        return
+    lines = [
+        "",
+        f"## 파워링크 구매완료 저장 검증 ({target_date})",
+        "",
+        "|원천|저장 행|구매완료 행|구매완료 전환수|구매완료 매출|",
+        "|---|---:|---:|---:|---:|",
+    ]
+    for r in rows:
+        lines.append(
+            f"|{_markdown_escape(r['source'])}|{r['rows']:,}|{r['nonzero_rows']:,}|"
+            f"{_fmt_metric(r['purchase_conv'])}|{_fmt_metric(r['purchase_sales'], 0)}|"
+        )
+    try:
+        with open(summary_path, "a", encoding="utf-8") as fp:
+            fp.write("\n".join(lines) + "\n")
+    except Exception as e:
+        log(f"⚠️ GITHUB_STEP_SUMMARY 파워링크 검증 기록 실패: {e}")
+
+
 def die(msg: str):
     log(f"❌ FATAL: {msg}")
     sys.exit(1)
@@ -1424,6 +1569,8 @@ def main():
     log(f"📋 최종 수집 대상 계정: {len(accounts_info)}개 / 동시 작업: {args.workers}개")
     results = run_account_collection_tasks(engine, accounts_info, target_date, args)
     emit_collection_run_summary(results, target_date, args.collect_mode, args.shopping_only, args.sa_scope)
+    if args.collect_mode != "device_only" and not args.shopping_only:
+        emit_powerlink_purchase_collection_summary(engine, target_date, accounts_info)
     if _collection_run_has_fatal_errors(results):
         die("수집이 전 계정에서 실패했습니다. 실행 요약의 error/stage를 확인하세요.")
 

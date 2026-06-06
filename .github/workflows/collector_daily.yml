@@ -1,7 +1,17 @@
 name: 01 메인 일일 수집
-run-name: 01 메인 일일 수집 | ${{ github.event_name == 'workflow_dispatch' && format('수동 | {0} | 빠른실행={1}', inputs.collect_mode, inputs.fast) || '스케줄' }}
+run-name: 01 메인 일일 수집 | ${{ github.event_name == 'workflow_dispatch' && format('수동 | {0} | 빠른실행={1}', inputs.collect_mode, inputs.fast) || github.event_name == 'push' && '즉시' || '스케줄' }}
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - "collector.py"
+      - "collector_*.py"
+      - "collector*.py"
+      - "device_collector_helpers.py"
+      - "targeting_collector_helpers.py"
+      - ".github/workflows/collector_daily.yml"
   schedule:
     - cron: "7 19,1,7 * * *"   # KST 04:07 / 10:07 / 16:07
   workflow_dispatch:
@@ -80,6 +90,9 @@ jobs:
             FAST_FLAG=""
             [[ "${DISPATCH_FAST:-true}" == "true" ]] && FAST_FLAG="--fast"
             python collector.py --date "${YESTERDAY}" --workers 2 --collect_mode "${COLLECT_MODE}" --skip_time_age ${FAST_FLAG}
+            python collector_time_age.py --date "${YESTERDAY}" --workers 2 --sync_campaigns
+          elif [[ "${{ github.event_name }}" == "push" ]]; then
+            python collector.py --date "${YESTERDAY}" --workers 2 --collect_mode "${COLLECT_MODE}" --skip_time_age
             python collector_time_age.py --date "${YESTERDAY}" --workers 2 --sync_campaigns
           else
             if [[ "${KST_HOUR}" == "04" ]]; then

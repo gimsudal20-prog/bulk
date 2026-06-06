@@ -129,21 +129,29 @@ def fetch_stats_fallback(
 
     raw_stats = get_stats_range_fn(customer_id, ids, target_date)
     rows: List[Dict[str, Any]] = []
-    for r in raw_stats or []:
-        obj_id = str(r.get("id") or "").strip()
-        if not obj_id:
-            continue
+    valid_ids = {str(x).strip() for x in ids if str(x).strip()}
+    split_map = split_map or {}
+    seen_ids: set[str] = set()
 
-        imp = int(r.get("impCnt", 0) or 0)
-        clk = int(r.get("clkCnt", 0) or 0)
-        cost = int(float(r.get("salesAmt", 0) or 0))
-        total_conv = float(r.get("ccnt", 0) or 0)
-        total_sales = int(float(r.get("convAmt", 0) or 0))
+    def _split_has_values(split: dict | None) -> bool:
+        if not split:
+            return False
+        for key in ("purchase_conv", "purchase_sales", "cart_conv", "cart_sales", "wishlist_conv", "wishlist_sales"):
+            try:
+                if float(split.get(key, 0) or 0) != 0:
+                    return True
+            except Exception:
+                continue
+        return False
 
-        if imp == 0 and clk == 0 and cost == 0 and total_conv == 0 and total_sales == 0:
-            continue
+    def _build_row(obj_id: str, stat: dict | None, split: dict | None, data_source: str) -> Dict[str, Any]:
+        stat = stat or {}
+        imp = int(stat.get("impCnt", 0) or 0)
+        clk = int(stat.get("clkCnt", 0) or 0)
+        cost = int(float(stat.get("salesAmt", 0) or 0))
+        total_conv = float(stat.get("ccnt", 0) or 0)
+        total_sales = int(float(stat.get("convAmt", 0) or 0))
 
-        split = split_map.get(obj_id) if split_map else None
         purchase_conv = split.get("purchase_conv", 0.0) if split else None
         purchase_sales = split.get("purchase_sales", 0) if split else None
         cart_conv = split.get("cart_conv", 0.0) if split else None
@@ -176,11 +184,36 @@ def fetch_stats_fallback(
             "wishlist_sales": wishlist_sales,
             "wishlist_roas": wishlist_roas,
             "split_available": bool(split),
-            "data_source": "stats_total_plus_split" if split else "stats_total_only",
+            "data_source": data_source,
         }
         if id_key in ["campaign_id", "keyword_id", "ad_id"]:
-            row["avg_rnk"] = float(r.get("avgRnk", 0) or 0)
-        rows.append(row)
+            row["avg_rnk"] = float(stat.get("avgRnk", 0) or 0)
+        return row
+
+    for r in raw_stats or []:
+        obj_id = str(r.get("id") or "").strip()
+        if not obj_id:
+            continue
+        seen_ids.add(obj_id)
+
+        imp = int(r.get("impCnt", 0) or 0)
+        clk = int(r.get("clkCnt", 0) or 0)
+        cost = int(float(r.get("salesAmt", 0) or 0))
+        total_conv = float(r.get("ccnt", 0) or 0)
+        total_sales = int(float(r.get("convAmt", 0) or 0))
+        split = split_map.get(obj_id)
+        has_split_values = _split_has_values(split)
+
+        if imp == 0 and clk == 0 and cost == 0 and total_conv == 0 and total_sales == 0 and not has_split_values:
+            continue
+
+        rows.append(_build_row(obj_id, r, split, "stats_total_plus_split" if split else "stats_total_only"))
+
+    for obj_id, split in split_map.items():
+        obj_id = str(obj_id or "").strip()
+        if not obj_id or obj_id in seen_ids or obj_id not in valid_ids or not _split_has_values(split):
+            continue
+        rows.append(_build_row(obj_id, None, split, "split_only"))
 
     pk_name = id_key
     if scoped_replace:

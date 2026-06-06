@@ -40,7 +40,85 @@ NAV_CONFIG = [
     ("설정 및 연결", "설정·연결", ":material/settings:"),
 ]
 
+NAV_GROUPS = [
+    ("summary", "요약", "핵심 화면", ["요약", "운영 센터"]),
+    (
+        "analysis",
+        "성과 분석",
+        "성과 분석",
+        ["성과 분석 · 캠페인", "성과 분석 · 키워드", "성과 분석 · 소재", "쇼핑 검색어 분석", "시간·연령 분석"],
+    ),
+    ("admin", "관리 도구", "관리 도구", ["예산 및 잔액", "Meta 도구", "설정 및 연결"]),
+]
+
 NAV_LABELS = {page_key: short_label for page_key, short_label, _icon in NAV_CONFIG}
+NAV_META = {page_key: (short_label, icon) for page_key, short_label, icon in NAV_CONFIG}
+
+
+def _nav_group_for_page(page_key: str) -> str:
+    for group_key, _label, _title, pages in NAV_GROUPS:
+        if page_key in pages:
+            return group_key
+    return NAV_GROUPS[0][0]
+
+
+def _visible_nav_groups(nav_items: list[str]) -> list[tuple[str, str, str, list[str]]]:
+    allowed = set(nav_items)
+    groups = []
+    for group_key, label, title, pages in NAV_GROUPS:
+        visible_pages = [page for page in pages if page in allowed]
+        if visible_pages:
+            groups.append((group_key, label, title, visible_pages))
+    return groups
+
+
+def _render_sidebar_nav(nav_items: list[str]) -> str:
+    if st.session_state.get("nav_page") not in nav_items:
+        st.session_state["nav_page"] = nav_items[0]
+
+    current_nav = st.session_state.get("nav_page", nav_items[0])
+    groups = _visible_nav_groups(nav_items)
+    if not groups:
+        return current_nav
+
+    group_keys = [group[0] for group in groups]
+    current_group = _nav_group_for_page(current_nav)
+    if current_group not in group_keys:
+        current_group = group_keys[0]
+    if st.session_state.get("nav_group") not in group_keys:
+        st.session_state["nav_group"] = current_group
+
+    selected_group = st.selectbox(
+        "메뉴 그룹",
+        group_keys,
+        index=group_keys.index(st.session_state.get("nav_group", current_group)),
+        format_func=lambda key: next(label for group_key, label, _title, _pages in groups if group_key == key),
+        key="nav_group",
+        label_visibility="collapsed",
+    )
+
+    if selected_group != current_group:
+        target_pages = next(pages for group_key, _label, _title, pages in groups if group_key == selected_group)
+        st.session_state["nav_page"] = target_pages[0]
+        st.rerun()
+
+    group_title, group_pages = next((title, pages) for group_key, _label, title, pages in groups if group_key == selected_group)
+    st.markdown(f"<div class='nav-group-heading'>{escape(group_title)}</div>", unsafe_allow_html=True)
+    for page_key in group_pages:
+        short_label, icon = NAV_META[page_key]
+        is_active = page_key == current_nav
+        clicked = st.button(
+            short_label,
+            key=f"nav_btn_{page_key}",
+            icon=icon,
+            type="primary" if is_active else "secondary",
+            use_container_width=True,
+        )
+        if clicked and not is_active:
+            st.session_state["nav_page"] = page_key
+            st.session_state["nav_group"] = selected_group
+            st.rerun()
+    return st.session_state.get("nav_page", nav_items[0])
 
 
 def _latest_status(latest: dict | None) -> tuple[str, str]:
@@ -172,25 +250,7 @@ def main():
             st.warning("동기화가 필요합니다.")
 
         nav_items = [item[0] for item in NAV_CONFIG] if meta_ready else ["설정 및 연결"]
-        if st.session_state.get("nav_page") not in nav_items:
-            st.session_state["nav_page"] = nav_items[0]
-
-        current_nav = st.session_state.get("nav_page", nav_items[0])
-        for page_key, short_label, icon in NAV_CONFIG:
-            if page_key not in nav_items:
-                continue
-            is_active = page_key == current_nav
-            clicked = st.button(
-                short_label,
-                key=f"nav_btn_{page_key}",
-                icon=icon,
-                type="primary" if is_active else "secondary",
-                use_container_width=True,
-            )
-            if clicked and not is_active:
-                st.session_state["nav_page"] = page_key
-                st.rerun()
-        nav = st.session_state.get("nav_page", nav_items[0])
+        nav = _render_sidebar_nav(nav_items)
 
     f = None
     if nav in {"설정 및 연결", "Meta 도구"}:

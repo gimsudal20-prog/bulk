@@ -935,6 +935,15 @@ h1, h2, h3, h4, h5, h6 {
   min-height: 30px;
   box-sizing: border-box;
 }
+.nav-group-heading {
+  color: var(--nv-text-soft);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.2;
+  margin: 1px 0 0;
+  padding: 7px 4px 5px;
+  box-sizing: border-box;
+}
 .sidebar-section-title {
   color: var(--nv-text-soft);
   font-size: 13px;
@@ -957,11 +966,33 @@ h1, h2, h3, h4, h5, h6 {
   box-sizing: border-box;
 }
 [data-testid="stSidebar"] [data-testid="stMarkdownContainer"]:has(.nav-sidebar-title),
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"]:has(.nav-group-heading),
 [data-testid="stSidebar"] [data-testid="stMarkdownContainer"]:has(.sidebar-section-title),
 [data-testid="stSidebar"] [data-testid="stMarkdownContainer"]:has(.sidebar-section-label) {
   overflow: visible;
   min-height: 34px !important;
   margin-bottom: 3px !important;
+}
+
+[data-testid="stSidebar"] [data-testid="stSelectbox"] {
+  margin-bottom: 2px !important;
+}
+[data-testid="stSidebar"] [data-testid="stSelectbox"] > div {
+  min-height: 34px !important;
+}
+[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] > div {
+  min-height: 34px !important;
+  border-radius: 8px !important;
+  border-color: var(--nv-line-strong) !important;
+  background: #FFFFFF !important;
+  box-shadow: var(--nv-shadow-soft) !important;
+}
+[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] span,
+[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] div {
+  font-size: 13px !important;
+  font-weight: 800 !important;
+  color: var(--nv-text-soft) !important;
+  letter-spacing: 0 !important;
 }
 
 [data-testid="stSidebar"] [data-testid="stButton"] {
@@ -974,7 +1005,7 @@ h1, h2, h3, h4, h5, h6 {
   border-radius: 8px !important;
   font-size: 13px !important;
   font-weight: 850 !important;
-  letter-spacing: -0.01em !important;
+  letter-spacing: 0 !important;
   box-shadow: none !important;
   transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease !important;
 }

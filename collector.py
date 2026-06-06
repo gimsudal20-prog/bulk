@@ -792,13 +792,14 @@ def format_split_summary(summary: dict) -> str:
     return collector_parsers_mod.format_split_summary(summary)
 
 
-def process_conversion_report(df: pd.DataFrame, allowed_campaign_ids: set[str] | None = None, report_hint: str = "", keyword_lookup: dict | None = None, keyword_unique_lookup: dict | None = None, live_keyword_resolver=None, debug_account_name: str = "", debug_target_date: str = "") -> Tuple[dict, dict, dict, dict]:
+def process_conversion_report(df: pd.DataFrame, allowed_campaign_ids: set[str] | None = None, report_hint: str = "", keyword_lookup: dict | None = None, keyword_unique_lookup: dict | None = None, owner_campaign_lookup: dict | None = None, live_keyword_resolver=None, debug_account_name: str = "", debug_target_date: str = "") -> Tuple[dict, dict, dict, dict]:
     return collector_parsers_mod.process_conversion_report(
         df,
         allowed_campaign_ids=allowed_campaign_ids,
         report_hint=report_hint,
         keyword_lookup=keyword_lookup,
         keyword_unique_lookup=keyword_unique_lookup,
+        owner_campaign_lookup=owner_campaign_lookup,
         live_keyword_resolver=live_keyword_resolver,
         debug_account_name=debug_account_name,
         debug_target_date=debug_target_date,

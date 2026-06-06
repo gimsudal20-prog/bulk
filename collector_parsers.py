@@ -342,6 +342,38 @@ def _conv_extract_keyword_id_from_value(v: str) -> str:
     return m.group(1) if m else ""
 
 
+def _conv_extract_owner_id_from_value(v: str) -> str:
+    raw = str(v or "").strip().strip('"').strip("'")
+    if not raw or raw == "-":
+        return ""
+    owner = raw.split("~", 1)[0].strip().strip('"').strip("'")
+    if owner.lower().startswith(("cmp-", "grp-", "nkw-", "nad-")):
+        return owner
+    m = re.search(r"((?:cmp|grp|nkw|nad)-[A-Za-z0-9-]+)", raw, flags=re.I)
+    return m.group(1) if m else ""
+
+
+def _conv_resolve_campaign_object_id(row_cid: str, row_gid: str, row_kid: str, vals: list[str],
+                                     owner_campaign_lookup: dict | None) -> str:
+    row_cid = str(row_cid or "").strip()
+    if row_cid.lower().startswith("cmp-"):
+        return row_cid
+
+    owner_campaign_lookup = owner_campaign_lookup or {}
+    candidates = [row_gid, row_kid]
+    candidates.extend(vals or [])
+    for candidate in candidates:
+        owner = _conv_extract_owner_id_from_value(candidate)
+        owner_l = owner.lower()
+        if owner_l.startswith("cmp-"):
+            return owner
+        if owner_l.startswith("grp-"):
+            mapped = str(owner_campaign_lookup.get(owner) or "").strip()
+            if mapped.lower().startswith("cmp-"):
+                return mapped
+    return ""
+
+
 def _conv_row_allowed(row_campaign_id: str | None, allowed_campaign_ids: set[str]) -> bool:
     if not allowed_campaign_ids:
         return True
@@ -480,7 +512,8 @@ def _conv_resolve_header_indexes(headers: list[str]) -> dict[str, int]:
 
 
 def _conv_try_header_mode(df: pd.DataFrame, allowed_campaign_ids: set[str], report_hint: str,
-                          keyword_lookup: dict, keyword_unique_lookup: dict, live_keyword_resolver,
+                          keyword_lookup: dict, keyword_unique_lookup: dict, owner_campaign_lookup: dict,
+                          live_keyword_resolver,
                           debug_account_name: str, debug_target_date: str, *, fast_mode: bool = False) -> tuple[dict, dict, dict, dict] | None:
     camp_map, kw_map, ad_map, summary = _conv_empty_maps_and_summary()
     debug_rows: list[dict] = []
@@ -529,8 +562,9 @@ def _conv_try_header_mode(df: pd.DataFrame, allowed_campaign_ids: set[str], repo
             row_kid, row_gid, idxs['kw_text_idx'], vals, keyword_lookup, keyword_unique_lookup, live_keyword_resolver
         )
 
-        if row_cid.lower().startswith("cmp-"):
-            _conv_apply_row(camp_map, row_cid, is_purchase, is_cart, is_wishlist, c_val, s_val)
+        camp_obj_id = _conv_resolve_campaign_object_id(row_cid, row_gid, row_kid, vals, owner_campaign_lookup)
+        if camp_obj_id:
+            _conv_apply_row(camp_map, camp_obj_id, is_purchase, is_cart, is_wishlist, c_val, s_val)
         if kw_obj_id:
             _conv_apply_row(kw_map, kw_obj_id, is_purchase, is_cart, is_wishlist, c_val, s_val)
         if row_adid.lower().startswith("nad-"):
@@ -547,7 +581,7 @@ def _conv_try_header_mode(df: pd.DataFrame, allowed_campaign_ids: set[str], repo
             s_val,
             True,
             "header_keep",
-            row_cid=row_cid,
+            row_cid=camp_obj_id or row_cid,
             row_gid=row_gid,
             row_kid=row_kid_s,
             row_adid=row_adid,
@@ -677,7 +711,8 @@ def _conv_resolve_keyword_object_id(row_kid: str, row_gid: str, kw_text_idx: int
 
 
 def _conv_try_heuristic_mode(df: pd.DataFrame, allowed_campaign_ids: set[str], report_hint: str,
-                             keyword_lookup: dict, keyword_unique_lookup: dict, live_keyword_resolver,
+                             keyword_lookup: dict, keyword_unique_lookup: dict, owner_campaign_lookup: dict,
+                             live_keyword_resolver,
                              debug_account_name: str, debug_target_date: str, *, fast_mode: bool = False) -> tuple[dict, dict, dict, dict]:
     camp_map, kw_map, ad_map, summary = _conv_empty_maps_and_summary()
     debug_rows: list[dict] = []
@@ -713,8 +748,9 @@ def _conv_try_heuristic_mode(df: pd.DataFrame, allowed_campaign_ids: set[str], r
             row_kid = extract_prefixed_token(vals, 'nkw-')
         row_adid = _conv_value_from_idx_or_scan(vals, idxs['adid_idx'], 'nad-') or extract_prefixed_token(vals, 'nad-')
 
-        if row_cid:
-            _conv_apply_row(camp_map, row_cid, is_purchase, is_cart, is_wishlist, c_val, s_val)
+        camp_obj_id = _conv_resolve_campaign_object_id(row_cid, row_gid, row_kid, vals, owner_campaign_lookup)
+        if camp_obj_id:
+            _conv_apply_row(camp_map, camp_obj_id, is_purchase, is_cart, is_wishlist, c_val, s_val)
 
         kw_obj_id, kw_text, row_kid_s = _conv_resolve_keyword_object_id(
             row_kid, row_gid, idxs['kw_text_idx'], vals, keyword_lookup, keyword_unique_lookup, live_keyword_resolver
@@ -736,7 +772,7 @@ def _conv_try_heuristic_mode(df: pd.DataFrame, allowed_campaign_ids: set[str], r
             s_val,
             True,
             "keep",
-            row_cid=row_cid,
+            row_cid=camp_obj_id or row_cid,
             row_gid=row_gid,
             row_kid=row_kid_s,
             row_adid=row_adid,
@@ -748,10 +784,11 @@ def _conv_try_heuristic_mode(df: pd.DataFrame, allowed_campaign_ids: set[str], r
     return camp_map, kw_map, ad_map, summary
 
 
-def process_conversion_report(df: pd.DataFrame, allowed_campaign_ids: set[str] | None = None, report_hint: str = "", keyword_lookup: dict | None = None, keyword_unique_lookup: dict | None = None, live_keyword_resolver=None, debug_account_name: str = "", debug_target_date: str = "", *, fast_mode: bool = False) -> Tuple[dict, dict, dict, dict]:
+def process_conversion_report(df: pd.DataFrame, allowed_campaign_ids: set[str] | None = None, report_hint: str = "", keyword_lookup: dict | None = None, keyword_unique_lookup: dict | None = None, owner_campaign_lookup: dict | None = None, live_keyword_resolver=None, debug_account_name: str = "", debug_target_date: str = "", *, fast_mode: bool = False) -> Tuple[dict, dict, dict, dict]:
     allowed_campaign_ids = set(str(x).strip() for x in (allowed_campaign_ids or set()) if str(x).strip())
     keyword_lookup = keyword_lookup or {}
     keyword_unique_lookup = keyword_unique_lookup or {}
+    owner_campaign_lookup = owner_campaign_lookup or {}
     if df is None or df.empty:
         return _conv_empty_maps_and_summary()
 
@@ -761,6 +798,7 @@ def process_conversion_report(df: pd.DataFrame, allowed_campaign_ids: set[str] |
         report_hint=report_hint,
         keyword_lookup=keyword_lookup,
         keyword_unique_lookup=keyword_unique_lookup,
+        owner_campaign_lookup=owner_campaign_lookup,
         live_keyword_resolver=live_keyword_resolver,
         debug_account_name=debug_account_name,
         debug_target_date=debug_target_date,
@@ -775,6 +813,7 @@ def process_conversion_report(df: pd.DataFrame, allowed_campaign_ids: set[str] |
         report_hint=report_hint,
         keyword_lookup=keyword_lookup,
         keyword_unique_lookup=keyword_unique_lookup,
+        owner_campaign_lookup=owner_campaign_lookup,
         live_keyword_resolver=live_keyword_resolver,
         debug_account_name=debug_account_name,
         debug_target_date=debug_target_date,

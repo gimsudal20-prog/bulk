@@ -22,6 +22,7 @@ def _resolve_split_payload(
     shopping_keyword_ids: set[str],
     keyword_lookup: Dict[Tuple[str, str], str],
     keyword_unique_lookup: Dict[str, List[Tuple[str, str]]],
+    adgroup_to_campaign_map: Dict[str, str],
     live_keyword_resolver,
     account_name: str,
     customer_id: str,
@@ -50,6 +51,7 @@ def _resolve_split_payload(
         log_fn(f"   ℹ️ [ {account_name} ] 2026-03-11 이전 날짜는 purchase/cart/wishlist 분리 수집을 시도하지 않습니다.")
         return camp_map, kw_map, ad_map, shop_query_rows, split_report_ok
 
+    owner_campaign_lookup = adgroup_to_campaign_map or {}
     source_maps: Dict[str, Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]], Dict[str, Any]]] = {}
     # AD_CONVERSION mostly covers campaign/ad split.  Powerlink keyword purchase
     # completions can appear in CRITERION_CONVERSION with a criterion value such
@@ -78,6 +80,7 @@ def _resolve_split_payload(
             report_hint=tp,
             keyword_lookup=keyword_lookup,
             keyword_unique_lookup=keyword_unique_lookup,
+            owner_campaign_lookup=owner_campaign_lookup,
             live_keyword_resolver=live_keyword_resolver,
             debug_account_name=account_name,
             debug_target_date=str(target_date),
@@ -1146,6 +1149,7 @@ def process_account(
                 shopping_keyword_ids=shopping_keyword_ids,
                 keyword_lookup=keyword_lookup,
                 keyword_unique_lookup=keyword_unique_lookup,
+                adgroup_to_campaign_map=adgroup_to_campaign_map,
                 live_keyword_resolver=live_keyword_resolver,
                 account_name=account_name,
                 customer_id=customer_id,

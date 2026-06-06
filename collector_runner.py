@@ -115,13 +115,7 @@ def _resolve_split_payload(
     # CRITERION_CONVERSION only.  The shopping search-term rows are stored in
     # fact_search_term_daily, not fact_keyword_daily.
     raw_kw_map = merge_split_maps_fn(ad_kw_map, criterion_kw_map)
-    if shopping_only:
-        kw_map = {}
-    else:
-        kw_map = filter_split_map_excluding_ids_fn(raw_kw_map, shopping_keyword_ids)
-        removed_kw = max(0, len(raw_kw_map) - len(kw_map))
-        if removed_kw:
-            log_fn(f"   ℹ️ [ {account_name} ] 쇼핑 키워드 split {removed_kw}건은 fact_keyword_daily 적재에서 제외합니다.")
+    kw_map = {} if shopping_only else raw_kw_map
 
     split_report_ok = bool(camp_map or kw_map or ad_map)
 

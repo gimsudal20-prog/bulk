@@ -1143,7 +1143,7 @@ def _render_overview_keyword_sort_controls(df: pd.DataFrame, visible_cols: list[
         "CPC", "통합 ROAS(%)", "구매완료 ROAS(%)",
     ]
     sort_options = [c for c in preferred if c in visible_cols and c in df.columns]
-    sort_options.extend([c for c in visible_cols if c in df.columns and c not in sort_options and c != "키워드"])
+    sort_options.extend([c for c in visible_cols if c in df.columns and c not in sort_options and c not in {"키워드", "점검"}])
     if not sort_options:
         return df
 
@@ -1159,6 +1159,118 @@ def _render_overview_keyword_sort_controls(df: pd.DataFrame, visible_cols: list[
             key="overview_keyword_sort_dir",
         )
     return _sort_overview_detail_frame(df, sort_col, descending=(sort_dir == "내림차순"))
+
+
+def _overview_keyword_numeric(df: pd.DataFrame, col: str) -> pd.Series:
+    return safe_numeric_series(df.get(col), length=len(df.index), default=0.0)
+
+
+def _overview_keyword_cutoff(series: pd.Series, quantile: float = 0.75) -> float:
+    positive = pd.to_numeric(series, errors="coerce").fillna(0)
+    positive = positive[positive > 0]
+    if positive.empty:
+        return 0.0
+    return float(positive.quantile(quantile))
+
+
+def _filter_overview_keyword_workbench(df: pd.DataFrame, preset: str) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame() if df is None else df
+    work = df.copy()
+    cost = _overview_keyword_numeric(work, "광고비")
+    clicks = _overview_keyword_numeric(work, "클릭수")
+    purchase = _overview_keyword_numeric(work, "구매완료수")
+    total_conv = _overview_keyword_numeric(work, "총 전환수")
+    roas = _overview_keyword_numeric(work, "구매완료 ROAS(%)")
+
+    if preset == "구매 발생":
+        return work[purchase > 0].copy()
+    if preset == "비용 발생·구매 0":
+        return work[(cost > 0) & (purchase <= 0)].copy()
+    if preset == "클릭 많고 구매 0":
+        click_cutoff = max(1.0, _overview_keyword_cutoff(clicks, 0.75))
+        return work[(clicks >= click_cutoff) & (purchase <= 0)].copy()
+    if preset == "ROAS 우수":
+        return work[(purchase > 0) & (roas >= 300)].copy()
+    if preset == "총전환 있음":
+        return work[total_conv > 0].copy()
+    return work
+
+
+def _add_overview_keyword_status(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame() if df is None else df
+    work = df.copy()
+    if "점검" in work.columns:
+        return work
+    cost = _overview_keyword_numeric(work, "광고비")
+    clicks = _overview_keyword_numeric(work, "클릭수")
+    purchase = _overview_keyword_numeric(work, "구매완료수")
+    total_conv = _overview_keyword_numeric(work, "총 전환수")
+    roas = _overview_keyword_numeric(work, "구매완료 ROAS(%)")
+    cost_cutoff = max(1.0, _overview_keyword_cutoff(cost, 0.75))
+    click_cutoff = max(1.0, _overview_keyword_cutoff(clicks, 0.75))
+
+    status = np.select(
+        [
+            (purchase > 0) & (roas >= 300),
+            purchase > 0,
+            (cost >= cost_cutoff) & (purchase <= 0),
+            (clicks >= click_cutoff) & (purchase <= 0),
+            total_conv > 0,
+        ],
+        ["ROAS 우수", "구매 발생", "비용 점검", "클릭 점검", "총전환 있음"],
+        default="관찰",
+    )
+    insert_at = 1 if "키워드" in work.columns else 0
+    work.insert(insert_at, "점검", status)
+    return work
+
+
+def _render_overview_keyword_workbench_cards(df: pd.DataFrame) -> None:
+    if df is None or df.empty:
+        return
+    cost = _overview_keyword_numeric(df, "광고비")
+    purchase = _overview_keyword_numeric(df, "구매완료수")
+    total_conv = _overview_keyword_numeric(df, "총 전환수")
+    no_purchase_cost = (cost > 0) & (purchase <= 0)
+    purchase_rows = int((purchase > 0).sum())
+    total_rows = int(len(df.index))
+    total_purchase = float(purchase.sum())
+    total_conversion = float(total_conv.sum())
+    max_no_purchase_cost = float(cost[no_purchase_cost].max()) if no_purchase_cost.any() else 0.0
+    render_ops_cards([
+        {"title": "표시 키워드", "value": f"{total_rows:,}개", "note": f"구매 발생 {purchase_rows:,}개", "tone": "info", "icon": "KW"},
+        {"title": "비용 발생·구매 0", "value": f"{int(no_purchase_cost.sum()):,}개", "note": f"최대 비용 {format_currency(max_no_purchase_cost)}", "tone": "danger" if no_purchase_cost.any() else "success", "icon": "0"},
+        {"title": "전환 합계", "value": f"{total_conversion:,.0f}건", "note": f"구매완료 {total_purchase:,.0f}건", "tone": "success" if total_purchase > 0 else "warning", "icon": "CV"},
+    ])
+
+
+def _overview_keyword_visible_cols(df: pd.DataFrame, show_deltas: bool, mode: str, funnel_cols: list[str]) -> list[str]:
+    if df is None or df.empty:
+        return []
+    if mode == "전체 지표":
+        cols = ["키워드", "점검"] + [c for c in funnel_cols if c in df.columns]
+    elif mode == "전환 상세":
+        cols = [
+            "키워드", "점검", "광고비", "클릭수", "CPC", "구매완료수", "구매 전환율(%)",
+            "구매완료 매출", "구매완료 ROAS(%)", "총 전환수", "총 전환율(%)",
+            "총 전환매출", "통합 ROAS(%)",
+        ]
+        if show_deltas:
+            cols += ["구매완료 증감", "구매완료 차이", "총 전환 증감", "총 전환 차이", "통합 ROAS 증감"]
+    else:
+        cols = [
+            "키워드", "점검", "광고비", "클릭수", "CPC", "구매완료수",
+            "구매완료 매출", "구매완료 ROAS(%)", "총 전환수", "통합 ROAS(%)",
+        ]
+        if show_deltas:
+            cols += ["광고비 증감", "구매완료 증감", "구매완료 ROAS 증감"]
+    seen = []
+    for col in cols:
+        if col in df.columns and col not in seen:
+            seen.append(col)
+    return seen
 
 
 def _delta_chip(cur_val, base_val, improve_when_up=True):
@@ -1639,12 +1751,34 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
 
     elif detail_panel == "키워드 상세 분석":
         if not kw_disp.empty:
-            view_cols = ["키워드"] + [c for c in get_funnel_cols(show_deltas) if c in kw_disp.columns]
-            disp_kw = _render_overview_keyword_sort_controls(kw_disp[view_cols].copy(), view_cols)
-            styled_kw_df = disp_kw.style.format(fmt_dict_standard)
-            styled_kw_df = _apply_overview_delta_styles(styled_kw_df, disp_kw)
-            _render_overview_sticky_table(styled_kw_df, "키워드", height=460, hide_index=True)
-            st.caption(f"총 {len(disp_kw):,}개 키워드 전체를 기준으로 정렬했습니다.")
+            kw_tool_a, kw_tool_b = st.columns([2, 1], gap="small")
+            with kw_tool_a:
+                keyword_preset = st.segmented_control(
+                    "키워드 업무 보기",
+                    ["전체", "구매 발생", "비용 발생·구매 0", "클릭 많고 구매 0", "ROAS 우수", "총전환 있음"],
+                    default="전체",
+                    key="overview_keyword_preset",
+                )
+            with kw_tool_b:
+                keyword_col_mode = st.segmented_control(
+                    "컬럼 보기",
+                    ["핵심", "전환 상세", "전체 지표"],
+                    default="핵심",
+                    key="overview_keyword_col_mode",
+                )
+            kw_work = _filter_overview_keyword_workbench(kw_disp, keyword_preset)
+            if kw_work.empty:
+                st.info("선택한 키워드 업무 보기 조건에 맞는 데이터가 없습니다.")
+            else:
+                kw_work = _add_overview_keyword_status(kw_work)
+                _render_overview_keyword_workbench_cards(kw_work)
+                funnel_cols = get_funnel_cols(show_deltas)
+                view_cols = _overview_keyword_visible_cols(kw_work, show_deltas, keyword_col_mode, funnel_cols)
+                disp_kw = _render_overview_keyword_sort_controls(kw_work[view_cols].copy(), view_cols)
+                styled_kw_df = disp_kw.style.format(fmt_dict_standard)
+                styled_kw_df = _apply_overview_delta_styles(styled_kw_df, disp_kw)
+                _render_overview_sticky_table(styled_kw_df, "키워드", height=460, hide_index=True)
+                st.caption(f"총 {len(kw_disp):,}개 키워드 중 {len(disp_kw):,}개를 표시했습니다.")
         else:
             st.info("조건에 맞는 데이터가 없습니다.")
 

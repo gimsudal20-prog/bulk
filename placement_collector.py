@@ -461,7 +461,10 @@ def resolve_accounts(args: argparse.Namespace) -> List[Dict[str, str]]:
     return out
 
 
-def read_saved_placement_summary(engine, target_date: date, customer_ids: List[str]) -> Dict[str, Dict[str, int]]:
+METRIC_SUMMARY_KEYS = ["imp", "clk", "cost", "conv", "sales", "purchase_conv", "purchase_sales"]
+
+
+def read_saved_placement_summary(engine, target_date: date, customer_ids: List[str]) -> Dict[str, Dict[str, float]]:
     cids = [str(x).strip() for x in customer_ids if str(x or "").strip()]
     if not cids:
         return {}
@@ -472,7 +475,11 @@ def read_saved_placement_summary(engine, target_date: date, customer_ids: List[s
             COUNT(*) AS rows,
             COALESCE(SUM(imp), 0) AS imp,
             COALESCE(SUM(clk), 0) AS clk,
-            COALESCE(SUM(cost), 0) AS cost
+            COALESCE(SUM(cost), 0) AS cost,
+            COALESCE(SUM(conv), 0) AS conv,
+            COALESCE(SUM(sales), 0) AS sales,
+            COALESCE(SUM(purchase_conv), 0) AS purchase_conv,
+            COALESCE(SUM(purchase_sales), 0) AS purchase_sales
         FROM fact_adgroup_placement_daily
         WHERE dt = :dt
           AND customer_id = ANY(:cids)
@@ -488,9 +495,67 @@ def read_saved_placement_summary(engine, target_date: date, customer_ids: List[s
             "imp": int(row.get("imp") or 0),
             "clk": int(row.get("clk") or 0),
             "cost": int(row.get("cost") or 0),
+            "conv": round(float(row.get("conv") or 0.0), 6),
+            "sales": int(row.get("sales") or 0),
+            "purchase_conv": round(float(row.get("purchase_conv") or 0.0), 6),
+            "purchase_sales": int(row.get("purchase_sales") or 0),
+            "roas": round((float(row.get("sales") or 0.0) / float(row.get("cost") or 0.0)) * 100, 4) if float(row.get("cost") or 0.0) else 0.0,
+            "purchase_roas": round((float(row.get("purchase_sales") or 0.0) / float(row.get("cost") or 0.0)) * 100, 4) if float(row.get("cost") or 0.0) else 0.0,
         }
         for row in rows or []
     }
+
+
+def summarize_saved_placement_totals(saved_summary: Dict[str, Dict[str, float]]) -> Dict[str, float]:
+    summary: Dict[str, float] = {key: 0.0 for key in METRIC_SUMMARY_KEYS}
+    summary["rows"] = 0.0
+    for values in saved_summary.values():
+        summary["rows"] += float(values.get("rows") or 0.0)
+        for key in METRIC_SUMMARY_KEYS:
+            summary[key] += float(values.get(key) or 0.0)
+    for key in ["imp", "clk", "cost", "sales", "purchase_sales", "rows"]:
+        summary[key] = int(round(summary.get(key, 0.0)))
+    summary["conv"] = round(float(summary.get("conv") or 0.0), 6)
+    summary["purchase_conv"] = round(float(summary.get("purchase_conv") or 0.0), 6)
+    summary["roas"] = round((float(summary.get("sales") or 0.0) / float(summary.get("cost") or 0.0)) * 100, 4) if summary.get("cost") else 0.0
+    summary["purchase_roas"] = round((float(summary.get("purchase_sales") or 0.0) / float(summary.get("cost") or 0.0)) * 100, 4) if summary.get("cost") else 0.0
+    return summary
+
+
+def read_source_metric_summary(engine, target_date: date, customer_ids: List[str]) -> Dict[str, float]:
+    summary: Dict[str, float] = {key: 0.0 for key in METRIC_SUMMARY_KEYS}
+    adgroups = 0
+    for customer_id in [str(x).strip() for x in customer_ids if str(x or "").strip()]:
+        lookup = read_adgroup_metric_split_lookup(engine, customer_id, target_date)
+        adgroups += len(lookup)
+        for split in lookup.values():
+            for key in METRIC_SUMMARY_KEYS:
+                summary[key] += float(split.get(key) or 0.0)
+    for key in ["imp", "clk", "cost", "sales", "purchase_sales"]:
+        summary[key] = int(round(summary.get(key, 0.0)))
+    summary["conv"] = round(float(summary.get("conv") or 0.0), 6)
+    summary["purchase_conv"] = round(float(summary.get("purchase_conv") or 0.0), 6)
+    summary["adgroups"] = int(adgroups)
+    summary["roas"] = round((float(summary.get("sales") or 0.0) / float(summary.get("cost") or 0.0)) * 100, 4) if summary.get("cost") else 0.0
+    summary["purchase_roas"] = round((float(summary.get("purchase_sales") or 0.0) / float(summary.get("cost") or 0.0)) * 100, 4) if summary.get("cost") else 0.0
+    return summary
+
+
+def placement_metric_mismatches(saved_total: Dict[str, float], source_summary: Dict[str, float]) -> List[str]:
+    if int(source_summary.get("adgroups") or 0) <= 0:
+        return []
+    mismatches: List[str] = []
+    for key in ["imp", "clk", "cost", "sales", "purchase_sales"]:
+        source_value = int(round(float(source_summary.get(key) or 0.0)))
+        saved_value = int(round(float(saved_total.get(key) or 0.0)))
+        if source_value != saved_value:
+            mismatches.append(f"{key}: saved={saved_value} source={source_value}")
+    for key in ["conv", "purchase_conv"]:
+        source_value = round(float(source_summary.get(key) or 0.0), 6)
+        saved_value = round(float(saved_total.get(key) or 0.0), 6)
+        if abs(saved_value - source_value) > 0.01:
+            mismatches.append(f"{key}: saved={saved_value} source={source_value}")
+    return mismatches
 
 
 def collect_account(engine, account: Dict[str, str], target_date: date, skip_dim: bool = False, media_lookup: Dict[str, Dict[str, Any]] | None = None) -> Dict[str, Any]:
@@ -615,6 +680,13 @@ def main() -> None:
         target_date,
         [str(account.get("id") or "").strip() for account in accounts],
     )
+    saved_total = summarize_saved_placement_totals(saved_summary)
+    source_summary = read_source_metric_summary(
+        engine,
+        target_date,
+        [str(account.get("id") or "").strip() for account in accounts],
+    )
+    log(f"placement metric check: saved_total={saved_total} source_total={source_summary}")
     log(f"검색/콘텐츠 지면 수집 완료: ok={ok}/{len(results)} rows={rows_saved} placements={result_counts} saved={saved_summary} errors={len(errors)}")
     for item in errors[:10]:
         log(f"오류/누락: {item.get('account_name')} status={item.get('status')} report={item.get('report_status')} error={item.get('error')}")
@@ -624,6 +696,15 @@ def main() -> None:
         die("검색/콘텐츠 지면 저장 행이 0건입니다.")
     if int((saved_summary.get("CONTENT") or {}).get("rows") or 0) <= 0:
         die("CONTENT 지면 저장 행이 0건입니다. debug_reports의 placement_no_content 아티팩트를 확인하세요.")
+
+
+    if (float(source_summary.get("purchase_conv") or 0.0) > 0.0 or int(source_summary.get("purchase_sales") or 0) > 0) and (
+        float(saved_total.get("purchase_conv") or 0.0) <= 0.0 and int(saved_total.get("purchase_sales") or 0) <= 0
+    ):
+        die("purchase metrics exist in source facts, but saved placement purchase metrics are zero.")
+    mismatches = placement_metric_mismatches(saved_total, source_summary)
+    if mismatches:
+        die("placement/source metric totals do not match: " + "; ".join(mismatches[:8]))
 
 
 if __name__ == "__main__":

@@ -633,14 +633,22 @@ def read_adgroup_metric_split_lookup(engine: Engine, customer_id: str, target_da
             return
         if shopping_only is False and is_shop:
             return
-        if fill_only and adgroup_id in out:
-            return
-        out[adgroup_id] = {
+        payload = {
+            "imp": float(row.get("imp") or 0.0),
+            "clk": float(row.get("clk") or 0.0),
+            "cost": float(row.get("cost") or 0.0),
             "conv": float(row.get("conv") or 0.0),
             "sales": float(row.get("sales") or 0.0),
             "purchase_conv": float(row.get("purchase_conv") or 0.0),
             "purchase_sales": float(row.get("purchase_sales") or 0.0),
         }
+        existing = out.get(adgroup_id)
+        if fill_only and existing is not None:
+            for key, value in payload.items():
+                if float(existing.get(key) or 0.0) == 0.0 and float(value or 0.0) != 0.0:
+                    existing[key] = value
+            return
+        out[adgroup_id] = payload
 
     adgroup_cols = _table_columns(engine, "fact_adgroup_daily")
     if {"customer_id", "dt", "adgroup_id"}.issubset(adgroup_cols):
@@ -1088,25 +1096,95 @@ def _apply_metric_split(
     *,
     fill_total: bool,
     fill_purchase: bool,
+    scale_base_metrics: bool = False,
 ) -> None:
     metric_split_lookup = metric_split_lookup or {}
     if not rows or not metric_split_lookup:
         return
-    cost_by_adgroup: Dict[str, int] = {}
+
+    def best_weights(weight_sets: List[List[float]], count: int) -> List[float]:
+        for weights in weight_sets:
+            if sum(float(x or 0.0) for x in weights) > 0:
+                return [float(x or 0.0) for x in weights]
+        return [1.0 for _ in range(count)]
+
+    def allocate_int(total_value: Any, weights: List[float]) -> List[int]:
+        count = len(weights)
+        if count <= 0:
+            return []
+        total = int(round(float(total_value or 0.0)))
+        if total == 0:
+            return [0 for _ in range(count)]
+        weight_sum = sum(float(x or 0.0) for x in weights)
+        if weight_sum <= 0:
+            base = total // count
+            out = [base for _ in range(count)]
+            for idx in range(abs(total - sum(out))):
+                out[idx % count] += 1 if total >= 0 else -1
+            return out
+        raw_values = [(float(w or 0.0) / weight_sum) * total for w in weights]
+        floors = [int(value) for value in raw_values]
+        remainder = total - sum(floors)
+        order = sorted(
+            range(count),
+            key=lambda idx: (raw_values[idx] - floors[idx], float(weights[idx] or 0.0)),
+            reverse=True,
+        )
+        for idx in order[:max(0, remainder)]:
+            floors[idx] += 1
+        return floors
+
+    def allocate_float(total_value: Any, weights: List[float], digits: int = 6) -> List[float]:
+        count = len(weights)
+        if count <= 0:
+            return []
+        total = float(total_value or 0.0)
+        if total == 0.0:
+            return [0.0 for _ in range(count)]
+        weight_sum = sum(float(x or 0.0) for x in weights)
+        if weight_sum <= 0:
+            values = [round(total / count, digits) for _ in range(count)]
+        else:
+            values = [round((float(w or 0.0) / weight_sum) * total, digits) for w in weights]
+        values[-1] = round(values[-1] + (round(total, digits) - round(sum(values), digits)), digits)
+        return values
+
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
     for rec in rows:
         adgroup_id = str(rec.get("adgroup_id") or "").strip()
-        cost_by_adgroup[adgroup_id] = cost_by_adgroup.get(adgroup_id, 0) + int(rec.get("cost") or 0)
-    for rec in rows:
-        adgroup_id = str(rec.get("adgroup_id") or "").strip()
+        grouped.setdefault(adgroup_id, []).append(rec)
+
+    for adgroup_id, group in grouped.items():
         split = metric_split_lookup.get(adgroup_id) or {}
-        total_cost = cost_by_adgroup.get(adgroup_id, 0)
-        ratio = (float(rec.get("cost") or 0) / float(total_cost)) if total_cost > 0 else 0.0
+        if not split:
+            continue
+        imp_weights = [float(rec.get("imp") or 0.0) for rec in group]
+        clk_weights = [float(rec.get("clk") or 0.0) for rec in group]
+        cost_weights = [float(rec.get("cost") or 0.0) for rec in group]
+        metric_weights = best_weights([cost_weights, clk_weights, imp_weights], len(group))
+
+        if scale_base_metrics:
+            for key, weights in [
+                ("imp", best_weights([imp_weights, cost_weights, clk_weights], len(group))),
+                ("clk", best_weights([clk_weights, cost_weights, imp_weights], len(group))),
+                ("cost", metric_weights),
+            ]:
+                values = allocate_int(split.get(key, 0.0), weights)
+                for rec, value in zip(group, values):
+                    rec[key] = value
+
         if fill_total:
-            rec["conv"] = round(float(split.get("conv", 0.0) or 0.0) * ratio, 6)
-            rec["sales"] = int(round(float(split.get("sales", 0.0) or 0.0) * ratio))
+            conv_values = allocate_float(split.get("conv", 0.0), metric_weights)
+            sales_values = allocate_int(split.get("sales", 0.0), metric_weights)
+            for rec, conv_value, sales_value in zip(group, conv_values, sales_values):
+                rec["conv"] = conv_value
+                rec["sales"] = sales_value
         if fill_purchase:
-            rec["purchase_conv"] = round(float(split.get("purchase_conv", 0.0) or 0.0) * ratio, 6)
-            rec["purchase_sales"] = int(round(float(split.get("purchase_sales", 0.0) or 0.0) * ratio))
+            purchase_conv_values = allocate_float(split.get("purchase_conv", 0.0), metric_weights)
+            purchase_sales_values = allocate_int(split.get("purchase_sales", 0.0), metric_weights)
+            for rec, conv_value, sales_value in zip(group, purchase_conv_values, purchase_sales_values):
+                rec["purchase_conv"] = conv_value
+                rec["purchase_sales"] = sales_value
 
 
 def build_placement_rows_from_ad_fixed_report(
@@ -1218,7 +1296,7 @@ def build_placement_rows_from_ad_fixed_report(
         rec["cost"] += cost
 
     rows = list(grouped.values())
-    _apply_metric_split(rows, metric_split_lookup, fill_total=True, fill_purchase=True)
+    _apply_metric_split(rows, metric_split_lookup, fill_total=True, fill_purchase=True, scale_base_metrics=True)
     for rec in rows:
         rec["roas"] = round((float(rec["sales"] or 0) / float(rec["cost"] or 0)) * 100, 4) if rec.get("cost") else 0.0
         rec["purchase_roas"] = round((float(rec["purchase_sales"] or 0) / float(rec["cost"] or 0)) * 100, 4) if rec.get("cost") else 0.0

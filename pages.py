@@ -41,14 +41,14 @@ NAV_CONFIG = [
 ]
 
 NAV_GROUPS = [
-    ("summary", "요약", "핵심 화면", ["요약", "운영 센터"]),
+    ("summary", "요약", "핵심 화면", ["요약", "예산 및 잔액", "운영 센터"]),
     (
         "analysis",
         "성과 분석",
         "성과 분석",
         ["성과 분석 · 캠페인", "성과 분석 · 키워드", "성과 분석 · 소재", "쇼핑 검색어 분석", "시간·연령 분석"],
     ),
-    ("admin", "관리 도구", "관리 도구", ["예산 및 잔액", "Meta 도구", "설정 및 연결"]),
+    ("admin", "관리 도구", "관리 도구", ["Meta 도구", "설정 및 연결"]),
 ]
 
 NAV_LABELS = {page_key: short_label for page_key, short_label, _icon in NAV_CONFIG}
@@ -116,7 +116,6 @@ def _render_sidebar_nav(nav_items: list[str]) -> str:
         )
         if clicked and not is_active:
             st.session_state["nav_page"] = page_key
-            st.session_state["nav_group"] = selected_group
             st.rerun()
     return st.session_state.get("nav_page", nav_items[0])
 

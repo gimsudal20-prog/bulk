@@ -39,6 +39,7 @@ jobs:
       TARGET_CUSTOMER_ID: "2535578"
       EXPECTED_TOTAL_CONV: "147"
       EXPECTED_PURCHASE_CONV: "19"
+      EXPECTED_KEYWORD_PURCHASE_CONV: "19"
 
     steps:
       - name: Checkout
@@ -94,6 +95,7 @@ jobs:
           customer_id = os.environ["TARGET_CUSTOMER_ID"]
           expected_total = float(os.environ["EXPECTED_TOTAL_CONV"])
           expected_purchase = float(os.environ["EXPECTED_PURCHASE_CONV"])
+          expected_keyword_purchase = float(os.environ["EXPECTED_KEYWORD_PURCHASE_CONV"])
 
           engine = create_engine(os.environ["DATABASE_URL"], pool_pre_ping=True)
           powerlink_types = ["WEB_SITE", "POWERLINK", "POWER_LINK", "\ud30c\uc6cc\ub9c1\ud06c"]
@@ -183,10 +185,22 @@ jobs:
 
           campaign_total = metric(campaign, "total_conv")
           campaign_purchase = metric(campaign, "purchase_conv")
+          keyword_purchase = metric(keyword, "purchase_conv")
+          cache_purchase = metric(cache, "purchase_conv")
           if campaign_total != expected_total or campaign_purchase != expected_purchase:
               raise SystemExit(
                   f"Mismatch: expected campaign total_conv={expected_total}, purchase_conv={expected_purchase}; "
                   f"got total_conv={campaign_total}, purchase_conv={campaign_purchase}"
+              )
+          if keyword_purchase != expected_keyword_purchase:
+              raise SystemExit(
+                  f"Mismatch: expected keyword purchase_conv={expected_keyword_purchase}; "
+                  f"got keyword purchase_conv={keyword_purchase}"
+              )
+          if cache_purchase != expected_keyword_purchase:
+              raise SystemExit(
+                  f"Mismatch: expected source cache purchase_conv={expected_keyword_purchase}; "
+                  f"got source cache purchase_conv={cache_purchase}"
               )
           PY
 

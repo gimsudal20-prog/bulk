@@ -1,0 +1,202 @@
+name: Powerlink purchase smoke
+run-name: Powerlink purchase smoke | haegideuk | 2026-06-05
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/powerlink_purchase_smoke.yml"
+      - "collector.py"
+      - "collector_api.py"
+      - "collector_runner.py"
+      - "collector_parsers.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: powerlink-purchase-smoke
+  cancel-in-progress: true
+
+jobs:
+  run-smoke:
+    name: Run haegideuk powerlink purchase smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
+    env:
+      TZ: Asia/Seoul
+      PYTHONUNBUFFERED: "1"
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      NAVER_ADS_API_KEY: ${{ secrets.NAVER_ADS_API_KEY }}
+      NAVER_ADS_SECRET: ${{ secrets.NAVER_ADS_SECRET }}
+      NAVER_API_KEY: ${{ secrets.NAVER_ADS_API_KEY }}
+      NAVER_API_SECRET: ${{ secrets.NAVER_ADS_SECRET }}
+      ACCOUNT_MASTER_FILE: account_master.xlsx
+      ACCOUNT_MASTER_XLSX_B64: ${{ secrets.ACCOUNT_MASTER_XLSX_B64 }}
+      TARGET_DATE: "2026-06-05"
+      TARGET_CUSTOMER_ID: "2535578"
+      EXPECTED_TOTAL_CONV: "147"
+      EXPECTED_PURCHASE_CONV: "19"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Validate secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=()
+          [[ -z "${DATABASE_URL:-}" ]] && missing+=("DATABASE_URL")
+          [[ -z "${NAVER_ADS_API_KEY:-}" ]] && missing+=("NAVER_ADS_API_KEY")
+          [[ -z "${NAVER_ADS_SECRET:-}" ]] && missing+=("NAVER_ADS_SECRET")
+          [[ -z "${ACCOUNT_MASTER_XLSX_B64:-}" ]] && missing+=("ACCOUNT_MASTER_XLSX_B64")
+          if (( ${#missing[@]} > 0 )); then
+            echo "Missing secrets: ${missing[*]}"
+            exit 1
+          fi
+
+      - name: Run collector for one account
+        shell: bash
+        run: |
+          set -euo pipefail
+          python collector.py \
+            --date "${TARGET_DATE}" \
+            --customer_id "${TARGET_CUSTOMER_ID}" \
+            --workers 1 \
+            --collect_mode sa_only \
+            --skip_time_age 2>&1 | tee powerlink_purchase_smoke.log
+
+      - name: Verify saved powerlink purchase
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          from sqlalchemy import create_engine, text
+
+          target_date = os.environ["TARGET_DATE"]
+          customer_id = os.environ["TARGET_CUSTOMER_ID"]
+          expected_total = float(os.environ["EXPECTED_TOTAL_CONV"])
+          expected_purchase = float(os.environ["EXPECTED_PURCHASE_CONV"])
+
+          engine = create_engine(os.environ["DATABASE_URL"], pool_pre_ping=True)
+          powerlink_types = ["WEB_SITE", "POWERLINK", "POWER_LINK", "\ud30c\uc6cc\ub9c1\ud06c"]
+
+          with engine.connect() as conn:
+              def one(sql, params=None):
+                  return dict((conn.execute(text(sql), params or {})).mappings().first() or {})
+
+              campaign = one(
+                  """
+                  SELECT
+                    COUNT(*) AS rows,
+                    COUNT(*) FILTER (WHERE COALESCE(f.purchase_conv, 0) > 0 OR COALESCE(f.purchase_sales, 0) > 0) AS purchase_rows,
+                    SUM(COALESCE(f.conv, 0)) AS total_conv,
+                    SUM(CASE WHEN COALESCE(f.split_available, FALSE) THEN COALESCE(f.purchase_conv, 0) ELSE 0 END) AS purchase_conv,
+                    SUM(CASE WHEN COALESCE(f.split_available, FALSE) THEN COALESCE(f.purchase_sales, 0) ELSE 0 END) AS purchase_sales
+                  FROM fact_campaign_daily f
+                  JOIN dim_campaign c ON f.customer_id=c.customer_id AND f.campaign_id=c.campaign_id
+                  WHERE f.dt=:dt
+                    AND f.customer_id=:cid
+                    AND UPPER(COALESCE(NULLIF(CAST(c.campaign_tp AS TEXT), ''), 'WEB_SITE')) = ANY(:powerlink_types)
+                  """,
+                  {"dt": target_date, "cid": customer_id, "powerlink_types": powerlink_types},
+              )
+              keyword = one(
+                  """
+                  SELECT
+                    COUNT(*) AS rows,
+                    COUNT(*) FILTER (WHERE COALESCE(f.purchase_conv, 0) > 0 OR COALESCE(f.purchase_sales, 0) > 0) AS purchase_rows,
+                    SUM(COALESCE(f.conv, 0)) AS total_conv,
+                    SUM(CASE WHEN COALESCE(f.split_available, FALSE) THEN COALESCE(f.purchase_conv, 0) ELSE 0 END) AS purchase_conv,
+                    SUM(CASE WHEN COALESCE(f.split_available, FALSE) THEN COALESCE(f.purchase_sales, 0) ELSE 0 END) AS purchase_sales
+                  FROM fact_keyword_daily f
+                  JOIN dim_keyword k ON f.customer_id=k.customer_id AND f.keyword_id=k.keyword_id
+                  JOIN dim_adgroup g ON k.customer_id=g.customer_id AND k.adgroup_id=g.adgroup_id
+                  JOIN dim_campaign c ON g.customer_id=c.customer_id AND g.campaign_id=c.campaign_id
+                  WHERE f.dt=:dt
+                    AND f.customer_id=:cid
+                    AND UPPER(COALESCE(NULLIF(CAST(c.campaign_tp AS TEXT), ''), 'WEB_SITE')) = ANY(:powerlink_types)
+                  """,
+                  {"dt": target_date, "cid": customer_id, "powerlink_types": powerlink_types},
+              )
+              ad = one(
+                  """
+                  SELECT
+                    COUNT(*) AS rows,
+                    COUNT(*) FILTER (WHERE COALESCE(f.purchase_conv, 0) > 0 OR COALESCE(f.purchase_sales, 0) > 0) AS purchase_rows,
+                    SUM(COALESCE(f.conv, 0)) AS total_conv,
+                    SUM(CASE WHEN COALESCE(f.split_available, FALSE) THEN COALESCE(f.purchase_conv, 0) ELSE 0 END) AS purchase_conv,
+                    SUM(CASE WHEN COALESCE(f.split_available, FALSE) THEN COALESCE(f.purchase_sales, 0) ELSE 0 END) AS purchase_sales
+                  FROM fact_ad_daily f
+                  JOIN dim_ad a ON f.customer_id=a.customer_id AND f.ad_id=a.ad_id
+                  JOIN dim_adgroup g ON a.customer_id=g.customer_id AND a.adgroup_id=g.adgroup_id
+                  JOIN dim_campaign c ON g.customer_id=c.customer_id AND g.campaign_id=c.campaign_id
+                  WHERE f.dt=:dt
+                    AND f.customer_id=:cid
+                    AND UPPER(COALESCE(NULLIF(CAST(c.campaign_tp AS TEXT), ''), 'WEB_SITE')) = ANY(:powerlink_types)
+                  """,
+                  {"dt": target_date, "cid": customer_id, "powerlink_types": powerlink_types},
+              )
+              cache = one(
+                  """
+                  SELECT
+                    COUNT(*) AS rows,
+                    SUM(COALESCE(metric_value, 0)) AS purchase_conv,
+                    SUM(COALESCE(sales_value, 0)) AS purchase_sales
+                  FROM overview_report_source_cache
+                  WHERE dt=:dt
+                    AND customer_id=:cid
+                    AND source_kind='powerlink_keyword'
+                  """,
+                  {"dt": target_date, "cid": customer_id},
+              )
+
+          def metric(row, key):
+              return float(row.get(key) or 0)
+
+          print("Powerlink purchase smoke verification")
+          for label, row in [("campaign", campaign), ("keyword", keyword), ("ad", ad), ("source_cache", cache)]:
+              print(
+                  f"{label}: rows={int(row.get('rows') or 0)} "
+                  f"purchase_rows={int(row.get('purchase_rows') or 0)} "
+                  f"total_conv={metric(row, 'total_conv')} "
+                  f"purchase_conv={metric(row, 'purchase_conv')} "
+                  f"purchase_sales={metric(row, 'purchase_sales')}"
+              )
+
+          campaign_total = metric(campaign, "total_conv")
+          campaign_purchase = metric(campaign, "purchase_conv")
+          if campaign_total != expected_total or campaign_purchase != expected_purchase:
+              raise SystemExit(
+                  f"Mismatch: expected campaign total_conv={expected_total}, purchase_conv={expected_purchase}; "
+                  f"got total_conv={campaign_total}, purchase_conv={campaign_purchase}"
+              )
+          PY
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: powerlink-purchase-smoke-${{ github.run_id }}
+          path: |
+            powerlink_purchase_smoke.log
+            debug_reports/**
+            debug_split_rows/**
+          if-no-files-found: warn

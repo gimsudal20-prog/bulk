@@ -655,12 +655,28 @@ def _map_campaign_types(df: pd.DataFrame, col_name: str) -> pd.DataFrame:
 
 @st.cache_data(ttl=DASHBOARD_DATA_CACHE_TTL, max_entries=30, show_spinner=False)
 def get_latest_dates(_engine) -> dict:
+    tables = [
+        "fact_campaign_daily",
+        "fact_adgroup_daily",
+        "fact_keyword_daily",
+        "fact_ad_daily",
+        "fact_shopping_query_daily",
+    ]
+    existing = [tbl for tbl in tables if table_exists(_engine, tbl)]
+    if not existing:
+        return {}
+
+    union_sql = "\nUNION ALL\n".join(
+        f"SELECT '{tbl}' AS table_name, MAX(dt) AS dt FROM {tbl}"
+        for tbl in existing
+    )
+    df = sql_read(_engine, union_sql)
+    if df.empty:
+        return {}
     dates = {}
-    for tbl in ["fact_campaign_daily", "fact_adgroup_daily", "fact_keyword_daily", "fact_ad_daily", "fact_shopping_query_daily"]:
-        if table_exists(_engine, tbl):
-            df = sql_read(_engine, f"SELECT MAX(dt) as dt FROM {tbl}")
-            if not df.empty and pd.notna(df.iloc[0]["dt"]):
-                dates[tbl] = df.iloc[0]["dt"]
+    for _, row in df.iterrows():
+        if pd.notna(row.get("dt")):
+            dates[str(row.get("table_name"))] = row.get("dt")
     return dates
 
 # ==========================================
@@ -1981,8 +1997,10 @@ def update_monthly_budget(_engine, cid: int, val: int):
             "월 예산 변경",
             after={"customer_id": cid_norm, "monthly_budget": int(val or 0)},
         )
+        return True
     except Exception as e:
         st.error(f"예산 업데이트 실패: {e}")
+        return False
 
 
 def update_monthly_budget_by_campaign_type(_engine, cid: int, campaign_type: str, val: int):
@@ -2012,8 +2030,10 @@ def update_monthly_budget_by_campaign_type(_engine, cid: int, campaign_type: str
             "유형별 월 예산 변경",
             after={"customer_id": cid_norm, "campaign_type": type_norm, "monthly_budget": int(val or 0)},
         )
+        return True
     except Exception as e:
         st.error(f"유형별 예산 업데이트 실패: {e}")
+        return False
 
 
 def update_customer_operating_weekdays(_engine, cid: int, weekdays: str):

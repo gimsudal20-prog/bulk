@@ -140,6 +140,183 @@ WEEKDAY_LABELS = [("월", 0), ("화", 1), ("수", 2), ("목", 3), ("금", 4), ("
 WEEKDAY_INDEX_TO_LABEL = {idx: label for label, idx in WEEKDAY_LABELS}
 
 
+def _format_budget_amount(value) -> str:
+    parsed = _parse_budget_amount(value)
+    return f"{parsed:,}" if parsed is not None else "0"
+
+
+def _parse_budget_amount(value) -> int | None:
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        return max(0, int(float(value)))
+    cleaned = str(value).replace(",", "").replace("원", "").replace(" ", "").strip()
+    if "." in cleaned:
+        whole, decimal = cleaned.split(".", 1)
+        if whole.isdigit() and decimal and set(decimal) <= {"0"}:
+            return max(0, int(whole))
+    digits = "".join(ch for ch in str(value) if ch.isdigit())
+    if not digits:
+        return None
+    return max(0, int(digits))
+
+
+def _row_budget_value(row: pd.Series) -> int:
+    for col in ["monthly_budget_val", "월 예산", "monthly_budget"]:
+        if col in row:
+            parsed = _parse_budget_amount(row.get(col))
+            if parsed is not None:
+                return parsed
+    return 0
+
+
+def _apply_local_budget_overrides(biz_view: pd.DataFrame, type_mode: bool = False) -> pd.DataFrame:
+    if biz_view is None or biz_view.empty:
+        return biz_view
+    out = biz_view.copy()
+    if "monthly_budget" not in out.columns:
+        out["monthly_budget"] = 0
+
+    if type_mode:
+        overrides = st.session_state.get("local_type_budget_overrides", {})
+        if not overrides or "campaign_type" not in out.columns:
+            return out
+        for key, new_val in overrides.items():
+            try:
+                cid, campaign_type = key
+            except Exception:
+                continue
+            parsed = _parse_budget_amount(new_val)
+            if parsed is None:
+                continue
+            m_key = (
+                (out["customer_id"].astype(str) == str(cid))
+                & (out["campaign_type"].astype(str) == str(campaign_type))
+            )
+            out.loc[m_key, "monthly_budget"] = parsed
+        return out
+
+    overrides = st.session_state.get("local_budget_overrides", {})
+    if not overrides:
+        return out
+    for cid, new_val in overrides.items():
+        parsed = _parse_budget_amount(new_val)
+        if parsed is None:
+            continue
+        m_cid = out["customer_id"].astype(str) == str(cid)
+        out.loc[m_cid, "monthly_budget"] = parsed
+    return out
+
+
+BUDGET_INPUT_COMMA_JS = """
+<script>
+(function() {
+    const parentDoc = window.parent.document;
+    if (parentDoc.getElementById('budget-comma-input-enhancer')) return;
+
+    const marker = parentDoc.createElement('div');
+    marker.id = 'budget-comma-input-enhancer';
+    marker.style.display = 'none';
+    parentDoc.body.appendChild(marker);
+
+    function budgetPageIsActive() {
+        return !!parentDoc.querySelector('[data-budget-comma-active="1"]');
+    }
+
+    function isTextInput(el) {
+        return el && (
+            el.tagName === 'INPUT' ||
+            el.tagName === 'TEXTAREA' ||
+            el.getAttribute('contenteditable') === 'true'
+        );
+    }
+
+    function readValue(el) {
+        if (el.getAttribute('contenteditable') === 'true') return el.textContent || '';
+        return el.value || '';
+    }
+
+    function setNativeValue(el, value) {
+        if (el.getAttribute('contenteditable') === 'true') {
+            el.textContent = value;
+            return;
+        }
+        const proto = Object.getPrototypeOf(el);
+        const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+        if (descriptor && descriptor.set) descriptor.set.call(el, value);
+        else el.value = value;
+    }
+
+    function formatDigits(value) {
+        const digits = String(value || '').replace(/[^0-9]/g, '');
+        if (!digits) return '';
+        return digits.replace(/\\B(?=(\\d{3})+(?!\\d))/g, ',');
+    }
+
+    function caretForDigitCount(formatted, digitCount) {
+        if (digitCount <= 0) return 0;
+        let seen = 0;
+        for (let i = 0; i < formatted.length; i += 1) {
+            if (/\\d/.test(formatted[i])) seen += 1;
+            if (seen >= digitCount) return i + 1;
+        }
+        return formatted.length;
+    }
+
+    function shouldFormat(el, value) {
+        if (!budgetPageIsActive() || !isTextInput(el) || el.readOnly || el.disabled) return false;
+        if (!/^[0-9,\\s원]*$/.test(value || '')) return false;
+        const digits = String(value || '').replace(/[^0-9]/g, '');
+        return digits.length >= 4 || String(value || '').includes(',');
+    }
+
+    function formatBudgetInput(el) {
+        if (!el || el.dataset.budgetFormatting === '1') return;
+        const before = readValue(el);
+        if (!shouldFormat(el, before)) return;
+
+        const caret = typeof el.selectionStart === 'number' ? el.selectionStart : before.length;
+        const digitsBeforeCaret = before.slice(0, caret).replace(/[^0-9]/g, '').length;
+        const formatted = formatDigits(before);
+        if (!formatted || formatted === before) return;
+
+        el.dataset.budgetFormatting = '1';
+        setNativeValue(el, formatted);
+        const nextCaret = caretForDigitCount(formatted, digitsBeforeCaret);
+        try {
+            el.setSelectionRange(nextCaret, nextCaret);
+        } catch (err) {}
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        window.setTimeout(function() {
+            delete el.dataset.budgetFormatting;
+        }, 0);
+    }
+
+    parentDoc.addEventListener('input', function(e) {
+        formatBudgetInput(e.target);
+    }, true);
+
+    parentDoc.addEventListener('focusin', function(e) {
+        window.setTimeout(function() {
+            formatBudgetInput(e.target);
+        }, 0);
+    }, true);
+
+    parentDoc.addEventListener('paste', function(e) {
+        window.setTimeout(function() {
+            formatBudgetInput(e.target);
+        }, 0);
+    }, true);
+})();
+</script>
+"""
+
+
 def _count_operating_days(start_dt: date, end_dt: date, weekdays: list[int]) -> int:
     if start_dt is None or end_dt is None or end_dt < start_dt:
         return 0
@@ -321,8 +498,10 @@ def _build_budget_type_editor_view(
 
 
 def _ensure_budget_input_js_once():
+    st.markdown("<span data-budget-comma-active='1' style='display:none'></span>", unsafe_allow_html=True)
     if st.session_state.get("_budget_input_js_once"):
         return
+    components.html(BUDGET_INPUT_COMMA_JS, height=0, width=0)
     st.session_state["_budget_input_js_once"] = True
 
 
@@ -458,11 +637,11 @@ def render_budget_editor(
         "current_daily_avg_val", "recommended_daily_avg_val", "usage_pct", "상태"
     ]].copy()
     
-    editor_df["월 예산"] = editor_df["monthly_budget_val"].apply(lambda x: f"{int(x):,}".rjust(15, ' ') if pd.notna(x) else "0".rjust(15, ' '))
-    editor_df[f"{end_dt.month}월 사용액"] = editor_df["current_month_cost_val"].apply(lambda x: f"{int(x):,}".rjust(15, ' ') if pd.notna(x) else "0".rjust(15, ' '))
+    editor_df["월 예산"] = editor_df["monthly_budget_val"].apply(_format_budget_amount)
+    editor_df[f"{end_dt.month}월 사용액"] = editor_df["current_month_cost_val"].apply(_format_budget_amount)
     editor_df["현재 일평균 소진액"] = safe_numeric_col(editor_df, "current_daily_avg_val").round(0).astype(int)
     editor_df["일 평균 권장 소진액"] = safe_numeric_col(editor_df, "recommended_daily_avg_val").round(0).astype(int)
-    editor_df[f"{prev_m_num}월 사용액"] = editor_df["prev_month_cost_val"].apply(lambda x: f"{int(x):,}".rjust(15, ' ') if pd.notna(x) else "0".rjust(15, ' '))
+    editor_df[f"{prev_m_num}월 사용액"] = editor_df["prev_month_cost_val"].apply(_format_budget_amount)
     
     editor_df = editor_df.rename(columns={
         "account_name": "업체명", 
@@ -487,22 +666,33 @@ def render_budget_editor(
             
             if "local_budget_overrides" not in st.session_state:
                 st.session_state["local_budget_overrides"] = {}
-                
+            saved_values = st.session_state.setdefault("_saved_budget_editor_values", {})
+
             for row_idx, col_data in edits.items():
                 if "월 예산" in col_data:
-                    raw_input = str(col_data["월 예산"]).replace(",", "").replace("원", "").strip()
-                    if raw_input.isdigit():
-                        new_budget = int(raw_input)
-                        cid = str(editor_df.iloc[row_idx]["customer_id"])
-                        
-                        update_monthly_budget(engine, cid, new_budget)
+                    try:
+                        row_idx_int = int(row_idx)
+                    except Exception:
+                        continue
+                    if row_idx_int < 0 or row_idx_int >= len(editor_df.index):
+                        continue
+                    new_budget = _parse_budget_amount(col_data["월 예산"])
+                    if new_budget is None:
+                        continue
+                    row = editor_df.iloc[row_idx_int]
+                    cid = str(row["customer_id"])
+                    current_budget = _row_budget_value(row)
+                    if int(saved_values.get(cid, current_budget)) == int(new_budget):
+                        continue
+
+                    if update_monthly_budget(engine, cid, new_budget) is not False:
                         st.session_state["local_budget_overrides"][cid] = new_budget
+                        saved_values[cid] = new_budget
                         updated_count += 1
-            
+
             if updated_count > 0:
-                _cached_budget_bundle.clear()
                 _build_budget_editor_view.clear()
-                st.toast("예산이 저장되었습니다.")
+                st.toast(f"예산 {updated_count:,}건이 저장되었습니다.")
 
     st.markdown(f"<div style='font-size:14px; font-weight:700; margin-bottom:4px;'>{end_dt.strftime('%Y년 %m월')} 예산 집행률</div>", unsafe_allow_html=True)
     st.caption(
@@ -589,11 +779,11 @@ def render_budget_type_editor(
         "current_daily_avg_val", "recommended_daily_avg_val", "usage_pct", "상태"
     ]].copy()
 
-    editor_df["월 예산"] = editor_df["monthly_budget_val"].apply(lambda x: f"{int(x):,}".rjust(15, ' ') if pd.notna(x) else "0".rjust(15, ' '))
-    editor_df[f"{end_dt.month}월 사용액"] = editor_df["current_month_cost_val"].apply(lambda x: f"{int(x):,}".rjust(15, ' ') if pd.notna(x) else "0".rjust(15, ' '))
+    editor_df["월 예산"] = editor_df["monthly_budget_val"].apply(_format_budget_amount)
+    editor_df[f"{end_dt.month}월 사용액"] = editor_df["current_month_cost_val"].apply(_format_budget_amount)
     editor_df["현재 일평균 소진액"] = safe_numeric_col(editor_df, "current_daily_avg_val").round(0).astype(int)
     editor_df["일 평균 권장 소진액"] = safe_numeric_col(editor_df, "recommended_daily_avg_val").round(0).astype(int)
-    editor_df[f"{prev_m_num}월 사용액"] = editor_df["prev_month_cost_val"].apply(lambda x: f"{int(x):,}".rjust(15, ' ') if pd.notna(x) else "0".rjust(15, ' '))
+    editor_df[f"{prev_m_num}월 사용액"] = editor_df["prev_month_cost_val"].apply(_format_budget_amount)
 
     editor_df = editor_df.rename(columns={
         "account_name": "업체명",
@@ -619,23 +809,35 @@ def render_budget_type_editor(
 
             if "local_type_budget_overrides" not in st.session_state:
                 st.session_state["local_type_budget_overrides"] = {}
+            saved_values = st.session_state.setdefault("_saved_budget_type_editor_values", {})
 
             for row_idx, col_data in edits.items():
                 if "월 예산" in col_data:
-                    raw_input = str(col_data["월 예산"]).replace(",", "").replace("원", "").strip()
-                    if raw_input.isdigit():
-                        new_budget = int(raw_input)
-                        cid = str(editor_df.iloc[row_idx]["customer_id"])
-                        campaign_type = str(editor_df.iloc[row_idx]["유형"])
+                    try:
+                        row_idx_int = int(row_idx)
+                    except Exception:
+                        continue
+                    if row_idx_int < 0 or row_idx_int >= len(editor_df.index):
+                        continue
+                    new_budget = _parse_budget_amount(col_data["월 예산"])
+                    if new_budget is None:
+                        continue
+                    row = editor_df.iloc[row_idx_int]
+                    cid = str(row["customer_id"])
+                    campaign_type = str(row["유형"])
+                    save_key = f"{cid}::{campaign_type}"
+                    current_budget = _row_budget_value(row)
+                    if int(saved_values.get(save_key, current_budget)) == int(new_budget):
+                        continue
 
-                        update_monthly_budget_by_campaign_type(engine, cid, campaign_type, new_budget)
+                    if update_monthly_budget_by_campaign_type(engine, cid, campaign_type, new_budget) is not False:
                         st.session_state["local_type_budget_overrides"][(cid, campaign_type)] = new_budget
+                        saved_values[save_key] = new_budget
                         updated_count += 1
 
             if updated_count > 0:
-                _cached_budget_type_bundle.clear()
                 _build_budget_type_editor_view.clear()
-                st.toast("유형별 예산이 저장되었습니다.")
+                st.toast(f"유형별 예산 {updated_count:,}건이 저장되었습니다.")
 
     st.markdown(f"<div style='font-size:14px; font-weight:700; margin-bottom:4px;'>{end_dt.strftime('%Y년 %m월')} 유형별 예산 집행률</div>", unsafe_allow_html=True)
     st.caption(
@@ -818,6 +1020,7 @@ def page_budget(meta: pd.DataFrame, engine, f: Dict) -> None:
             if biz_view.empty:
                 st.info("유형별 예산 현황 데이터가 없습니다.")
             else:
+                biz_view = _apply_local_budget_overrides(biz_view, type_mode=True)
                 render_budget_kpis(biz_view.copy(), end_dt, unique_balance_by_customer=True)
 
                 if "local_operating_weekday_overrides" in st.session_state and not biz_view.empty:
@@ -828,18 +1031,6 @@ def page_budget(meta: pd.DataFrame, engine, f: Dict) -> None:
                         biz_view.loc[m_cid, "operating_weekdays"] = _normalize_weekday_csv(weekdays)
 
                 budget_view = _build_budget_type_editor_view(biz_view, month_d1, month_d2, end_dt)
-
-                if "local_type_budget_overrides" in st.session_state and not budget_view.empty:
-                    for key, new_val in st.session_state["local_type_budget_overrides"].items():
-                        cid, campaign_type = key
-                        m_key = (budget_view["customer_id"].astype(str) == str(cid)) & (budget_view["campaign_type"].astype(str) == str(campaign_type))
-                        budget_view.loc[m_key, "monthly_budget"] = new_val
-                        budget_view.loc[m_key, "monthly_budget_val"] = int(new_val)
-                    budget_view = _recalculate_budget_metrics(budget_view)
-                    budget_view = budget_view.sort_values(
-                        ["_rank", "usage_rate", "account_name", "campaign_type"],
-                        ascending=[True, False, True, True],
-                    ).reset_index(drop=True)
 
                 status_counts = budget_view["상태"].value_counts().to_dict() if not budget_view.empty and "상태" in budget_view.columns else {}
                 render_ops_cards([
@@ -855,6 +1046,7 @@ def page_budget(meta: pd.DataFrame, engine, f: Dict) -> None:
             if biz_view.empty:
                 st.info("예산 현황 데이터가 없습니다.")
             else:
+                biz_view = _apply_local_budget_overrides(biz_view, type_mode=False)
                 render_budget_kpis(biz_view.copy(), end_dt)
 
                 if "local_operating_weekday_overrides" in st.session_state and not biz_view.empty:
@@ -865,14 +1057,6 @@ def page_budget(meta: pd.DataFrame, engine, f: Dict) -> None:
                         biz_view.loc[m_cid, "operating_weekdays"] = _normalize_weekday_csv(weekdays)
 
                 budget_view = _build_budget_editor_view(biz_view, month_d1, month_d2, end_dt)
-
-                if "local_budget_overrides" in st.session_state and not budget_view.empty:
-                    for cid, new_val in st.session_state["local_budget_overrides"].items():
-                        m_cid = budget_view["customer_id"].astype(str) == str(cid)
-                        budget_view.loc[m_cid, "monthly_budget"] = new_val
-                        budget_view.loc[m_cid, "monthly_budget_val"] = int(new_val)
-                    budget_view = _recalculate_budget_metrics(budget_view)
-                    budget_view = _sort_budget_view(budget_view)
 
                 status_counts = budget_view["상태"].value_counts().to_dict() if not budget_view.empty and "상태" in budget_view.columns else {}
                 render_ops_cards([

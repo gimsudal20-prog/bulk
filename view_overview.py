@@ -82,6 +82,55 @@ def _format_report_count(value) -> str:
         return "0"
 
 
+def _report_float(value, default: float = 0.0) -> float:
+    try:
+        if pd.isna(value):
+            return default
+        return float(str(value).replace(",", "").replace("원", "").replace("%", "").strip())
+    except Exception:
+        return default
+
+
+def _format_report_pct_delta(cur_value, base_value, digits: int = 1) -> str:
+    cur = _report_float(cur_value)
+    base = _report_float(base_value)
+    if base == 0:
+        if cur == 0:
+            return "0.0%"
+        return "신규"
+    return f"{((cur - base) / base) * 100:+.{digits}f}%"
+
+
+def _format_report_point_delta(cur_value, base_value, digits: int = 1) -> str:
+    cur = _report_float(cur_value)
+    base = _report_float(base_value)
+    return f"{cur - base:+.{digits}f}p"
+
+
+def _build_report_delta_lines(cur: dict, base: dict, report_uses_purchase: bool) -> list[str]:
+    if not base:
+        return [_format_report_line("증감 기준", "비교 기간 데이터 없음")]
+
+    if report_uses_purchase:
+        conv_label, conv_key = "구매완료수 증감", "conv"
+        sales_label, sales_key = "구매완료 매출 증감", "sales"
+        roas_label, roas_key = "구매 ROAS 증감", "roas"
+    else:
+        conv_label, conv_key = "전환수 증감", "tot_conv"
+        sales_label, sales_key = "총전환매출 증감", "tot_sales"
+        roas_label, roas_key = "ROAS 증감", "tot_roas"
+
+    return [
+        _format_report_line("노출수 증감", _format_report_pct_delta(cur.get("imp", 0), base.get("imp", 0))),
+        _format_report_line("클릭수 증감", _format_report_pct_delta(cur.get("clk", 0), base.get("clk", 0))),
+        _format_report_line("클릭률 증감", _format_report_point_delta(cur.get("ctr", 0), base.get("ctr", 0))),
+        _format_report_line("광고비 증감", _format_report_pct_delta(cur.get("cost", 0), base.get("cost", 0))),
+        _format_report_line(conv_label, _format_report_pct_delta(cur.get(conv_key, 0), base.get(conv_key, 0))),
+        _format_report_line(sales_label, _format_report_pct_delta(cur.get(sales_key, 0), base.get(sales_key, 0))),
+        _format_report_line(roas_label, _format_report_point_delta(cur.get(roas_key, 0), base.get(roas_key, 0))),
+    ]
+
+
 def _format_avg_rank(value) -> str:
     try:
         num = pd.to_numeric(value, errors="coerce")
@@ -698,6 +747,202 @@ def _get_campaign_top_shopping_query_map(shop_terms: pd.DataFrame, top_n: int = 
     return out
 
 
+def _campaign_type_column_from_frame(df: pd.DataFrame) -> str | None:
+    if df is None or df.empty:
+        return None
+    return next((col for col in ["campaign_type", "campaign_type_label", "campaign_tp", "캠페인유형"] if col in df.columns), None)
+
+
+def _type_summary_sort_key(label: str) -> tuple[int, str]:
+    order = {
+        "파워링크": 0,
+        "쇼핑검색": 1,
+        "파워컨텐츠": 2,
+        "브랜드검색": 3,
+        "플레이스": 4,
+        "메타": 5,
+        "구글": 6,
+    }
+    text = str(label or "").strip()
+    return (order.get(text, 99), text)
+
+
+def _aggregate_type_performance_frame(src: pd.DataFrame) -> pd.DataFrame:
+    metric_cols = ["imp", "clk", "cost", "conv", "sales", "tot_conv", "tot_sales"]
+    if src is None or src.empty:
+        return pd.DataFrame(columns=["_type_label", *metric_cols])
+
+    type_col = _campaign_type_column_from_frame(src)
+    if not type_col:
+        return pd.DataFrame(columns=["_type_label", *metric_cols])
+
+    work = src.copy()
+    work["_type_label"] = work[type_col].map(_normalize_type_label).replace("", "미분류")
+    for col in ["imp", "clk", "cost", "conv", "sales"]:
+        if col not in work.columns:
+            work[col] = 0.0
+        work[col] = safe_numeric_col(work, col, default=0.0)
+    if "tot_conv" not in work.columns:
+        work["tot_conv"] = work["conv"]
+    else:
+        work["tot_conv"] = safe_numeric_col(work, "tot_conv", default=0.0)
+    if "tot_sales" not in work.columns:
+        work["tot_sales"] = work["sales"]
+    else:
+        work["tot_sales"] = safe_numeric_col(work, "tot_sales", default=0.0)
+
+    return work.groupby("_type_label", as_index=False, dropna=False)[metric_cols].sum()
+
+
+def _build_type_performance_summary(cur_camp: pd.DataFrame, base_camp: pd.DataFrame | None = None) -> pd.DataFrame:
+    columns = [
+        "캠페인 유형", "노출수", "클릭수", "클릭률(%)", "광고비", "CPC",
+        "구매완료수", "구매완료 매출", "구매완료 ROAS(%)",
+        "총 전환수", "총 전환매출", "통합 ROAS(%)",
+        "클릭수 증감", "광고비 증감", "전환수 증감", "ROAS 증감",
+    ]
+
+    cur_grouped = _aggregate_type_performance_frame(cur_camp)
+    if cur_grouped.empty:
+        return pd.DataFrame(columns=columns)
+    base_grouped = _aggregate_type_performance_frame(base_camp) if base_camp is not None else pd.DataFrame()
+    grouped = cur_grouped.merge(base_grouped, on="_type_label", how="left", suffixes=("", "_base")).fillna(0)
+
+    out = pd.DataFrame()
+    out["캠페인 유형"] = grouped["_type_label"].fillna("미분류").astype(str)
+    out["노출수"] = grouped["imp"]
+    out["클릭수"] = grouped["clk"]
+    out["클릭률(%)"] = _safe_div(grouped["clk"], grouped["imp"], 100.0)
+    out["광고비"] = grouped["cost"]
+    out["CPC"] = _safe_div(grouped["cost"], grouped["clk"])
+    out["구매완료수"] = grouped["conv"]
+    out["구매완료 매출"] = grouped["sales"]
+    out["구매완료 ROAS(%)"] = _safe_div(grouped["sales"], grouped["cost"], 100.0)
+    out["총 전환수"] = grouped["tot_conv"]
+    out["총 전환매출"] = grouped["tot_sales"]
+    out["통합 ROAS(%)"] = _safe_div(grouped["tot_sales"], grouped["cost"], 100.0)
+
+    b_clk = grouped["clk_base"] if "clk_base" in grouped.columns else pd.Series([0.0] * len(grouped.index))
+    b_cost = grouped["cost_base"] if "cost_base" in grouped.columns else pd.Series([0.0] * len(grouped.index))
+    b_tot_conv = grouped["tot_conv_base"] if "tot_conv_base" in grouped.columns else pd.Series([0.0] * len(grouped.index))
+    b_tot_sales = grouped["tot_sales_base"] if "tot_sales_base" in grouped.columns else pd.Series([0.0] * len(grouped.index))
+    b_troas = _safe_div(b_tot_sales, b_cost, 100.0)
+    out["클릭수 증감"] = np.where(b_clk > 0, (grouped["clk"] - b_clk) / b_clk * 100.0, np.nan)
+    out["광고비 증감"] = np.where(b_cost > 0, (grouped["cost"] - b_cost) / b_cost * 100.0, np.nan)
+    out["전환수 증감"] = np.where(b_tot_conv > 0, (grouped["tot_conv"] - b_tot_conv) / b_tot_conv * 100.0, np.nan)
+    out["ROAS 증감"] = out["통합 ROAS(%)"] - b_troas
+    out["_ord"] = out["캠페인 유형"].map(_type_summary_sort_key)
+    out = out.sort_values(["_ord", "광고비"], ascending=[True, False]).drop(columns=["_ord"])
+    return out[columns]
+
+
+def _render_type_performance_snapshot(type_summary: pd.DataFrame) -> None:
+    if type_summary is None or type_summary.empty:
+        st.info("조건에 맞는 유형별 성과 데이터가 없습니다.")
+        return
+    view_cols = [
+        "캠페인 유형", "광고비", "클릭수", "구매완료수",
+        "총 전환수", "총 전환매출", "통합 ROAS(%)",
+        "클릭수 증감", "광고비 증감", "전환수 증감", "ROAS 증감",
+    ]
+    disp = type_summary[[c for c in view_cols if c in type_summary.columns]].copy()
+    st.dataframe(
+        disp,
+        width="stretch",
+        height=_auto_table_height(disp, default_height=160, max_height=280),
+        hide_index=True,
+        column_config={
+            "캠페인 유형": st.column_config.TextColumn("캠페인 유형", pinned=True, width="medium"),
+            "광고비": st.column_config.NumberColumn("광고비", format="%d 원"),
+            "클릭수": st.column_config.NumberColumn("클릭수", format="%d"),
+            "구매완료수": st.column_config.NumberColumn("구매완료수", format="%d"),
+            "총 전환수": st.column_config.NumberColumn("총 전환수", format="%d"),
+            "총 전환매출": st.column_config.NumberColumn("총 전환매출", format="%d 원"),
+            "통합 ROAS(%)": st.column_config.NumberColumn("통합 ROAS(%)", format="%.1f%%"),
+            "클릭수 증감": st.column_config.NumberColumn("클릭수 증감", format="%+.1f%%"),
+            "광고비 증감": st.column_config.NumberColumn("광고비 증감", format="%+.1f%%"),
+            "전환수 증감": st.column_config.NumberColumn("전환수 증감", format="%+.1f%%"),
+            "ROAS 증감": st.column_config.NumberColumn("ROAS 증감", format="%+.1fp"),
+        },
+    )
+
+
+def _get_type_top_keyword_map(kw_bundle: pd.DataFrame, top_n: int = 5) -> dict[str, str]:
+    out: dict[str, str] = {}
+    if kw_bundle is None or kw_bundle.empty:
+        return out
+    type_col = _campaign_type_column_from_frame(kw_bundle)
+    if not type_col or not {"keyword", "clk"}.issubset(set(kw_bundle.columns)):
+        return out
+    kw = kw_bundle.copy()
+    kw["_type_label"] = kw[type_col].map(_normalize_type_label).replace("", "미분류")
+    kw["keyword"] = kw["keyword"].fillna("").astype(str).str.strip()
+    kw["clk"] = safe_numeric_col(kw, "clk", default=0.0)
+    kw = kw[(kw["keyword"] != "") & (kw["clk"] > 0)]
+    if kw.empty:
+        return out
+    grouped = (
+        kw.groupby(["_type_label", "keyword"], dropna=False)["clk"]
+        .sum()
+        .reset_index()
+        .sort_values(["_type_label", "clk"], ascending=[True, False])
+    )
+    for type_label, sub in grouped.groupby("_type_label", sort=False):
+        top_rows = sub.head(top_n)
+        if top_rows.empty:
+            continue
+        out[str(type_label)] = ", ".join(
+            [f"{str(r['keyword'])}({int(r['clk']):,}회)" for _, r in top_rows.iterrows()]
+        )
+    return out
+
+
+def _build_type_report_text(
+    type_summary: pd.DataFrame,
+    report_uses_purchase: bool,
+    type_top_keyword_map: dict[str, str] | None = None,
+    shopping_keyword_text: str = "없음",
+) -> str:
+    if type_summary is None or type_summary.empty:
+        return ""
+    type_top_keyword_map = type_top_keyword_map or {}
+    sections: list[str] = []
+    for _, row in type_summary.iterrows():
+        type_label = str(row.get("캠페인 유형", "") or "").strip()
+        if not type_label:
+            continue
+        keyword_text = shopping_keyword_text if _is_shopping_type_label(type_label) else type_top_keyword_map.get(type_label, "없음")
+        if report_uses_purchase:
+            section = "\n".join([
+                f"[ {type_label} 성과 요약 ]",
+                _format_report_line("노출수", f"{int(float(row.get('노출수', 0))):,}"),
+                _format_report_line("클릭수", f"{int(float(row.get('클릭수', 0))):,}"),
+                _format_report_line("클릭률", f"{float(row.get('클릭률(%)', 0)):.1f}%"),
+                _format_report_line("광고 소진비용", f"{int(float(row.get('광고비', 0))):,}원"),
+                _format_report_line("구매완료수", _format_report_count(row.get("구매완료수", 0))),
+                _format_report_line("구매완료 매출", f"{int(float(row.get('구매완료 매출', 0))):,}원"),
+                _format_report_line("구매 ROAS", f"{float(row.get('구매완료 ROAS(%)', 0)):.1f}%"),
+                _format_report_line("주요 전환 키워드", keyword_text),
+            ])
+        else:
+            section = "\n".join([
+                f"[ {type_label} 성과 요약 ]",
+                _format_report_line("노출수", f"{int(float(row.get('노출수', 0))):,}"),
+                _format_report_line("클릭수", f"{int(float(row.get('클릭수', 0))):,}"),
+                _format_report_line("클릭률", f"{float(row.get('클릭률(%)', 0)):.1f}%"),
+                _format_report_line("광고 소진비용", f"{int(float(row.get('광고비', 0))):,}원"),
+                _format_report_line("전환수", _format_report_count(row.get("총 전환수", 0))),
+                _format_report_line("총전환매출", f"{int(float(row.get('총 전환매출', 0))):,}원"),
+                _format_report_line("ROAS", f"{float(row.get('통합 ROAS(%)', 0)):.1f}%"),
+                _format_report_line("주요 유입 키워드", keyword_text),
+            ])
+        sections.append(section)
+    if not sections:
+        return ""
+    metric_label = "구매완료 데이터" if report_uses_purchase else "보고서 전환"
+    return "\n\n".join([f"[ 유형별 성과 요약 | {metric_label} ]", *sections])
+
+
 def _build_campaign_report_text(
     cur_camp: pd.DataFrame,
     selected_type_label: str,
@@ -765,7 +1010,7 @@ def _build_campaign_report_text(
                 _format_report_line("클릭수", f"{int(float(row.get('clk', 0))):,}"),
                 _format_report_line("클릭률", f"{float(_safe_div(float(row.get('clk', 0)), float(row.get('imp', 0)), 100.0)):.1f}%"),
                 _format_report_line("광고 소진비용", f"{int(float(row.get('cost', 0))):,}원"),
-                _format_report_line("전환수", f"{float(c_conv_val):.1f}"),
+                _format_report_line("전환수", _format_report_count(c_conv_val)),
                 _format_report_line("총전환매출", f"{int(float(c_sales_val)):,}원"),
                 _format_report_line("ROAS", f"{float(c_roas_val):.1f}%"),
                 _format_report_line("주요 유입 키워드", keyword_text),
@@ -1501,14 +1746,53 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
     cost_diff_txt = "비교비 없음"
     if cost_base > 0:
         cost_diff_txt = f"{((cost_now - cost_base) / cost_base) * 100:+.1f}%"
+    click_now = float(cur.get("clk", 0) or 0)
+    click_base = float(base.get("clk", 0) or 0)
+    click_diff_txt = _format_report_pct_delta(click_now, click_base) if base else "비교비 없음"
+    conv_key = "conv" if kpi_mode == "shopping_purchase" else "tot_conv"
+    conv_now = float(cur.get(conv_key, 0) or 0)
+    conv_base = float(base.get(conv_key, 0) or 0)
+    conv_diff_txt = _format_report_pct_delta(conv_now, conv_base) if base else "비교비 없음"
     roas_gap_txt = "비교비 없음"
     if roas_base > 0:
         roas_gap_txt = f"{roas_now - roas_base:+.1f}p"
     render_ops_cards([
         {"title": "분석 대상", "value": f"{campaign_count:,}개 캠페인", "note": f"키워드/소재 후보 {keyword_count:,}건", "tone": "info", "icon": "01"},
+        {"title": "클릭 변화", "value": click_diff_txt, "note": f"현재 {click_now:,.0f}회 / 비교 {click_base:,.0f}회", "tone": "success" if click_now >= click_base else "warning", "icon": "CLK"},
         {"title": "비용 변화", "value": cost_diff_txt, "note": f"비교 기간 {b1} ~ {b2}", "tone": "warning" if cost_now > cost_base and cost_base > 0 else "success", "icon": "↕"},
+        {"title": "전환 변화", "value": conv_diff_txt, "note": f"현재 {conv_now:,.0f}건 / 비교 {conv_base:,.0f}건", "tone": "success" if conv_now >= conv_base else "danger", "icon": "CV"},
         {"title": "ROAS 변화", "value": roas_gap_txt, "note": "성과 지표 기준 전기 대비", "tone": "success" if roas_now >= roas_base else "danger", "icon": "%"},
     ])
+
+    type_snapshot_camp = cur_camp
+    type_snapshot_base = pd.DataFrame()
+    if type_sel:
+        try:
+            type_snapshot_camp = _cached_campaign_bundle(engine, f["start"], f["end"], cids, tuple())
+            _diag_add(diag, "유형별 스냅샷", "ok" if type_snapshot_camp is not None and not type_snapshot_camp.empty else "zero_data", 0 if type_snapshot_camp is None else len(type_snapshot_camp.index), "query_campaign_bundle", "현재 유형 필터와 별개로 전체 유형 조회")
+        except Exception as e:
+            type_snapshot_camp = pd.DataFrame()
+            _diag_add(diag, "유형별 스냅샷", "error", 0, "query_campaign_bundle", f"{type(e).__name__}: {e}")
+        try:
+            type_snapshot_base = _cached_campaign_bundle(engine, b1, b2, cids, tuple())
+        except Exception:
+            type_snapshot_base = pd.DataFrame()
+    else:
+        try:
+            type_snapshot_base = _cached_campaign_bundle(engine, b1, b2, cids, type_sel)
+        except Exception:
+            type_snapshot_base = pd.DataFrame()
+    type_perf_summary = _build_type_performance_summary(type_snapshot_camp, type_snapshot_base)
+
+    if not type_perf_summary.empty:
+        with st.container(border=True):
+            scope_label = "전체 유형 기준" if type_sel else "현재 조회 기준"
+            render_toolbar(
+                "유형별 성과 한눈에 보기",
+                "선택한 계정과 기간에서 캠페인 유형별 핵심 성과를 함께 비교합니다.",
+                [{"label": scope_label, "tone": "primary", "icon": "유형 "}, {"label": f"{len(type_perf_summary.index)}개 유형", "tone": "info", "icon": "행 "}],
+            )
+            _render_type_performance_snapshot(type_perf_summary)
 
     with st.container(border=True):
         render_toolbar(
@@ -1631,7 +1915,7 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
         "업체, 유형, 기간, 캠페인, 키워드 단위로 같은 KPI 묶음을 비교합니다.",
         [{"label": "절대값/증감 전환", "tone": "primary", "icon": "표시 "}, {"label": "표시 행 전체 정렬", "tone": "info", "icon": "정렬 "}],
     )
-    show_deltas = st.toggle("증감율 보기", value=False, key="ov_abs_toggle")
+    show_deltas = st.toggle("증감율 보기", value=True, key="ov_abs_toggle_v2")
 
     def get_funnel_cols(show_deltas):
         cols = []
@@ -1830,6 +2114,12 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
             st.download_button("통합 엑셀 다운로드", data=excel_buffer.getvalue(), file_name=f"통합_상세_성과보고서_{f['start']}_{f['end']}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", width="stretch")
 
     with st.expander("텍스트 보고서 생성", expanded=False):
+        include_type_breakdown = st.checkbox(
+            "유형별 성과도 함께 생성",
+            key="overview_include_type_text_report",
+            value=True,
+            help="현재 광고 유형 필터를 바꾸지 않아도 파워링크/쇼핑검색 등 유형별 요약을 한 번에 추가합니다.",
+        )
         include_campaign_breakdown = st.checkbox(
             "캠페인별 성과도 함께 생성",
             key="overview_include_campaign_text_report",
@@ -1867,6 +2157,7 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
             top_kw_str = "없음"
 
         shop_kw_str = "없음"
+        shop_terms_df = pd.DataFrame()
         campaign_top_shopping_query_map: dict[str, str] = {}
         if cids:
             try:
@@ -1885,6 +2176,15 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
                     campaign_top_shopping_query_map = _get_campaign_top_shopping_query_map(shop_terms_df, top_n=3, prefer_purchase=report_uses_purchase)
             except Exception:
                 pass
+
+        type_top_keyword_map: dict[str, str] = {}
+        if include_type_breakdown:
+            try:
+                type_kw_key = f"overview_text_kw_all_types::{f['start']}::{f['end']}::{','.join(map(str, cids))}"
+                type_kw_bundle = _load_report_keyword_bundle(engine, f["start"], f["end"], tuple(cids), tuple(), type_kw_key, force_refresh=generate_text_report)
+                type_top_keyword_map = _get_type_top_keyword_map(type_kw_bundle, top_n=5)
+            except Exception:
+                type_top_keyword_map = {}
 
         campaign_top_keyword_map = _get_campaign_top_keyword_map(cur_kw, top_n=5)
         is_shopping_only = ("쇼핑" in selected_type_label and "파워링크" not in selected_type_label and selected_type_label != "전체 유형")
@@ -1912,12 +2212,26 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
                 _format_report_line("클릭수", f"{int(float(cur.get('clk', 0))):,}"),
                 _format_report_line("클릭률", f"{float(cur.get('ctr', 0)):.1f}%"),
                 _format_report_line("광고 소진비용", f"{int(float(cur.get('cost', 0))):,}원"),
-                _format_report_line("전환수", f"{float(c_conv_val):.1f}"),
+                _format_report_line("전환수", _format_report_count(c_conv_val)),
                 _format_report_line("총전환매출", f"{int(float(c_sales_val)):,}원"),
                 _format_report_line("ROAS", f"{float(c_roas_val):.1f}%"),
                 _format_report_line("주요 유입 키워드", shop_kw_str if is_shopping_only else top_kw_str)
             ])
             
+        delta_lines = _build_report_delta_lines(cur, base, report_uses_purchase)
+        if delta_lines:
+            report_text = f"{report_text}\n\n[ 전기 대비 증감 ]\n" + "\n".join(delta_lines)
+
+        if include_type_breakdown:
+            type_report_text = _build_type_report_text(
+                type_perf_summary,
+                report_uses_purchase=report_uses_purchase,
+                type_top_keyword_map=type_top_keyword_map,
+                shopping_keyword_text=shop_kw_str,
+            )
+            if type_report_text:
+                report_text = f"{report_text}\n\n{type_report_text}"
+
         if include_campaign_breakdown:
             campaign_report_text = _build_campaign_report_text(
                 cur_camp=cur_camp,

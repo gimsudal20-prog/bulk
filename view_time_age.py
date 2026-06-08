@@ -1043,16 +1043,10 @@ def page_time_age(meta: pd.DataFrame, engine, f: Dict) -> None:
         st.info("시간대/연령대/기기별 수집 테이블이 아직 없습니다. 관련 데이터 수집 후 자동으로 표시됩니다.")
         return
 
-    selected_tab = st.pills(
-        "분석 보기",
-        ["시간대별", "연령대별", "기기별"],
-        default="시간대별",
-        key="time_age_main_tab",
-        label_visibility="collapsed",
-    )
-    if selected_tab == "시간대별":
+    tab_hour, tab_age, tab_device = st.tabs(["시간대별", "연령대별", "기기별"])
+    with tab_hour:
         _render_hour_tab(engine, f)
-    elif selected_tab == "연령대별":
+    with tab_age:
         _render_age_tab(engine, f)
-    else:
+    with tab_device:
         _render_device_tab(engine, f)

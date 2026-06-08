@@ -1585,6 +1585,14 @@ def _render_action_queue(meta: pd.DataFrame, engine, f: dict) -> None:
         )
         status_filter = {"대기": "open", "진행 중": "in_progress", "완료": "resolved", "보류": "skipped", "전체": ""}.get(status_label, "open")
 
+    auto_key = f"ops_auto_generated_{f.get('start')}_{f.get('end')}_{hash(tuple(f.get('customer_ids') or []))}_{hash(tuple(f.get('type_sel') or []))}"
+    if not st.session_state.get(auto_key):
+        try:
+            _generate_action_items(meta, engine, f)
+            st.session_state[auto_key] = True
+        except Exception:
+            pass
+
     try:
         action_df = query_action_items(
             engine,
@@ -1735,16 +1743,10 @@ def page_ops_center(meta: pd.DataFrame, engine, f: dict) -> None:
         ],
     )
 
-    selected_tab = st.pills(
-        "운영 센터 보기",
-        ["경고 확인", "수집 상태", "변경 이력"],
-        default="경고 확인",
-        key="ops_center_main_tab",
-        label_visibility="collapsed",
-    )
-    if selected_tab == "경고 확인":
+    tab_queue, tab_status, tab_audit = st.tabs(["경고 확인", "수집 상태", "변경 이력"])
+    with tab_queue:
         _render_warning_center(meta, engine, f)
-    elif selected_tab == "수집 상태":
+    with tab_status:
         _render_collection_status(meta, engine, f)
-    else:
+    with tab_audit:
         _render_audit_log(engine)

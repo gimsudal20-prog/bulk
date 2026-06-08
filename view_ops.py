@@ -229,7 +229,10 @@ def _build_budget_actions(meta: pd.DataFrame, engine, f: dict) -> list[dict]:
             source_ref=ctx["customer_id"],
         )
 
-    balance_hits = work[(work["avg_cost_num"] > 0) & (work["balance_cover_days"].fillna(999) <= 2.0)].copy()
+    balance_scope = work
+    if "platform" in balance_scope.columns:
+        balance_scope = balance_scope[balance_scope["platform"].fillna("").astype(str).str.strip().ne("메타")].copy()
+    balance_hits = balance_scope[(balance_scope["avg_cost_num"] > 0) & (balance_scope["balance_cover_days"].fillna(999) <= 2.0)].copy()
     for _, row in balance_hits.sort_values("balance_cover_days", ascending=True).head(20).iterrows():
         ctx = _row_context(row, meta_map)
         cover_days = float(row.get("balance_cover_days") or 0)

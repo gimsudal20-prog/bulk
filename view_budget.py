@@ -976,19 +976,27 @@ def page_budget(meta: pd.DataFrame, engine, f: Dict) -> None:
     st.markdown("<div class='nv-sec-title'>예산 관리</div>", unsafe_allow_html=True)
 
     media_sel = set(f.get("media_sel") or [])
-    if media_sel and "네이버" not in media_sel:
+    budget_media = {"네이버", "메타"}
+    if media_sel and not (media_sel & budget_media):
         render_empty_state(
-            "예산/비즈머니는 네이버 검색광고 전용입니다.",
+            "예산 관리는 네이버와 메타를 지원합니다.",
             height=220,
-            detail=f"현재 선택된 매체는 {', '.join(sorted(media_sel))}입니다. 네이버를 선택하면 월 예산과 비즈머니 잔액을 확인할 수 있습니다.",
+            detail=f"현재 선택된 매체는 {', '.join(sorted(media_sel))}입니다. 네이버 또는 메타를 선택하면 월 예산과 사용액을 확인할 수 있습니다.",
         )
         st.stop()
-    if media_sel and len(media_sel) > 1:
-        render_inline_notice("예산 화면은 네이버 데이터만 표시", "메타/구글이 함께 선택되어 있어도 월 예산과 비즈머니는 네이버 검색광고 계정 기준으로만 계산됩니다.")
+    if media_sel and "메타" in media_sel and "네이버" not in media_sel:
+        render_inline_notice("조회 기준", "메타 월 예산과 사용액을 표시합니다. 비즈머니 잔액 관리는 네이버/GFA 계정에서만 제공됩니다.")
+    elif media_sel and len(media_sel) > 1:
+        render_inline_notice("조회 기준", "월 예산은 선택된 네이버/메타 계정 기준으로 계산합니다. 비즈머니 잔액은 네이버/GFA 계정에만 반영됩니다.")
     else:
-        render_inline_notice("조회 기준", "월 예산과 비즈머니는 설정 > 플랫폼 연동에서 네이버로 연결된 계정만 표시합니다.")
-    
-    selected_view = st.radio("보기", ["월 예산 현황", "비즈머니 관리"], horizontal=True, label_visibility="collapsed", key="budget_view_mode")
+        render_inline_notice("조회 기준", "월 예산은 네이버/메타 계정 기준으로 표시하고, 비즈머니 잔액은 네이버/GFA 계정만 표시합니다.")
+
+    view_options = ["월 예산 현황"]
+    if not media_sel or "네이버" in media_sel:
+        view_options.append("비즈머니 관리")
+    if st.session_state.get("budget_view_mode") not in view_options:
+        st.session_state["budget_view_mode"] = view_options[0]
+    selected_view = st.radio("보기", view_options, horizontal=True, label_visibility="collapsed", key="budget_view_mode")
 
     cids = tuple(f.get("selected_customer_ids", []) or [])
     yesterday = date.today() - timedelta(days=1)
@@ -1011,7 +1019,7 @@ def page_budget(meta: pd.DataFrame, engine, f: Dict) -> None:
             ["업체별", "유형별"],
             horizontal=True,
             key="budget_unit_mode",
-            help="유형별은 파워링크와 쇼핑검색 예산을 따로 저장합니다.",
+            help="유형별은 파워링크, 쇼핑검색, 메타 예산을 매체 기준에 맞게 따로 저장합니다.",
         )
 
         if budget_unit == "유형별":

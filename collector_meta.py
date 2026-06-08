@@ -165,6 +165,10 @@ def ensure_meta_schema(engine: Engine) -> None:
         ensure_column(engine, table, "reach", "BIGINT")
         ensure_column(engine, table, "frequency", "DOUBLE PRECISION")
         ensure_column(engine, table, "cpm", "DOUBLE PRECISION")
+    for column in ["daily_budget", "lifetime_budget", "budget_remaining", "spend_cap"]:
+        ensure_column(engine, "dim_campaign", column, "BIGINT DEFAULT 0")
+    for column in ["daily_budget", "lifetime_budget", "budget_remaining", "bid_amount"]:
+        ensure_column(engine, "dim_adgroup", column, "BIGINT DEFAULT 0")
     with engine.begin() as conn:
         conn.execute(text("CREATE TABLE IF NOT EXISTS dim_customer (customer_id TEXT PRIMARY KEY, account_name TEXT, manager TEXT, monthly_budget BIGINT DEFAULT 0, operating_weekdays TEXT DEFAULT '0,1,2,3,4,5,6')"))
         conn.execute(text("ALTER TABLE dim_customer ADD COLUMN IF NOT EXISTS manager TEXT"))
@@ -402,6 +406,10 @@ def _build_campaign_dim_rows(customer_id: str, campaigns: Iterable[dict[str, Any
             "campaign_name": _clean_text(item.get("name")) or campaign_id,
             "campaign_tp": "메타",
             "status": _clean_text(item.get("effective_status")) or _clean_text(item.get("status")),
+            "daily_budget": _as_int(item.get("daily_budget")),
+            "lifetime_budget": _as_int(item.get("lifetime_budget")),
+            "budget_remaining": _as_int(item.get("budget_remaining")),
+            "spend_cap": _as_int(item.get("spend_cap")),
         }
     for item in insights:
         campaign_id = _clean_text(item.get("campaign_id"))
@@ -428,6 +436,10 @@ def _build_adset_dim_rows(customer_id: str, adsets: Iterable[dict[str, Any]], ad
             "adgroup_name": _clean_text(item.get("name")) or adset_id,
             "campaign_id": _clean_text(item.get("campaign_id")),
             "status": _clean_text(item.get("effective_status")) or _clean_text(item.get("status")),
+            "daily_budget": _as_int(item.get("daily_budget")),
+            "lifetime_budget": _as_int(item.get("lifetime_budget")),
+            "budget_remaining": _as_int(item.get("budget_remaining")),
+            "bid_amount": _as_int(item.get("bid_amount")),
         }
     for item in ad_insights:
         adset_id = _clean_text(item.get("adset_id"))
@@ -591,11 +603,11 @@ def collect_account(engine: Engine, client: MetaApiClient, account: dict[str, st
 
     campaigns = client.list_all(
         f"/{api_account_id}/campaigns",
-        {"fields": "id,name,status,effective_status,objective", "limit": 500},
+        {"fields": "id,name,status,effective_status,objective,daily_budget,lifetime_budget,budget_remaining,spend_cap", "limit": 500},
     )
     adsets = client.list_all(
         f"/{api_account_id}/adsets",
-        {"fields": "id,name,campaign_id,status,effective_status", "limit": 500},
+        {"fields": "id,name,campaign_id,status,effective_status,daily_budget,lifetime_budget,budget_remaining,bid_amount", "limit": 500},
     )
     try:
         ads = client.list_all(

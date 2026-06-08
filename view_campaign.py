@@ -71,6 +71,7 @@ FMT_DICT = {
     "클릭": "{:,.0f}", "클릭 증감": "{:+.0f}%", "클릭 차이": "{:+,.0f}",
     "CTR(%)": "{:,.2f}%", 
     "광고비": "{:,.0f}원", "광고비 증감": "{:+.0f}%", "광고비 차이": "{:+,.0f}원",
+    "일 예산": "{:,.0f}원", "총 예산": "{:,.0f}원", "잔여 예산": "{:,.0f}원", "계정 지출한도": "{:,.0f}원",
     "CPC(원)": "{:,.0f}원", "CPC 증감": "{:+.0f}%", "CPC 차이": "{:+,.0f}원",
     "구매완료수": "{:,.0f}", "구매 증감": "{:+.0f}%", "구매 차이": "{:+,.0f}",
     "구매완료 매출": "{:,.0f}원", "구매 매출 증감": "{:+.0f}%", "구매 매출 차이": "{:+,.0f}원",
@@ -116,7 +117,7 @@ def _campaign_fast_col_config(df: pd.DataFrame, first_col: str | None = None) ->
         cfg[first_col] = st.column_config.TextColumn(first_col, pinned=True, width="medium")
     pct_cols = {"구매 ROAS(%)", "장바구니 ROAS(%)", "위시리스트 ROAS(%)", "통합 ROAS(%)"}
     diff_pct_cols = {c for c in df.columns if "증감" in c and "차이" not in c}
-    currency_cols = {"광고비", "CPC(원)", "구매완료 매출", "장바구니 매출액", "위시리스트 매출액", "총 전환매출"}
+    currency_cols = {"광고비", "CPC(원)", "구매완료 매출", "장바구니 매출액", "위시리스트 매출액", "총 전환매출", "일 예산", "총 예산", "잔여 예산", "계정 지출한도"}
     currency_diff_cols = {c for c in df.columns if c.endswith("차이") and ("매출" in c or "광고비" in c or "CPC" in c)}
     count_cols = {"노출", "클릭", "구매완료수", "장바구니수", "위시리스트수", "총 전환수"}
     count_diff_cols = {c for c in df.columns if c.endswith("차이") and c not in currency_diff_cols}
@@ -888,6 +889,11 @@ def _render_campaign_summary_tab(view: pd.DataFrame, engine, f: Dict, diag: list
     base_cols = ["업체명", "담당자", "캠페인유형", "캠페인"]
     if "평균순위" in disp_main.columns:
         base_cols.append("평균순위")
+    budget_cols = [
+        c for c in ["일 예산", "총 예산", "잔여 예산", "계정 지출한도"]
+        if c in disp_main.columns and float(pd.to_numeric(disp_main[c], errors="coerce").fillna(0).sum()) > 0
+    ]
+    base_cols.extend(budget_cols)
     all_metrics_cols, roas_col, sales_col = _summary_metric_config(has_pre_patch_cur)
     _render_campaign_type_device_summary(disp_main, engine, f, diag, roas_col, sales_col)
 
@@ -1133,6 +1139,7 @@ def page_perf_campaign(meta: pd.DataFrame, engine, f: Dict) -> None:
             _diag_add(diag, '메타병합', 'ok' if not df.empty else 'zero_data', len(df.index), 'meta_merge', 'campaign bundle + account meta')
             view = df.rename(columns={
                 "account_name": "업체명", "manager": "담당자", "campaign_type": "캠페인유형", "campaign_name": "캠페인",
+                "daily_budget": "일 예산", "lifetime_budget": "총 예산", "budget_remaining": "잔여 예산", "spend_cap": "계정 지출한도",
                 "imp": "노출", "clk": "클릭", "cost": "광고비", "cart_conv": "장바구니수", "cart_sales": "장바구니 매출액",
                 "wishlist_conv": "위시리스트수", "wishlist_sales": "위시리스트 매출액", "conv": "구매완료수", "sales": "구매완료 매출",
             }).copy()

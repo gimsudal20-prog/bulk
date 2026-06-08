@@ -269,7 +269,9 @@ _CAMPAIGN_TYPE_ALIASES = {
 }
 
 _NAVER_CAMPAIGN_TYPE_FILTER_VALUES = _CAMPAIGN_TYPE_ALIASES["네이버"]
-_BUDGET_CAMPAIGN_TYPE_OPTIONS = ("파워링크", "쇼핑검색")
+_BUDGET_PLATFORM_LABELS = ("네이버", "메타")
+_BUDGET_NAVER_CAMPAIGN_TYPE_OPTIONS = ("파워링크", "쇼핑검색")
+_BUDGET_CAMPAIGN_TYPE_OPTIONS = ("파워링크", "쇼핑검색", "메타")
 _BUDGET_CAMPAIGN_TYPE_FILTER_VALUES = tuple(
     value
     for label in _BUDGET_CAMPAIGN_TYPE_OPTIONS
@@ -610,7 +612,11 @@ def load_dim_campaign(_engine) -> pd.DataFrame:
     target_cols = []
     for c in cols:
         c_clean = str(c).replace(" ", "").lower()
-        if c_clean in ["customer_id", "campaign_id", "campaign_name", "campaign_tp", "campaign_type", "campaign_type_label", "status", "target_roas", "min_roas"]:
+        if c_clean in [
+            "customer_id", "campaign_id", "campaign_name", "campaign_tp", "campaign_type",
+            "campaign_type_label", "status", "target_roas", "min_roas",
+            "daily_budget", "lifetime_budget", "budget_remaining", "spend_cap",
+        ]:
             target_cols.append(f'"{c}"')
             
     select_str = ", ".join(target_cols) if target_cols else "*"
@@ -1423,7 +1429,11 @@ def _infer_platform_label_from_campaign_type(value) -> str:
         return "메타"
     if key in {"GOOGLE", "GOOGLE_ADS", "구글", "PERFORMANCE_MAX", "PMAX", "P_MAX"}:
         return "구글"
-    if key in {"WEB_SITE", "SHOPPING", "POWER_CONTENT", "POWER_CONTENTS", "BRAND_SEARCH", "PLACE", "파워링크", "쇼핑검색", "파워컨텐츠", "브랜드검색", "플레이스"}:
+    if key in {
+        "NAVER", "NAVER_ADS", "NAVER_SEARCH", "SEARCHAD", "SEARCH_AD", "GFA",
+        "WEB_SITE", "SHOPPING", "POWER_CONTENT", "POWER_CONTENTS", "BRAND_SEARCH", "PLACE",
+        "파워링크", "쇼핑검색", "파워컨텐츠", "브랜드검색", "플레이스", "네이버",
+    }:
         return "네이버"
     return ""
 
@@ -1465,13 +1475,48 @@ def _first_nonblank(*values) -> str:
     return ""
 
 
-def _budget_naver_scope_df(_engine) -> pd.DataFrame:
+def _budget_customer_platform_lookup(_engine) -> dict[str, str]:
+    if not table_exists(_engine, "dim_campaign"):
+        return {}
+    try:
+        dim_cols = get_table_columns(_engine, "dim_campaign")
+        cp_col = "campaign_tp" if "campaign_tp" in dim_cols else ("campaign_type_label" if "campaign_type_label" in dim_cols else "campaign_type")
+        if cp_col not in dim_cols:
+            return {}
+        df = sql_read(
+            _engine,
+            f"""
+            SELECT CAST(customer_id AS TEXT) AS customer_id, {cp_col} AS campaign_type
+            FROM dim_campaign
+            WHERE COALESCE(CAST({cp_col} AS TEXT), '') <> ''
+            """,
+        )
+    except Exception:
+        return {}
+    if df.empty:
+        return {}
+
+    out: dict[str, str] = {}
+    for cid, group in df.groupby("customer_id"):
+        labels = {
+            _infer_platform_label_from_campaign_type(value)
+            for value in group["campaign_type"].dropna().astype(str).tolist()
+        }
+        labels.discard("")
+        cid_norm = _normalize_customer_id_value(cid)
+        if "메타" in labels and "네이버" not in labels:
+            out[cid_norm] = "메타"
+        elif "네이버" in labels:
+            out[cid_norm] = "네이버"
+    return out
+
+
+def _budget_account_scope_df(_engine) -> pd.DataFrame:
     """Return the account rows budget/Bizmoney should use.
 
-    Platform connections are the authoritative media mapping.  dim_customer remains
-    a fallback only for accounts that do not have any active platform connection.
-    This prevents external Meta/Google-only accounts from being displayed as Naver
-    just because they exist in dim_customer.
+    Platform connections are the authoritative media mapping. dim_customer remains
+    a legacy fallback, while active Meta connections are included as budget rows
+    instead of being hidden from the monthly budget view.
     """
     meta = get_meta(_engine)
     if meta is None:
@@ -1495,7 +1540,8 @@ def _budget_naver_scope_df(_engine) -> pd.DataFrame:
     if conn_df is None or conn_df.empty:
         out = meta.copy()
         if "platform" not in out.columns:
-            out["platform"] = "네이버"
+            platform_lookup = _budget_customer_platform_lookup(_engine)
+            out["platform"] = out["customer_id"].map(platform_lookup).fillna("네이버") if "customer_id" in out.columns else "네이버"
         return out
 
     conn = conn_df.copy()
@@ -1526,8 +1572,9 @@ def _budget_naver_scope_df(_engine) -> pd.DataFrame:
         meta_by_name = {_account_label_key(row.get("account_name", "")): row for _, row in meta.iterrows() if _account_label_key(row.get("account_name", ""))}
 
     rows = []
-    naver_conn = conn[conn["platform_norm"].isin(["naver", "naver_ads", "naver_search", "searchad", "search_ad", "gfa"])].copy()
-    for _, row in naver_conn.iterrows():
+    platform_lookup = _budget_customer_platform_lookup(_engine)
+    budget_conn = conn[conn["platform_label"].isin(_BUDGET_PLATFORM_LABELS)].copy()
+    for _, row in budget_conn.iterrows():
         cid = _normalize_customer_id_value(_first_nonblank(row.get("customer_id"), row.get("account_id")))
         if not cid or not str(cid).isdigit():
             continue
@@ -1535,13 +1582,14 @@ def _budget_naver_scope_df(_engine) -> pd.DataFrame:
         meta_row = meta_by_cid.get(cid)
         if meta_row is None:
             meta_row = meta_by_name.get(_account_label_key(label))
+        platform_label = _first_nonblank(row.get("platform_label"), "네이버")
         rows.append({
             "customer_id": cid,
             "account_name": label,
             "manager": _first_nonblank(row.get("manager"), None if meta_row is None else meta_row.get("manager"), "미배정"),
             "monthly_budget": 0 if meta_row is None else pd.to_numeric(meta_row.get("monthly_budget", 0), errors="coerce"),
             "operating_weekdays": normalize_operating_weekdays(None if meta_row is None else meta_row.get("operating_weekdays", DEFAULT_OPERATING_WEEKDAYS)),
-            "platform": "네이버",
+            "platform": platform_label,
         })
 
     # dim_customer is still the source for legacy Naver budget/Bizmoney rows.
@@ -1552,7 +1600,8 @@ def _budget_naver_scope_df(_engine) -> pd.DataFrame:
         fallback["customer_id"] = _normalize_customer_id_series(fallback["customer_id"])
         fallback = fallback[~fallback["customer_id"].astype(str).isin(external_ids)].copy()
     if not fallback.empty:
-        fallback["platform"] = "네이버"
+        fallback["platform"] = fallback["customer_id"].map(platform_lookup).fillna("네이버")
+        fallback = fallback[fallback["platform"].isin(_BUDGET_PLATFORM_LABELS)].copy()
         rows.extend(fallback[["customer_id", "account_name", "manager", "monthly_budget", "operating_weekdays", "platform"]].to_dict("records"))
 
     if not rows:
@@ -1563,6 +1612,11 @@ def _budget_naver_scope_df(_engine) -> pd.DataFrame:
     out["monthly_budget"] = pd.to_numeric(out["monthly_budget"], errors="coerce").fillna(0)
     out["operating_weekdays"] = out["operating_weekdays"].apply(normalize_operating_weekdays)
     return out.drop_duplicates(subset=["customer_id", "account_name"], keep="last").reset_index(drop=True)
+
+
+def _budget_naver_scope_df(_engine) -> pd.DataFrame:
+    """Backward-compatible wrapper for older imports/tests."""
+    return _budget_account_scope_df(_engine)
 
 
 def _fill_numeric_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
@@ -1593,16 +1647,15 @@ def _read_budget_campaign_metrics(_engine, avg_d1: date, avg_d2: date, month_d1:
     outer_d1 = min(avg_d1, month_d1, prev_month_d1)
     outer_d2 = max(avg_d2, month_d2, prev_month_d2)
 
-    def _naver_budget_scope_sql(table_name: str, alias: str = "f") -> tuple[str, str, dict]:
-        """Budget/Bizmoney pages are Naver-only; never let Meta/Google campaign cost leak in."""
+    def _budget_metric_scope_sql(table_name: str, alias: str = "f") -> tuple[str, str, dict]:
+        """Keep budget metrics to supported media types: Naver Search/GFA and Meta."""
         try:
             table_cols = get_table_columns(_engine, table_name)
         except Exception:
             table_cols = []
-        naver_where, naver_params = _build_in_filter(f"c.__campaign_type_col__", _NAVER_CAMPAIGN_TYPE_FILTER_VALUES, f"{table_name}_naver_type")
 
         if table_name == "overview_campaign_daily_cache" and "campaign_type" in table_cols:
-            direct_where, direct_params = _build_in_filter(f"{alias}.campaign_type", _NAVER_CAMPAIGN_TYPE_FILTER_VALUES, f"{table_name}_naver_type")
+            direct_where, direct_params = _build_in_filter(f"{alias}.campaign_type", _BUDGET_CAMPAIGN_TYPE_FILTER_VALUES, f"{table_name}_budget_media_type")
             return "", direct_where, direct_params
 
         if "campaign_id" in table_cols and table_exists(_engine, "dim_campaign"):
@@ -1610,14 +1663,14 @@ def _read_budget_campaign_metrics(_engine, avg_d1: date, avg_d2: date, month_d1:
             cp_col = "campaign_tp" if "campaign_tp" in dim_cols else ("campaign_type_label" if "campaign_type_label" in dim_cols else "campaign_type")
             if cp_col in dim_cols:
                 join_sql = f"JOIN dim_campaign c ON {alias}.campaign_id = c.campaign_id AND {alias}.customer_id = c.customer_id"
-                type_where, type_params = _build_in_filter(f"c.{cp_col}", _NAVER_CAMPAIGN_TYPE_FILTER_VALUES, f"{table_name}_naver_type")
+                type_where, type_params = _build_in_filter(f"c.{cp_col}", _BUDGET_CAMPAIGN_TYPE_FILTER_VALUES, f"{table_name}_budget_media_type")
                 return join_sql, type_where, type_params
 
         # If no campaign type source exists, keep legacy behavior rather than dropping all budget rows.
         return "", "", {}
 
     def _run_budget_metric_query(table_name: str, sales_expr: str) -> pd.DataFrame:
-        join_sql, naver_where_sql, naver_params = _naver_budget_scope_sql(table_name, alias="f")
+        join_sql, budget_where_sql, budget_params = _budget_metric_scope_sql(table_name, alias="f")
         sql = f"""
             SELECT CAST(f.customer_id AS TEXT) AS customer_id,
                    SUM(CASE WHEN f.dt BETWEEN :avg_d1 AND :avg_d2 THEN f.cost ELSE 0 END)/:avg_days as avg_cost,
@@ -1626,7 +1679,7 @@ def _read_budget_campaign_metrics(_engine, avg_d1: date, avg_d2: date, month_d1:
                    SUM(CASE WHEN f.dt BETWEEN :prev_month_d1 AND :prev_month_d2 THEN f.cost ELSE 0 END) as prev_month_cost
             FROM {table_name} f
             {join_sql}
-            WHERE f.dt BETWEEN :outer_d1 AND :outer_d2 {where_cid.replace('customer_id', 'f.customer_id')} {naver_where_sql}
+            WHERE f.dt BETWEEN :outer_d1 AND :outer_d2 {where_cid.replace('customer_id', 'f.customer_id')} {budget_where_sql}
             GROUP BY CAST(f.customer_id AS TEXT)
         """
         return sql_read(
@@ -1643,7 +1696,7 @@ def _read_budget_campaign_metrics(_engine, avg_d1: date, avg_d2: date, month_d1:
                 "outer_d2": str(outer_d2),
                 "avg_days": max(int(avg_days), 1),
                 **cid_params,
-                **naver_params,
+                **budget_params,
             },
         )
 
@@ -1697,9 +1750,9 @@ def _compute_total_ratio_metrics(row: dict) -> dict:
 
 @st.cache_data(ttl=300, max_entries=30, show_spinner=False)
 def query_budget_bundle(_engine, cids: tuple, yesterday: date, avg_d1: date, avg_d2: date, month_d1: date, month_d2: date, prev_month_d1: date, prev_month_d2: date, avg_days: int) -> pd.DataFrame:
-    # Budget/Bizmoney is a Naver-only page.  Use settings > platform connections
-    # first so Meta/Google-linked accounts do not appear as Naver fallback rows.
-    df = _budget_naver_scope_df(_engine)
+    # Budget supports Naver and Meta. Use settings > platform connections first
+    # so external media accounts keep their own platform identity.
+    df = _budget_account_scope_df(_engine)
     if df.empty:
         return pd.DataFrame()
 
@@ -1752,19 +1805,21 @@ def query_budget_bundle(_engine, cids: tuple, yesterday: date, avg_d1: date, avg
         df["manager"] = "미배정"
     if "account_name" not in df.columns:
         df["account_name"] = df["customer_id"].astype(str)
-    df["platform"] = "네이버"
+    if "platform" not in df.columns:
+        df["platform"] = ""
+    df["platform"] = df["platform"].fillna("").replace("", "네이버")
     return df
 
 
 def _budget_campaign_type_case_sql(type_sql: str) -> str:
-    powerlink_values = ", ".join(f"'{value}'" for value in _CAMPAIGN_TYPE_ALIASES["파워링크"])
-    shopping_values = ", ".join(f"'{value}'" for value in _CAMPAIGN_TYPE_ALIASES["쇼핑검색"])
-    return (
-        f"CASE "
-        f"WHEN {type_sql} IN ({powerlink_values}) THEN '파워링크' "
-        f"WHEN {type_sql} IN ({shopping_values}) THEN '쇼핑검색' "
-        f"ELSE NULL END"
-    )
+    def _quote_sql_literal(value: object) -> str:
+        return "'" + str(value).replace("'", "''") + "'"
+
+    clauses = []
+    for label in _BUDGET_CAMPAIGN_TYPE_OPTIONS:
+        values = ", ".join(_quote_sql_literal(value) for value in _CAMPAIGN_TYPE_ALIASES.get(label, [label]))
+        clauses.append(f"WHEN {type_sql} IN ({values}) THEN '{label}'")
+    return f"CASE {' '.join(clauses)} ELSE NULL END"
 
 
 def _ensure_customer_type_budget_table(_engine) -> None:
@@ -1787,6 +1842,7 @@ def _ensure_customer_type_budget_table(_engine) -> None:
 def _read_type_budget_settings(_engine, cids_tuple: tuple) -> pd.DataFrame:
     _ensure_customer_type_budget_table(_engine)
     where_cid, cid_params = _build_in_filter("REGEXP_REPLACE(CAST(customer_id AS TEXT), '\\.0+$', '')", cids_tuple, "type_budget_cid")
+    where_type, type_params = _build_in_filter("campaign_type", _BUDGET_CAMPAIGN_TYPE_OPTIONS, "type_budget_campaign_type")
     return sql_read(
         _engine,
         f"""
@@ -1795,9 +1851,9 @@ def _read_type_budget_settings(_engine, cids_tuple: tuple) -> pd.DataFrame:
             campaign_type,
             monthly_budget
         FROM dim_customer_type_budget
-        WHERE campaign_type IN ('파워링크', '쇼핑검색') {where_cid}
+        WHERE 1=1 {where_type} {where_cid}
         """,
-        cid_params,
+        {**cid_params, **type_params},
     )
 
 
@@ -1897,9 +1953,16 @@ def _merge_customer_type_metric_frame(base_df: pd.DataFrame, metric_df: pd.DataF
     return base_df.merge(metric_df, on=["customer_id", "campaign_type"], how="left")
 
 
+def _budget_type_options_for_platform(platform: object) -> tuple[str, ...]:
+    label = str(platform or "").strip()
+    if label == "메타":
+        return ("메타",)
+    return _BUDGET_NAVER_CAMPAIGN_TYPE_OPTIONS
+
+
 @st.cache_data(ttl=300, max_entries=30, show_spinner=False)
 def query_budget_type_bundle(_engine, cids: tuple, yesterday: date, avg_d1: date, avg_d2: date, month_d1: date, month_d2: date, prev_month_d1: date, prev_month_d2: date, avg_days: int) -> pd.DataFrame:
-    df = _budget_naver_scope_df(_engine)
+    df = _budget_account_scope_df(_engine)
     if df.empty:
         return pd.DataFrame()
 
@@ -1913,9 +1976,16 @@ def query_budget_type_bundle(_engine, cids: tuple, yesterday: date, avg_d1: date
     if df.empty:
         return pd.DataFrame()
 
-    base = df[["customer_id", "account_name", "manager", "operating_weekdays", "platform"]].drop_duplicates("customer_id").copy()
-    type_rows = pd.DataFrame({"campaign_type": list(_BUDGET_CAMPAIGN_TYPE_OPTIONS)})
-    base = base.merge(type_rows, how="cross")
+    account_base = df[["customer_id", "account_name", "manager", "operating_weekdays", "platform"]].drop_duplicates("customer_id").copy()
+    type_records: list[dict] = []
+    for _, row in account_base.iterrows():
+        for campaign_type in _budget_type_options_for_platform(row.get("platform")):
+            rec = row.to_dict()
+            rec["campaign_type"] = campaign_type
+            type_records.append(rec)
+    base = pd.DataFrame(type_records)
+    if base.empty:
+        return pd.DataFrame()
 
     budget_settings = _read_type_budget_settings(_engine, cids_tuple)
     base = _merge_customer_type_metric_frame(base, budget_settings)
@@ -1966,7 +2036,9 @@ def query_budget_type_bundle(_engine, cids: tuple, yesterday: date, avg_d1: date
         base["manager"] = "미배정"
     if "account_name" not in base.columns:
         base["account_name"] = base["customer_id"].astype(str)
-    base["platform"] = "네이버"
+    if "platform" not in base.columns:
+        base["platform"] = ""
+    base["platform"] = base["platform"].fillna("").replace("", "네이버")
     return base
 
 
@@ -1981,6 +2053,19 @@ def update_monthly_budget(_engine, cid: int, val: int):
             if "monthly_budget" not in cols:
                 sql_exec(_engine, "ALTER TABLE dim_customer ADD COLUMN monthly_budget BIGINT DEFAULT 0")
         cid_norm = _normalize_customer_id_value(cid)
+        sql_exec(
+            _engine,
+            """
+            INSERT INTO dim_customer (customer_id, account_name, monthly_budget, operating_weekdays)
+            SELECT :cid, :cid, :val, :weekdays
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM dim_customer
+                WHERE REGEXP_REPLACE(CAST(customer_id AS TEXT), '\\.0+$', '') = :cid
+            )
+            """,
+            {"val": val, "cid": cid_norm, "weekdays": DEFAULT_OPERATING_WEEKDAYS},
+        )
         sql_exec(
             _engine,
             "UPDATE dim_customer SET monthly_budget = :val WHERE REGEXP_REPLACE(CAST(customer_id AS TEXT), '\\.0+$', '') = :cid",
@@ -2457,6 +2542,10 @@ def query_campaign_bundle(_engine, d1: date, d2: date, cids: tuple, type_sel: tu
     dim_cols, cp_col = _resolve_campaign_type_column(_engine)
     target_roas_select = ", c.target_roas" if "target_roas" in dim_cols else ", 0.0 as target_roas"
     min_roas_select = ", c.min_roas" if "min_roas" in dim_cols else ", 0.0 as min_roas"
+    budget_select_sql = "".join(
+        f", c.{col}" if col in dim_cols else f", 0 AS {col}"
+        for col in ["daily_budget", "lifetime_budget", "budget_remaining", "spend_cap"]
+    )
     type_filter_sql, type_params = _build_campaign_type_filter(cp_col, type_sel, "campaign_bundle_type")
 
     camp_fact_cols = get_table_columns(_engine, "fact_campaign_daily")
@@ -2474,7 +2563,7 @@ def query_campaign_bundle(_engine, d1: date, d2: date, cids: tuple, type_sel: tu
         )
         SELECT
             agg.customer_id, agg.campaign_id,
-            c.campaign_name, c.{cp_col} as campaign_type {target_roas_select} {min_roas_select},
+            c.campaign_name, c.{cp_col} as campaign_type {target_roas_select} {min_roas_select}{budget_select_sql},
             agg.imp, agg.clk, agg.cost, agg.conv, agg.sales, agg.tot_conv, agg.tot_sales{metric_sql['cart_select_sql']}{metric_sql['wish_select_sql']}{rank_select_sql}
         FROM agg
         JOIN dim_campaign c ON agg.campaign_id = c.campaign_id AND agg.customer_id = c.customer_id

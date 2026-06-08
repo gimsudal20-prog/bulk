@@ -21,6 +21,15 @@ jobs:
       NAVER_ADS_SECRET: ${{ secrets.NAVER_ADS_SECRET }}
       ACCOUNT_MASTER_FILE: account_master.xlsx
       ACCOUNT_MASTER_XLSX_B64: ${{ secrets.ACCOUNT_MASTER_XLSX_B64 }}
+      GFA_ACCESS_TOKEN: ${{ secrets.GFA_ACCESS_TOKEN }}
+      GFA_REFRESH_TOKEN: ${{ secrets.GFA_REFRESH_TOKEN }}
+      GFA_CLIENT_ID: ${{ secrets.GFA_CLIENT_ID || vars.GFA_CLIENT_ID }}
+      GFA_CLIENT_SECRET: ${{ secrets.GFA_CLIENT_SECRET || vars.GFA_CLIENT_SECRET }}
+      GFA_MANAGER_ACCOUNT_NO: ${{ secrets.GFA_MANAGER_ACCOUNT_NO || vars.GFA_MANAGER_ACCOUNT_NO }}
+      GFA_ID: ${{ secrets.GFA_ID || secrets.GFA_LOGIN_ID || secrets.NAVER_ID || vars.GFA_ID || vars.GFA_LOGIN_ID || vars.NAVER_ID }}
+      GFA_PW: ${{ secrets.GFA_PW || secrets.GFA_LOGIN_PW || secrets.NAVER_PW || vars.GFA_PW || vars.GFA_LOGIN_PW || vars.NAVER_PW }}
+      GFA_HEADLESS: "true"
+      GFA_DEBUG_DIR: gfa_debug
 
     steps:
       - name: 코드 체크아웃
@@ -60,8 +69,18 @@ jobs:
           {
             echo "## 04 비즈머니 일일 수집"
             echo
-            echo "- 목적: 계정별 비즈머니 잔액을 저장합니다."
+            echo "- 목적: SearchAd/GFA 계정별 비즈머니 잔액을 저장합니다."
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: GFA 화면 조회 브라우저 준비
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${GFA_ID:-}" && -n "${GFA_PW:-}" ]]; then
+            python -m playwright install --with-deps chromium
+          else
+            echo "GFA 화면 조회 인증 정보가 없어 Chromium 설치를 건너뜁니다."
+          fi
 
       - name: 비즈머니 수집기 실행
         run: python collect_bizmoney.py

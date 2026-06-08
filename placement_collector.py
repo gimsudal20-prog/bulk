@@ -29,6 +29,7 @@ from placement_collector_helpers import (
     build_ad_id_lookup,
     build_adgroup_id_lookup,
     build_adgroup_name_lookup,
+    build_adgroup_type_name_lookup,
     build_media_placement_lookup,
     build_placement_rows_from_existing_facts,
     build_placement_rows_from_report,
@@ -255,20 +256,66 @@ def placement_type_counts(rows: List[Dict[str, Any]]) -> Dict[str, int]:
 
 
 def merge_missing_source_fact_rows(rows: List[Dict[str, Any]], fallback_rows: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    existing_adgroups = {
-        str(row.get("adgroup_id") or "").strip()
-        for row in rows or []
-        if str(row.get("adgroup_id") or "").strip()
-    }
-    additions = [
-        row
-        for row in fallback_rows or []
-        if str(row.get("adgroup_id") or "").strip()
-        and str(row.get("adgroup_id") or "").strip() not in existing_adgroups
-    ]
+    metric_fields = ["imp", "clk", "cost", "conv", "sales", "purchase_conv", "purchase_sales"]
+    existing_by_adgroup: Dict[str, Dict[str, float]] = {}
+    for row in rows or []:
+        adgroup_id = str(row.get("adgroup_id") or "").strip()
+        if not adgroup_id:
+            continue
+        bucket = existing_by_adgroup.setdefault(adgroup_id, {field: 0.0 for field in metric_fields})
+        for field in metric_fields:
+            try:
+                bucket[field] += float(row.get(field) or 0.0)
+            except Exception:
+                pass
+
+    additions: List[Dict[str, Any]] = []
+    subtracted_adgroups = 0
+    for fallback in fallback_rows or []:
+        adgroup_id = str(fallback.get("adgroup_id") or "").strip()
+        if not adgroup_id:
+            continue
+        consumed = existing_by_adgroup.get(adgroup_id)
+        if not consumed:
+            additions.append(fallback)
+            continue
+
+        complement = dict(fallback)
+        has_remainder = False
+        for field in metric_fields:
+            try:
+                raw_value = float(fallback.get(field) or 0.0) - float(consumed.get(field) or 0.0)
+            except Exception:
+                raw_value = 0.0
+            raw_value = max(0.0, raw_value)
+            if field in {"conv", "purchase_conv"}:
+                value: Any = round(raw_value, 6)
+            else:
+                value = int(round(raw_value))
+            complement[field] = value
+            if float(value or 0.0) != 0.0:
+                has_remainder = True
+        if not has_remainder:
+            subtracted_adgroups += 1
+            continue
+        cost = float(complement.get("cost") or 0.0)
+        complement["device_name"] = "UNSEGMENTED"
+        complement["placement_type"] = "SEARCH"
+        complement["data_source"] = f"COMPLEMENT_{fallback.get('data_source') or 'EXISTING_FACTS'}"
+        complement["source_report"] = "EXISTING_FACTS_COMPLEMENT"
+        complement["roas"] = round((float(complement.get("sales") or 0.0) / cost) * 100, 4) if cost else 0.0
+        complement["purchase_roas"] = round((float(complement.get("purchase_sales") or 0.0) / cost) * 100, 4) if cost else 0.0
+        additions.append(complement)
+        subtracted_adgroups += 1
+
     if not additions:
-        return rows, {"added_rows": 0, "fallback_rows": len(fallback_rows or [])}
-    return list(rows or []) + additions, {"added_rows": len(additions), "fallback_rows": len(fallback_rows or [])}
+        return rows, {"added_rows": 0, "fallback_rows": len(fallback_rows or []), "subtracted_adgroups": subtracted_adgroups}
+    return list(rows or []) + additions, {
+        "added_rows": len(additions),
+        "fallback_rows": len(fallback_rows or []),
+        "subtracted_adgroups": subtracted_adgroups,
+        "mode": "search_complement",
+    }
 
 
 def add_missing_source_fact_rows(
@@ -298,6 +345,7 @@ def fetch_placement_rows_from_sources(
     adgroup_lookup = build_adgroup_id_lookup(engine, customer_id)
     ad_id_lookup = build_ad_id_lookup(engine, customer_id)
     adgroup_name_lookup = build_adgroup_name_lookup(engine, customer_id)
+    adgroup_type_name_lookup = build_adgroup_type_name_lookup(engine, customer_id)
     purchase_lookup = read_adgroup_purchase_split_lookup(engine, customer_id, target_date)
     metric_lookup = read_adgroup_metric_split_lookup(engine, customer_id, target_date)
     report_attempts: List[Dict[str, Any]] = []
@@ -314,6 +362,7 @@ def fetch_placement_rows_from_sources(
             ad_id_lookup=ad_id_lookup,
             adgroup_lookup=adgroup_lookup,
             adgroup_name_lookup=adgroup_name_lookup,
+            adgroup_type_name_lookup=adgroup_type_name_lookup,
             purchase_split_lookup=purchase_lookup,
             metric_split_lookup=metric_lookup,
             media_lookup=media_lookup,

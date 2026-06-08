@@ -15,7 +15,7 @@ from device_collector_helpers import normalize_device_name
 from targeting_collector_helpers import _flatten_stat_rows
 
 
-PLACEMENT_PARSER_VERSION = "placement_v20260605_report_media1"
+PLACEMENT_PARSER_VERSION = "placement_v20260608_da_raw_ssa_placement1"
 PLACEMENT_TABLE = "fact_adgroup_placement_daily"
 PLACEMENT_BREAKDOWN_CANDIDATES = [
     "mediaTp",
@@ -280,6 +280,24 @@ def _normalize_name(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip())
 
 
+def normalize_campaign_type_key(value: Any) -> str:
+    raw = str(value or "").strip()
+    up = raw.upper()
+    if not raw:
+        return ""
+    if "쇼핑" in raw or up in {"SHOPPING", "SSA", "SHOPPING_SEARCH"}:
+        return "SHOPPING"
+    if "파워링크" in raw or up in {"WEB_SITE", "POWERLINK", "POWER_LINK"}:
+        return "WEB_SITE"
+    if "파워컨텐츠" in raw or up in {"POWER_CONTENT", "POWER_CONTENTS"}:
+        return "POWER_CONTENT"
+    if "브랜드" in raw or up in {"BRAND_SEARCH"}:
+        return "BRAND_SEARCH"
+    if "플레이스" in raw or up in {"PLACE"}:
+        return "PLACE"
+    return up or raw
+
+
 def _is_o(value: Any) -> bool:
     return str(value or "").strip().upper() == "O"
 
@@ -426,10 +444,48 @@ def build_adgroup_name_lookup(engine: Engine, customer_id: str) -> Dict[Tuple[st
             "adgroup_id": str(row[3] or "").strip(),
             "campaign_type": str(row[4] or "").strip(),
         }
-        if lookup.get(key) is not None and lookup.get(key) != payload:
-            lookup[key] = None
-        else:
+        if key not in lookup:
             lookup[key] = payload
+        elif lookup[key] != payload:
+            lookup[key] = None
+    return lookup
+
+
+def build_adgroup_type_name_lookup(engine: Engine, customer_id: str) -> Dict[Tuple[str, str], Dict[str, str] | None]:
+    sql = """
+    SELECT
+        COALESCE(c.campaign_tp, '') AS campaign_type,
+        COALESCE(a.adgroup_name, '') AS adgroup_name,
+        COALESCE(c.campaign_id, a.campaign_id, '') AS campaign_id,
+        COALESCE(a.adgroup_id, '') AS adgroup_id
+    FROM dim_adgroup a
+    LEFT JOIN dim_campaign c
+      ON a.customer_id::text = c.customer_id::text
+     AND a.campaign_id::text = c.campaign_id::text
+    WHERE a.customer_id::text = :cid
+    """
+    lookup: Dict[Tuple[str, str], Dict[str, str] | None] = {}
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text(sql), {"cid": str(customer_id)}).fetchall()
+    except Exception:
+        return lookup
+
+    for row in rows or []:
+        campaign_type = normalize_campaign_type_key(row[0])
+        adgroup_name = _normalize_name(row[1])
+        if not campaign_type or not adgroup_name:
+            continue
+        payload = {
+            "campaign_id": str(row[2] or "").strip(),
+            "adgroup_id": str(row[3] or "").strip(),
+            "campaign_type": str(row[0] or "").strip(),
+        }
+        key = (campaign_type, adgroup_name)
+        if key not in lookup:
+            lookup[key] = payload
+        elif lookup[key] != payload:
+            lookup[key] = None
     return lookup
 
 
@@ -1345,6 +1401,7 @@ def build_placement_rows_from_report(
     ad_id_lookup: Dict[str, Dict[str, str]] | None = None,
     adgroup_lookup: Dict[str, Dict[str, str]] | None = None,
     adgroup_name_lookup: Dict[Tuple[str, str], Dict[str, str] | None] | None = None,
+    adgroup_type_name_lookup: Dict[Tuple[str, str], Dict[str, str] | None] | None = None,
     purchase_split_lookup: Dict[str, Dict[str, float]] | None = None,
     metric_split_lookup: Dict[str, Dict[str, float]] | None = None,
     media_lookup: Dict[str, Dict[str, Any]] | None = None,
@@ -1403,6 +1460,7 @@ def build_placement_rows_from_report(
         "ad_id": _get_col_idx(headers, AD_ID_HEADER_CANDIDATES),
         "adgroup_id": _get_col_idx(headers, ADGROUP_ID_HEADER_CANDIDATES),
         "campaign_id": _get_col_idx(headers, CAMPAIGN_ID_HEADER_CANDIDATES),
+        "campaign_type": _get_col_idx(headers, CAMPAIGN_TYPE_HEADER_CANDIDATES),
         "campaign": _get_col_idx(headers, CAMPAIGN_HEADER_CANDIDATES),
         "adgroup": _get_col_idx(headers, ADGROUP_HEADER_CANDIDATES),
         "device": _get_col_idx(headers, DEVICE_HEADER_CANDIDATES),
@@ -1421,7 +1479,8 @@ def build_placement_rows_from_report(
     if idx["placement"] == -1:
         meta["status"] = "placement_column_missing"
         return [], meta
-    if idx["ad_id"] == -1 and idx["adgroup_id"] == -1 and (idx["campaign"] == -1 or idx["adgroup"] == -1):
+    has_name_mapping_key = idx["adgroup"] != -1 and (idx["campaign"] != -1 or idx["campaign_type"] != -1)
+    if idx["ad_id"] == -1 and idx["adgroup_id"] == -1 and not has_name_mapping_key:
         meta["status"] = "id_columns_missing"
         return [], meta
     if idx["imp"] == -1 and idx["clk"] == -1 and idx["cost"] == -1 and idx["conv"] == -1 and idx["sales"] == -1:
@@ -1431,6 +1490,7 @@ def build_placement_rows_from_report(
     ad_id_lookup = ad_id_lookup or {}
     adgroup_lookup = adgroup_lookup or {}
     adgroup_name_lookup = adgroup_name_lookup or {}
+    adgroup_type_name_lookup = adgroup_type_name_lookup or {}
     purchase_split_lookup = purchase_split_lookup or {}
     allowed = {str(x).strip() for x in (allowed_campaign_ids or set()) if str(x).strip()} or None
     grouped: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
@@ -1472,13 +1532,27 @@ def build_placement_rows_from_report(
         if (not adgroup_id or not campaign_id) and idx["campaign"] != -1 and idx["adgroup"] != -1:
             name_key = (_normalize_name(_cell(row, idx["campaign"])), _normalize_name(_cell(row, idx["adgroup"])))
             name_mapping = adgroup_name_lookup.get(name_key)
-            if name_mapping is None and name_key in adgroup_name_lookup:
-                meta["rejected"]["ambiguous_mapping"] += 1
-                continue
             if name_mapping:
                 adgroup_id = adgroup_id or str(name_mapping.get("adgroup_id") or "").strip()
                 campaign_id = campaign_id or str(name_mapping.get("campaign_id") or "").strip()
                 campaign_type = campaign_type or str(name_mapping.get("campaign_type") or "").strip()
+
+        if (not adgroup_id or not campaign_id) and idx["campaign_type"] != -1 and idx["adgroup"] != -1:
+            type_key = (normalize_campaign_type_key(_cell(row, idx["campaign_type"])), _normalize_name(_cell(row, idx["adgroup"])))
+            type_mapping = adgroup_type_name_lookup.get(type_key)
+            if type_mapping is None and type_key in adgroup_type_name_lookup:
+                meta["rejected"]["ambiguous_mapping"] += 1
+                continue
+            if type_mapping:
+                adgroup_id = adgroup_id or str(type_mapping.get("adgroup_id") or "").strip()
+                campaign_id = campaign_id or str(type_mapping.get("campaign_id") or "").strip()
+                campaign_type = campaign_type or str(type_mapping.get("campaign_type") or "").strip()
+
+        if not adgroup_id and idx["campaign"] != -1 and idx["adgroup"] != -1:
+            name_key = (_normalize_name(_cell(row, idx["campaign"])), _normalize_name(_cell(row, idx["adgroup"])))
+            if name_key in adgroup_name_lookup and adgroup_name_lookup.get(name_key) is None:
+                meta["rejected"]["ambiguous_mapping"] += 1
+                continue
 
         if not adgroup_id or not campaign_id:
             meta["rejected"]["missing_mapping"] += 1

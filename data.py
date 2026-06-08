@@ -1475,6 +1475,16 @@ def _first_nonblank(*values) -> str:
     return ""
 
 
+def _budget_display_account_name(account_name: object, platform: object) -> str:
+    name = str(account_name or "").strip()
+    label = str(platform or "").strip()
+    if not name:
+        return label or ""
+    if label and label not in name:
+        return f"{name} {label}"
+    return name
+
+
 def _budget_customer_platform_lookup(_engine) -> dict[str, str]:
     if not table_exists(_engine, "dim_campaign"):
         return {}
@@ -1585,7 +1595,7 @@ def _budget_account_scope_df(_engine) -> pd.DataFrame:
         platform_label = _first_nonblank(row.get("platform_label"), "네이버")
         rows.append({
             "customer_id": cid,
-            "account_name": label,
+            "account_name": _budget_display_account_name(label, platform_label),
             "manager": _first_nonblank(row.get("manager"), None if meta_row is None else meta_row.get("manager"), "미배정"),
             "monthly_budget": 0 if meta_row is None else pd.to_numeric(meta_row.get("monthly_budget", 0), errors="coerce"),
             "operating_weekdays": normalize_operating_weekdays(None if meta_row is None else meta_row.get("operating_weekdays", DEFAULT_OPERATING_WEEKDAYS)),
@@ -1602,6 +1612,10 @@ def _budget_account_scope_df(_engine) -> pd.DataFrame:
     if not fallback.empty:
         fallback["platform"] = fallback["customer_id"].map(platform_lookup).fillna("네이버")
         fallback = fallback[fallback["platform"].isin(_BUDGET_PLATFORM_LABELS)].copy()
+        fallback["account_name"] = fallback.apply(
+            lambda row: _budget_display_account_name(row.get("account_name"), row.get("platform")),
+            axis=1,
+        )
         rows.extend(fallback[["customer_id", "account_name", "manager", "monthly_budget", "operating_weekdays", "platform"]].to_dict("records"))
 
     if not rows:

@@ -194,6 +194,41 @@ def _active_platform_connection_labels(_engine) -> set[str]:
     return {str(x).strip() for x in work["account_label"].dropna().tolist() if str(x).strip()}
 
 
+def _campaign_platform_lookup(_engine) -> dict[str, str]:
+    if _engine is None:
+        return {}
+    try:
+        if not table_exists(_engine, "dim_campaign"):
+            return {}
+        cols = get_table_columns(_engine, "dim_campaign")
+        cp_col = "campaign_tp" if "campaign_tp" in cols else ("campaign_type_label" if "campaign_type_label" in cols else "campaign_type")
+        if cp_col not in cols:
+            return {}
+        df = sql_read(
+            _engine,
+            f"""
+            SELECT CAST(customer_id AS TEXT) AS customer_id, {cp_col} AS campaign_type
+            FROM dim_campaign
+            WHERE COALESCE(CAST({cp_col} AS TEXT), '') <> ''
+            """,
+        )
+    except Exception:
+        return {}
+    if df is None or df.empty:
+        return {}
+
+    out: dict[str, str] = {}
+    for cid, group in df.groupby("customer_id"):
+        labels = {_campaign_type_platform_label(value) for value in group["campaign_type"].dropna().astype(str).tolist()}
+        labels.discard("")
+        cid_norm = _normalize_customer_id_value_for_page(cid)
+        if "메타" in labels and "네이버" not in labels:
+            out[cid_norm] = "메타"
+        elif "네이버" in labels:
+            out[cid_norm] = "네이버"
+    return out
+
+
 def _platform_scope_rows(_engine) -> pd.DataFrame:
     cols = ["customer_id", "account_name", "manager", "platform"]
     if _engine is None:
@@ -245,7 +280,8 @@ def _scope_df(meta: pd.DataFrame, _engine=None) -> pd.DataFrame:
         if col not in base.columns:
             base[col] = ""
     if "platform" not in base.columns:
-        base["platform"] = "네이버"
+        platform_lookup = _campaign_platform_lookup(_engine)
+        base["platform"] = base["customer_id"].map(platform_lookup).fillna("네이버") if "customer_id" in base.columns else "네이버"
     else:
         base["platform"] = base["platform"].apply(lambda x: _normalize_media_label(x) or "네이버")
     base = base[["customer_id", "account_name", "manager", "platform"]].copy()

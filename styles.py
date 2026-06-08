@@ -940,9 +940,12 @@ h1, h2, h3, h4, h5, h6 {
   font-size: 12px;
   font-weight: 850;
   line-height: 1.2;
-  margin: 1px 0 0;
-  padding: 7px 4px 5px;
+  margin: 8px 0 0;
+  padding: 8px 4px 5px;
   box-sizing: border-box;
+}
+.nav-group-heading.active {
+  color: var(--nv-primary);
 }
 .sidebar-section-title {
   color: var(--nv-text-soft);
@@ -972,27 +975,6 @@ h1, h2, h3, h4, h5, h6 {
   overflow: visible;
   min-height: 34px !important;
   margin-bottom: 3px !important;
-}
-
-[data-testid="stSidebar"] [data-testid="stSelectbox"] {
-  margin-bottom: 2px !important;
-}
-[data-testid="stSidebar"] [data-testid="stSelectbox"] > div {
-  min-height: 34px !important;
-}
-[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] > div {
-  min-height: 34px !important;
-  border-radius: 8px !important;
-  border-color: var(--nv-line-strong) !important;
-  background: #FFFFFF !important;
-  box-shadow: var(--nv-shadow-soft) !important;
-}
-[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] span,
-[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] div {
-  font-size: 13px !important;
-  font-weight: 800 !important;
-  color: var(--nv-text-soft) !important;
-  letter-spacing: 0 !important;
 }
 
 [data-testid="stSidebar"] [data-testid="stButton"] {

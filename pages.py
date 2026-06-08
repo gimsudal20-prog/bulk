@@ -81,42 +81,24 @@ def _render_sidebar_nav(nav_items: list[str]) -> str:
     if not groups:
         return current_nav
 
-    group_keys = [group[0] for group in groups]
+    st.session_state.pop("nav_group", None)
     current_group = _nav_group_for_page(current_nav)
-    if current_group not in group_keys:
-        current_group = group_keys[0]
-    if st.session_state.get("nav_group") not in group_keys:
-        st.session_state["nav_group"] = current_group
-
-    selected_group = st.selectbox(
-        "메뉴 그룹",
-        group_keys,
-        index=group_keys.index(st.session_state.get("nav_group", current_group)),
-        format_func=lambda key: next(label for group_key, label, _title, _pages in groups if group_key == key),
-        key="nav_group",
-        label_visibility="collapsed",
-    )
-
-    if selected_group != current_group:
-        target_pages = next(pages for group_key, _label, _title, pages in groups if group_key == selected_group)
-        st.session_state["nav_page"] = target_pages[0]
-        st.rerun()
-
-    group_title, group_pages = next((title, pages) for group_key, _label, title, pages in groups if group_key == selected_group)
-    st.markdown(f"<div class='nav-group-heading'>{escape(group_title)}</div>", unsafe_allow_html=True)
-    for page_key in group_pages:
-        short_label, icon = NAV_META[page_key]
-        is_active = page_key == current_nav
-        clicked = st.button(
-            short_label,
-            key=f"nav_btn_{page_key}",
-            icon=icon,
-            type="primary" if is_active else "secondary",
-            use_container_width=True,
-        )
-        if clicked and not is_active:
-            st.session_state["nav_page"] = page_key
-            st.rerun()
+    for group_key, _label, title, group_pages in groups:
+        heading_class = "nav-group-heading active" if group_key == current_group else "nav-group-heading"
+        st.markdown(f"<div class='{heading_class}'>{escape(title)}</div>", unsafe_allow_html=True)
+        for page_key in group_pages:
+            short_label, icon = NAV_META[page_key]
+            is_active = page_key == current_nav
+            clicked = st.button(
+                short_label,
+                key=f"nav_btn_{page_key}",
+                icon=icon,
+                type="primary" if is_active else "secondary",
+                use_container_width=True,
+            )
+            if clicked and not is_active:
+                st.session_state["nav_page"] = page_key
+                st.rerun()
     return st.session_state.get("nav_page", nav_items[0])
 
 

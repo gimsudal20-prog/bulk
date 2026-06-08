@@ -655,12 +655,28 @@ def _map_campaign_types(df: pd.DataFrame, col_name: str) -> pd.DataFrame:
 
 @st.cache_data(ttl=DASHBOARD_DATA_CACHE_TTL, max_entries=30, show_spinner=False)
 def get_latest_dates(_engine) -> dict:
+    tables = [
+        "fact_campaign_daily",
+        "fact_adgroup_daily",
+        "fact_keyword_daily",
+        "fact_ad_daily",
+        "fact_shopping_query_daily",
+    ]
+    existing = [tbl for tbl in tables if table_exists(_engine, tbl)]
+    if not existing:
+        return {}
+
+    union_sql = "\nUNION ALL\n".join(
+        f"SELECT '{tbl}' AS table_name, MAX(dt) AS dt FROM {tbl}"
+        for tbl in existing
+    )
+    df = sql_read(_engine, union_sql)
+    if df.empty:
+        return {}
     dates = {}
-    for tbl in ["fact_campaign_daily", "fact_adgroup_daily", "fact_keyword_daily", "fact_ad_daily", "fact_shopping_query_daily"]:
-        if table_exists(_engine, tbl):
-            df = sql_read(_engine, f"SELECT MAX(dt) as dt FROM {tbl}")
-            if not df.empty and pd.notna(df.iloc[0]["dt"]):
-                dates[tbl] = df.iloc[0]["dt"]
+    for _, row in df.iterrows():
+        if pd.notna(row.get("dt")):
+            dates[str(row.get("table_name"))] = row.get("dt")
     return dates
 
 # ==========================================

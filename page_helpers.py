@@ -284,6 +284,7 @@ def _build_filter_maps(meta: pd.DataFrame, _engine=None) -> Dict:
     work = _scope_df(meta, _engine)
     if work.empty:
         return {
+            "scope_df": pd.DataFrame(columns=["customer_id", "account_name", "manager", "platform"]),
             "managers": [],
             "accounts": [],
             "manager_to_accounts": {},
@@ -318,12 +319,37 @@ def _build_filter_maps(meta: pd.DataFrame, _engine=None) -> Dict:
                 account_to_cids[key] = sorted(_customer_id_int_series_for_page(grp["customer_id"]).drop_duplicates().tolist())
 
     return {
+        "scope_df": work,
         "managers": managers,
         "accounts": accounts,
         "manager_to_accounts": manager_to_accounts,
         "manager_to_cids": manager_to_cids,
         "account_to_cids": account_to_cids,
     }
+
+
+def _customer_ids_from_scope(
+    scope_df: pd.DataFrame,
+    manager_sel: list | tuple | None = None,
+    account_sel: list | tuple | None = None,
+    platform_sel: list | tuple | None = None,
+) -> list:
+    if scope_df is None or scope_df.empty:
+        return []
+    df = scope_df.copy()
+    manager_sel = [str(x).strip() for x in (manager_sel or []) if str(x).strip()]
+    account_sel = [str(x).strip() for x in (account_sel or []) if str(x).strip()]
+    platform_sel = [_normalize_media_label(x) for x in (platform_sel or []) if _normalize_media_label(x)]
+
+    if platform_sel and "platform" in df.columns:
+        df = df[df["platform"].astype(str).isin(platform_sel)]
+    if manager_sel and "manager" in df.columns:
+        df = df[df["manager"].astype(str).str.strip().isin(manager_sel)]
+    if account_sel and "account_name" in df.columns:
+        df = df[df["account_name"].astype(str).str.strip().isin(account_sel)]
+    if "customer_id" not in df.columns:
+        return []
+    return sorted(_customer_id_int_series_for_page(df["customer_id"]).drop_duplicates().tolist())
 
 
 def resolve_customer_ids(meta: pd.DataFrame, manager_sel: list, account_sel: list, engine=None, platform_sel: list | tuple | None = None) -> list:
@@ -521,6 +547,9 @@ def build_filters(meta: pd.DataFrame, type_opts: List[str], engine=None) -> Dict
     filter_maps = _build_filter_maps(meta, engine)
     managers = filter_maps.get("managers", [])
     accounts = filter_maps.get("accounts", [])
+    scope_base = filter_maps.get("scope_df", pd.DataFrame())
+    if scope_base is None:
+        scope_base = pd.DataFrame()
 
     with st.sidebar:
         st.markdown("<div class='nav-sidebar-title'>공통 필터</div>", unsafe_allow_html=True)
@@ -582,7 +611,7 @@ def build_filters(meta: pd.DataFrame, type_opts: List[str], engine=None) -> Dict
         st.markdown("<div class='sidebar-section-title compact'>담당자 및 계정</div>", unsafe_allow_html=True)
         manager_sel = ui_multiselect(st, "담당자", managers, default=sv.get("manager", []), key="f_manager", placeholder="전체 담당자")
 
-        scope_options = _scope_df(meta, engine)
+        scope_options = scope_base.copy()
         if manager_sel and "manager" in scope_options.columns:
             scope_options = scope_options[scope_options["manager"].astype(str).str.strip().isin([str(x).strip() for x in manager_sel])]
         accounts_by_mgr = sorted([x for x in scope_options.get("account_name", pd.Series(dtype=str)).dropna().unique().tolist() if str(x).strip()])
@@ -653,9 +682,9 @@ def build_filters(meta: pd.DataFrame, type_opts: List[str], engine=None) -> Dict
         st.session_state["filters_v8"] = dict(updated_filters)
         sv = st.session_state["filters_v8"]
 
-    cids = resolve_customer_ids(meta, manager_sel, account_sel, engine, media_sel)
+    cids = _customer_ids_from_scope(scope_base, manager_sel, account_sel, media_sel)
     if not cids and not (manager_sel or account_sel or media_sel):
-        cids = _all_customer_ids(meta, engine)
+        cids = _customer_ids_from_scope(scope_base)
 
     raw_type_sel = tuple(sv["type_sel"]) if sv["type_sel"] else tuple()
     effective_type_sel = _derive_effective_campaign_types(raw_type_sel, sv.get("media_sel", []))

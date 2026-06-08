@@ -481,8 +481,14 @@ def page_perf_shopping_query(meta: pd.DataFrame, engine, f: Dict) -> None:
     st.markdown("</div>", unsafe_allow_html=True)
     b1, b2 = period_compare_range(f["start"], f["end"], cmp_mode)
 
-    tab_terms, tab_place = st.tabs(["검색어 성과", "검색/콘텐츠 지면"])
-    with tab_terms:
+    selected_tab = st.pills(
+        "쇼핑 분석 보기",
+        ["검색어 성과", "검색/콘텐츠 지면"],
+        default="검색어 성과",
+        key="shopping_query_main_tab",
+        label_visibility="collapsed",
+    )
+    if selected_tab == "검색어 성과":
         _render_shopping_search_terms_tab(meta, engine, f, cids, cmp_mode, b1, b2)
-    with tab_place:
+    else:
         _render_shopping_placement_tab(meta, engine, f, cids, cmp_mode, b1, b2)

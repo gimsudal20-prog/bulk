@@ -1981,8 +1981,10 @@ def update_monthly_budget(_engine, cid: int, val: int):
             "월 예산 변경",
             after={"customer_id": cid_norm, "monthly_budget": int(val or 0)},
         )
+        return True
     except Exception as e:
         st.error(f"예산 업데이트 실패: {e}")
+        return False
 
 
 def update_monthly_budget_by_campaign_type(_engine, cid: int, campaign_type: str, val: int):
@@ -2012,8 +2014,10 @@ def update_monthly_budget_by_campaign_type(_engine, cid: int, campaign_type: str
             "유형별 월 예산 변경",
             after={"customer_id": cid_norm, "campaign_type": type_norm, "monthly_budget": int(val or 0)},
         )
+        return True
     except Exception as e:
         st.error(f"유형별 예산 업데이트 실패: {e}")
+        return False
 
 
 def update_customer_operating_weekdays(_engine, cid: int, weekdays: str):

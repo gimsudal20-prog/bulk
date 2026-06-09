@@ -11,7 +11,7 @@ from typing import Dict
 from datetime import date
 
 from data import *
-from ui import render_echarts_dual_axis, render_kpi_strip, render_ops_cards, render_toolbar, render_inline_notice, safe_numeric_col, safe_numeric_series
+from ui import render_echarts_dual_axis, render_kpi_strip, render_ops_cards, render_toolbar, render_inline_notice, safe_numeric_col, safe_numeric_series, numeric_column_config
 from page_helpers import get_dynamic_cmp_options, period_compare_range
 
 
@@ -67,7 +67,7 @@ def _render_diag_panel(diag: list | None, enabled: bool = False) -> None:
     df = df.rename(columns=rename_map)
     with st.expander("조회 진단", expanded=False):
         st.caption("개요 화면에서 어떤 조회 단계가 비었거나 실패했는지 확인하는 용도입니다.")
-        st.dataframe(df, width="stretch", hide_index=True)
+        st.dataframe(df, width="stretch", hide_index=True, column_config=numeric_column_config(df))
 
 def _format_report_line(label: str, value: str) -> str:
     return f"{label} : {value}"
@@ -153,15 +153,24 @@ def _weighted_avg_rank_by_group(df: pd.DataFrame, group_col: str, rank_col: str 
     return grp[[group_col, rank_col]]
 
 
-def _sticky_cfg(first_col: str):
-    return {
+def _frame_for_column_config(data_obj) -> pd.DataFrame:
+    try:
+        df = data_obj.data if hasattr(data_obj, "data") else data_obj
+        return df if isinstance(df, pd.DataFrame) else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+
+def _sticky_cfg(first_col: str, df: pd.DataFrame | None = None):
+    base = {
         first_col: st.column_config.TextColumn(first_col, pinned=True, width="medium")
     }
+    return numeric_column_config(df, base=base) if df is not None and not df.empty else base
 
 
 def _auto_table_height(data_obj, default_height: int = 420, min_height: int = 72, max_height: int = 560) -> int:
     try:
-        df = data_obj.data if hasattr(data_obj, "data") else data_obj
+        df = _frame_for_column_config(data_obj)
         rows = len(df.index)
         if rows <= 0: return min_height
         if rows == 1: return 72
@@ -173,7 +182,8 @@ def _auto_table_height(data_obj, default_height: int = 420, min_height: int = 72
 
 def _render_overview_sticky_table(styler_or_df, first_col: str, height: int = 420, hide_index: bool = False):
     real_height = _auto_table_height(styler_or_df, default_height=height, max_height=height)
-    st.dataframe(styler_or_df, width="stretch", height=real_height, hide_index=hide_index, column_config=_sticky_cfg(first_col))
+    cfg_df = _frame_for_column_config(styler_or_df)
+    st.dataframe(styler_or_df, width="stretch", height=real_height, hide_index=hide_index, column_config=_sticky_cfg(first_col, cfg_df))
 
 
 def _selected_type_label(type_sel: tuple) -> str:
@@ -854,7 +864,7 @@ def _render_type_performance_snapshot(type_summary: pd.DataFrame) -> None:
         width="stretch",
         height=_auto_table_height(disp, default_height=160, max_height=280),
         hide_index=True,
-        column_config={
+        column_config=numeric_column_config(disp, base={
             "캠페인 유형": st.column_config.TextColumn("캠페인 유형", pinned=True, width="medium"),
             "광고비": st.column_config.NumberColumn("광고비", format="%,.0f 원"),
             "클릭수": st.column_config.NumberColumn("클릭수", format="%,.0f"),
@@ -866,7 +876,7 @@ def _render_type_performance_snapshot(type_summary: pd.DataFrame) -> None:
             "광고비 증감": st.column_config.NumberColumn("광고비 증감", format="%+,.1f%%"),
             "전환수 증감": st.column_config.NumberColumn("전환수 증감", format="%+,.1f%%"),
             "ROAS 증감": st.column_config.NumberColumn("ROAS 증감", format="%+,.1fp"),
-        },
+        }),
     )
 
 
@@ -1958,10 +1968,11 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
                     })
                     
                     disp_cols = ["캠페인명", "달성 상태", "달성률(%)", "구매완료수", "구매완료 ROAS(%)", "최소 ROAS(%)", "목표 ROAS(%)", "광고비"]
+                    disp_target_view = disp_target[disp_cols].copy()
                     st.dataframe(
-                        disp_target[disp_cols],
+                        disp_target_view,
                         width="stretch", hide_index=True,
-                        column_config={
+                        column_config=numeric_column_config(disp_target_view, base={
                             "달성 상태": st.column_config.TextColumn("상태", width="small"),
                             "달성률(%)": st.column_config.ProgressColumn("달성률", format="%,.1f%%", min_value=0, max_value=100),
                             "구매완료수": st.column_config.NumberColumn("구매완료수", format="%,.0f"),
@@ -1969,7 +1980,7 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
                             "최소 ROAS(%)": st.column_config.NumberColumn("최소 ROAS(%)", format="%,.0f%%"),
                             "목표 ROAS(%)": st.column_config.NumberColumn("목표 ROAS(%)", format="%,.0f%%"),
                             "광고비": st.column_config.NumberColumn("광고비", format="%,.0f 원")
-                        }
+                        })
                     )
                 else: st.info("조건에 맞는 캠페인이 없습니다.")
             else: st.info("안내: 최소/목표 ROAS가 설정된 캠페인이 없습니다.")

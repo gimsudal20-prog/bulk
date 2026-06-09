@@ -1908,12 +1908,12 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
                 label_visibility="collapsed",
             )
             if trend_view == "유입 지표 추이":
-                render_echarts_dual_axis("노출 및 클릭 추이", daily_ts_chart, "dt", "imp", "노출수", "clk", "클릭수", height=320)
+                render_echarts_dual_axis("노출 및 클릭 추이", daily_ts_chart, "dt", "imp", "노출수", "clk", "클릭수", height=320, show_weekday=True)
             else:
                 if combined_toggle:
-                    render_echarts_dual_axis("비용 및 총 전환 매출 추이", daily_ts_chart, "dt", "cost", "광고비", "tot_sales", "매출", height=320)
+                    render_echarts_dual_axis("비용 및 총 전환 매출 추이", daily_ts_chart, "dt", "cost", "광고비", "tot_sales", "매출", height=320, show_weekday=True)
                 else:
-                    render_echarts_dual_axis("비용 및 구매 완료 매출 추이", daily_ts_chart, "dt", "cost", "광고비", "sales", "매출", height=320)
+                    render_echarts_dual_axis("비용 및 구매 완료 매출 추이", daily_ts_chart, "dt", "cost", "광고비", "sales", "매출", height=320, show_weekday=True)
         else:
             st.info("선택한 기간의 일자별 트렌드 데이터가 존재하지 않습니다.")
 

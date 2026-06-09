@@ -453,12 +453,27 @@ def render_budget_month_table_with_bars(df: pd.DataFrame, key: str, height: int 
     st.markdown(table_html, unsafe_allow_html=True)
 
 
-def render_echarts_dual_axis(title: str, df: pd.DataFrame, x_col: str, y1_col: str, y1_name: str, y2_col: str, y2_name: str, height: int = 300):
+def _format_chart_x_data(series: pd.Series, show_weekday: bool = False) -> list[str]:
+    if show_weekday or pd.api.types.is_datetime64_any_dtype(series):
+        dt = pd.to_datetime(series, errors="coerce")
+        if dt.notna().sum() == 0:
+            return series.astype(str).tolist()
+        if show_weekday:
+            weekdays = ["월", "화", "수", "목", "금", "토", "일"]
+            return [
+                f"{value.strftime('%m-%d')}\n{weekdays[value.weekday()]}" if pd.notna(value) else ""
+                for value in dt
+            ]
+        return dt.dt.strftime("%m-%d").fillna("").tolist()
+    return series.astype(str).tolist()
+
+
+def render_echarts_dual_axis(title: str, df: pd.DataFrame, x_col: str, y1_col: str, y1_name: str, y2_col: str, y2_name: str, height: int = 300, show_weekday: bool = False):
     if df.empty:
         render_empty_state("차트를 그릴 데이터가 부족합니다.", height)
         return
 
-    x_data = df[x_col].dt.strftime('%m-%d').tolist() if pd.api.types.is_datetime64_any_dtype(df[x_col]) else df[x_col].astype(str).tolist()
+    x_data = _format_chart_x_data(df[x_col], show_weekday=show_weekday)
     y1_data = df[y1_col].fillna(0).tolist()
     y2_data = df[y2_col].fillna(0).tolist()
 
@@ -476,12 +491,12 @@ def render_echarts_dual_axis(title: str, df: pd.DataFrame, x_col: str, y1_col: s
             "padding": [8, 10],
         },
         "legend": {"data": [y1_name, y2_name], "top": 6, "right": 0, "itemWidth": 10, "itemHeight": 10, "textStyle": {"color": THEME['muted'], "fontSize": 11}},
-        "grid": {"left": "1%", "right": "1%", "bottom": "10%", "top": 56, "containLabel": True},
+        "grid": {"left": "1%", "right": "1%", "bottom": "13%" if show_weekday else "10%", "top": 56, "containLabel": True},
         "xAxis": [{
             "type": "category", "data": x_data, "axisPointer": {"type": "shadow"},
             "axisLine": {"lineStyle": {"color": THEME['line']}},
             "axisTick": {"show": False},
-            "axisLabel": {"color": THEME['muted'], "fontSize": 11}
+            "axisLabel": {"color": THEME['muted'], "fontSize": 11, "lineHeight": 16 if show_weekday else 12}
         }],
         "yAxis": [
             {
@@ -510,12 +525,12 @@ def render_echarts_dual_axis(title: str, df: pd.DataFrame, x_col: str, y1_col: s
     st.line_chart(fallback, height=height)
 
 
-def render_echarts_single_axis(title: str, df: pd.DataFrame, x_col: str, y_col: str, y_name: str, height: int = 300):
+def render_echarts_single_axis(title: str, df: pd.DataFrame, x_col: str, y_col: str, y_name: str, height: int = 300, show_weekday: bool = False):
     if df.empty:
         render_empty_state("차트를 그릴 데이터가 부족합니다.", height)
         return
 
-    x_data = df[x_col].dt.strftime('%m-%d').tolist() if pd.api.types.is_datetime64_any_dtype(df[x_col]) else df[x_col].astype(str).tolist()
+    x_data = _format_chart_x_data(df[x_col], show_weekday=show_weekday)
     y_data = df[y_col].fillna(0).tolist()
 
     options = {
@@ -532,8 +547,8 @@ def render_echarts_single_axis(title: str, df: pd.DataFrame, x_col: str, y_col: 
             "padding": [8, 10],
         },
         "legend": {"data": [y_name], "top": 6, "right": 0, "itemWidth": 10, "itemHeight": 10, "textStyle": {"color": THEME['muted'], "fontSize": 11}},
-        "grid": {"left": "1%", "right": "1%", "bottom": "10%", "top": 56, "containLabel": True},
-        "xAxis": [{"type": "category", "data": x_data, "axisLine": {"lineStyle": {"color": THEME['line']}}, "axisTick": {"show": False}, "axisLabel": {"color": THEME['muted'], "fontSize": 11}}],
+        "grid": {"left": "1%", "right": "1%", "bottom": "13%" if show_weekday else "10%", "top": 56, "containLabel": True},
+        "xAxis": [{"type": "category", "data": x_data, "axisLine": {"lineStyle": {"color": THEME['line']}}, "axisTick": {"show": False}, "axisLabel": {"color": THEME['muted'], "fontSize": 11, "lineHeight": 16 if show_weekday else 12}}],
         "yAxis": [{"type": "value", "name": y_name, "nameTextStyle": {"color": THEME['muted'], "fontSize": 11, "padding": [0, 0, 0, 4]}, "axisLabel": {"color": THEME['muted'], "fontSize": 11}, "splitLine": {"lineStyle": {"type": "solid", "color": "#EEF2F7"}}}],
         "series": [
             {"name": y_name, "type": "line", "data": y_data, "smooth": True, "itemStyle": {"color": THEME['primary']}, "lineStyle": {"width": 2.5}, "symbol": "circle", "symbolSize": 6}

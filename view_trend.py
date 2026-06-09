@@ -13,6 +13,7 @@ from typing import Dict
 import altair as alt
 
 from data import sql_read, get_table_columns, table_exists, _sql_in_str_list
+from ui import numeric_column_config
 
 
 
@@ -257,12 +258,12 @@ def page_trend(meta: pd.DataFrame, engine, f: Dict) -> None:
     st.dataframe(
         detail,
         use_container_width=True, hide_index=True,
-        column_config={
-            "트렌드지수(%)": st.column_config.NumberColumn("트렌드지수(%)", format="%.1f"),
-            "노출": st.column_config.NumberColumn("노출", format="%d"),
-            "클릭": st.column_config.NumberColumn("클릭", format="%d"),
-            "광고비": st.column_config.NumberColumn("광고비", format="%d"),
-        }
+        column_config=numeric_column_config(detail, {
+            "트렌드지수(%)": st.column_config.NumberColumn("트렌드지수(%)", format="%,.1f"),
+            "노출": st.column_config.NumberColumn("노출", format="%,.0f"),
+            "클릭": st.column_config.NumberColumn("클릭", format="%,.0f"),
+            "광고비": st.column_config.NumberColumn("광고비", format="%,.0f 원"),
+        })
     )
 
     _render_diag_panel(diag)

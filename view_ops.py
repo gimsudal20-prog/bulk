@@ -24,7 +24,7 @@ from data import (
     update_action_item,
     upsert_action_items,
 )
-from ui import render_empty_state, render_kpi_strip, render_toolbar, safe_numeric_col
+from ui import render_empty_state, render_kpi_strip, render_toolbar, safe_numeric_col, numeric_column_config
 
 
 OPS_WARNING_THRESHOLDS = {
@@ -1483,10 +1483,10 @@ def _render_warning_table(df: pd.DataFrame, key_prefix: str, *, fixed_type: str 
         hide_index=True,
         height=520,
         column_config={
-            "비용": st.column_config.NumberColumn("비용", format="%d원"),
-            "클릭수": st.column_config.NumberColumn("클릭수", format="%d"),
-            "전환수 또는 구매완료수": st.column_config.NumberColumn("전환수 또는 구매완료수", format="%.1f"),
-            "ROAS": st.column_config.NumberColumn("ROAS", format="%.1f%%"),
+            "비용": st.column_config.NumberColumn("비용", format="%,.0f원"),
+            "클릭수": st.column_config.NumberColumn("클릭수", format="%,.0f"),
+            "전환수 또는 구매완료수": st.column_config.NumberColumn("전환수 또는 구매완료수", format="%,.0f"),
+            "ROAS": st.column_config.NumberColumn("ROAS", format="%,.1f%%"),
         },
     )
 
@@ -1698,7 +1698,7 @@ def _render_collection_status(meta: pd.DataFrame, engine, f: dict) -> None:
         .rename(columns={"source_label": "수집 소스"})
         .sort_values(["지연_최대일", "수집 소스"], ascending=[False, True])
     )
-    st.dataframe(summary, use_container_width=True, hide_index=True, height=220)
+    st.dataframe(summary, use_container_width=True, hide_index=True, height=220, column_config=numeric_column_config(summary))
 
     detail = work.rename(
         columns={
@@ -1709,7 +1709,8 @@ def _render_collection_status(meta: pd.DataFrame, engine, f: dict) -> None:
         }
     )
     detail_cols = ["상태", "담당자", "계정", "customer_id", "수집 소스", "최신 수집일", "지연일", "행수"]
-    st.dataframe(detail[[c for c in detail_cols if c in detail.columns]], use_container_width=True, hide_index=True, height=430)
+    detail_view = detail[[c for c in detail_cols if c in detail.columns]]
+    st.dataframe(detail_view, use_container_width=True, hide_index=True, height=430, column_config=numeric_column_config(detail_view))
 
 
 def _render_audit_log(engine) -> None:
@@ -1733,7 +1734,8 @@ def _render_audit_log(engine) -> None:
         }
     )
     cols = ["시간", "사용자", "작업", "대상", "대상 ID", "내용"]
-    st.dataframe(work[[c for c in cols if c in work.columns]], use_container_width=True, hide_index=True, height=520)
+    audit_view = work[[c for c in cols if c in work.columns]]
+    st.dataframe(audit_view, use_container_width=True, hide_index=True, height=520, column_config=numeric_column_config(audit_view))
 
 
 def page_ops_center(meta: pd.DataFrame, engine, f: dict) -> None:

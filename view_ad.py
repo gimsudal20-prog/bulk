@@ -176,24 +176,24 @@ def _ad_cmp_fast_col_config(df: pd.DataFrame) -> dict:
         if c in cfg:
             continue
         if ("증감" in c and "차이" not in c) or c in {"CTR(%)", "CVR(%)", "ROAS(%)"}:
-            cfg[c] = st.column_config.NumberColumn(c, format="%.1f %%")
+            cfg[c] = st.column_config.NumberColumn(c, format="%,.1f %%")
         elif c.endswith("차이") and ("광고비" in c or "매출" in c or "CPC" in c):
-            cfg[c] = st.column_config.NumberColumn(c, format="%d 원")
+            cfg[c] = st.column_config.NumberColumn(c, format="%+,.0f 원")
         elif c.endswith("차이") or c == "전환":
-            cfg[c] = st.column_config.NumberColumn(c, format="%d")
+            cfg[c] = st.column_config.NumberColumn(c, format="%+,.0f" if c.endswith("차이") else "%,.0f")
     return cfg
 
 FAST_AD_CONFIG = {
-    "노출": st.column_config.NumberColumn("노출", format="%d"),
-    "클릭": st.column_config.NumberColumn("클릭", format="%d"),
-    "CTR(%)": st.column_config.NumberColumn("CTR(%)", format="%.2f %%"),
-    "CPC(원)": st.column_config.NumberColumn("CPC(원)", format="%d 원"),
-    "광고비": st.column_config.NumberColumn("광고비", format="%d 원"),
-    "전환": st.column_config.NumberColumn("전환", format="%.1f"),
-    "CPA(원)": st.column_config.NumberColumn("CPA(원)", format="%d 원"),
-    "전환매출": st.column_config.NumberColumn("전환매출", format="%d 원"),
-    "ROAS(%)": st.column_config.NumberColumn("ROAS(%)", format="%.2f %%"),
-    "CVR(%)": st.column_config.NumberColumn("CVR(%)", format="%.2f %%"),
+    "노출": st.column_config.NumberColumn("노출", format="%,.0f"),
+    "클릭": st.column_config.NumberColumn("클릭", format="%,.0f"),
+    "CTR(%)": st.column_config.NumberColumn("CTR(%)", format="%,.2f %%"),
+    "CPC(원)": st.column_config.NumberColumn("CPC(원)", format="%,.0f 원"),
+    "광고비": st.column_config.NumberColumn("광고비", format="%,.0f 원"),
+    "전환": st.column_config.NumberColumn("전환", format="%,.0f"),
+    "CPA(원)": st.column_config.NumberColumn("CPA(원)", format="%,.0f 원"),
+    "전환매출": st.column_config.NumberColumn("전환매출", format="%,.0f 원"),
+    "ROAS(%)": st.column_config.NumberColumn("ROAS(%)", format="%,.2f %%"),
+    "CVR(%)": st.column_config.NumberColumn("CVR(%)", format="%,.2f %%"),
 }
 
 

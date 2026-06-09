@@ -853,16 +853,16 @@ def _render_type_performance_snapshot(type_summary: pd.DataFrame) -> None:
         hide_index=True,
         column_config={
             "캠페인 유형": st.column_config.TextColumn("캠페인 유형", pinned=True, width="medium"),
-            "광고비": st.column_config.NumberColumn("광고비", format="%d 원"),
-            "클릭수": st.column_config.NumberColumn("클릭수", format="%d"),
-            "구매완료수": st.column_config.NumberColumn("구매완료수", format="%d"),
-            "총 전환수": st.column_config.NumberColumn("총 전환수", format="%d"),
-            "총 전환매출": st.column_config.NumberColumn("총 전환매출", format="%d 원"),
-            "통합 ROAS(%)": st.column_config.NumberColumn("통합 ROAS(%)", format="%.1f%%"),
-            "클릭수 증감": st.column_config.NumberColumn("클릭수 증감", format="%+.1f%%"),
-            "광고비 증감": st.column_config.NumberColumn("광고비 증감", format="%+.1f%%"),
-            "전환수 증감": st.column_config.NumberColumn("전환수 증감", format="%+.1f%%"),
-            "ROAS 증감": st.column_config.NumberColumn("ROAS 증감", format="%+.1fp"),
+            "광고비": st.column_config.NumberColumn("광고비", format="%,.0f 원"),
+            "클릭수": st.column_config.NumberColumn("클릭수", format="%,.0f"),
+            "구매완료수": st.column_config.NumberColumn("구매완료수", format="%,.0f"),
+            "총 전환수": st.column_config.NumberColumn("총 전환수", format="%,.0f"),
+            "총 전환매출": st.column_config.NumberColumn("총 전환매출", format="%,.0f 원"),
+            "통합 ROAS(%)": st.column_config.NumberColumn("통합 ROAS(%)", format="%,.1f%%"),
+            "클릭수 증감": st.column_config.NumberColumn("클릭수 증감", format="%+,.1f%%"),
+            "광고비 증감": st.column_config.NumberColumn("광고비 증감", format="%+,.1f%%"),
+            "전환수 증감": st.column_config.NumberColumn("전환수 증감", format="%+,.1f%%"),
+            "ROAS 증감": st.column_config.NumberColumn("ROAS 증감", format="%+,.1fp"),
         },
     )
 
@@ -1869,12 +1869,12 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
                         width="stretch", hide_index=True,
                         column_config={
                             "달성 상태": st.column_config.TextColumn("상태", width="small"),
-                            "달성률(%)": st.column_config.ProgressColumn("달성률", format="%.1f%%", min_value=0, max_value=100),
-                            "구매완료수": st.column_config.NumberColumn("구매완료수", format="%d"),
-                            "구매완료 ROAS(%)": st.column_config.NumberColumn("구매완료 ROAS(%)", format="%.1f%%"),
-                            "최소 ROAS(%)": st.column_config.NumberColumn("최소 ROAS(%)", format="%d%%"),
-                            "목표 ROAS(%)": st.column_config.NumberColumn("목표 ROAS(%)", format="%d%%"),
-                            "광고비": st.column_config.NumberColumn("광고비", format="%d 원")
+                            "달성률(%)": st.column_config.ProgressColumn("달성률", format="%,.1f%%", min_value=0, max_value=100),
+                            "구매완료수": st.column_config.NumberColumn("구매완료수", format="%,.0f"),
+                            "구매완료 ROAS(%)": st.column_config.NumberColumn("구매완료 ROAS(%)", format="%,.1f%%"),
+                            "최소 ROAS(%)": st.column_config.NumberColumn("최소 ROAS(%)", format="%,.0f%%"),
+                            "목표 ROAS(%)": st.column_config.NumberColumn("목표 ROAS(%)", format="%,.0f%%"),
+                            "광고비": st.column_config.NumberColumn("광고비", format="%,.0f 원")
                         }
                     )
                 else: st.info("조건에 맞는 캠페인이 없습니다.")

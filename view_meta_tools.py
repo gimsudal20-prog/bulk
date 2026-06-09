@@ -29,7 +29,7 @@ from data import (
     sql_read,
     table_exists,
 )
-from ui import render_toolbar
+from ui import render_toolbar, numeric_column_config
 
 
 ALLOWED_META_LABELS = ("헤이즈코리아", "핵이득마켓")
@@ -579,10 +579,10 @@ def _render_download_tab(engine, accounts: pd.DataFrame) -> None:
         use_container_width=True,
         height=520,
         hide_index=True,
-        column_config={
+        column_config=numeric_column_config(disp, {
             "이미지": st.column_config.ImageColumn("이미지", width="small"),
             "랜딩 URL": st.column_config.LinkColumn("랜딩 URL", display_text="열기"),
-        },
+        }),
     )
 
     file_prefix = _safe_filename(f"{account_row['account_label']}_{start_dt}_{end_dt}", "meta_creatives")

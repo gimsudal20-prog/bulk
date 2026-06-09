@@ -79,6 +79,77 @@ def safe_numeric_col(df: pd.DataFrame, col: str, *, default: float = 0.0) -> pd.
     return pd.Series([default] * len(df.index), dtype="float64")
 
 
+def _is_display_numeric_column(df: pd.DataFrame, col: str) -> bool:
+    if df is None or col not in df.columns:
+        return False
+    col_name = str(col).strip().lower()
+    if col_name in {"id", "customer_id", "campaign_id", "adgroup_id", "keyword_id", "ad_id"} or col_name.endswith("_id") or "id" in col_name or "아이디" in col_name:
+        return False
+    series = df[col]
+    if pd.api.types.is_numeric_dtype(series):
+        return True
+    label_tokens = [
+        "비용", "광고비", "예산", "잔액", "매출", "소진", "클릭", "노출", "전환",
+        "roas", "ctr", "cvr", "cpc", "cpa", "율", "%", "행수", "건수", "계정수", "일수",
+    ]
+    if not any(token in col_name for token in label_tokens):
+        return False
+    sample = series.dropna().astype(str).str.strip()
+    if sample.empty:
+        return False
+    sample = sample.head(50)
+    cleaned = (
+        sample.str.replace(",", "", regex=False)
+        .str.replace("원", "", regex=False)
+        .str.replace("%", "", regex=False)
+        .str.replace("일", "", regex=False)
+        .str.replace(r"[^0-9.+-]", "", regex=True)
+        .replace({"": pd.NA, "nan": pd.NA, "None": pd.NA, "<NA>": pd.NA})
+    )
+    return float(pd.to_numeric(cleaned, errors="coerce").notna().mean()) >= 0.7
+
+
+def _infer_number_format(col: str, series: pd.Series | None = None) -> str:
+    name = str(col or "")
+    is_delta = any(token in name for token in ["증감", "차이", "변화"])
+    is_currency = any(token in name for token in ["원", "비용", "광고비", "예산", "잔액", "매출", "소진", "CPC", "CPA", "cpc", "cpa"])
+    is_pct = any(token in name for token in ["%", "율", "ROAS", "CTR", "CVR", "roas", "ctr", "cvr"])
+    if "잔여일수" in name or (name.endswith("일수") and not is_delta):
+        return "%,.1f 일"
+    if is_currency:
+        return "%+,.0f 원" if is_delta else "%,.0f 원"
+    if is_pct:
+        decimals = 2 if any(token in name for token in ["CTR", "CVR", "클릭률", "전환율"]) else 1
+        sign = "+" if is_delta else ""
+        return f"%{sign},.{decimals}f %%"
+    if is_delta:
+        return "%+,.0f"
+    if series is not None:
+        try:
+            numeric = pd.to_numeric(series, errors="coerce").dropna()
+            if not numeric.empty and (numeric % 1 != 0).any():
+                return "%,.1f"
+        except Exception:
+            pass
+    return "%,.0f"
+
+
+def numeric_column_config(df: pd.DataFrame, base: dict | None = None, preserve: set[str] | list[str] | tuple[str, ...] | None = None) -> dict:
+    """Return Streamlit NumberColumn configs with thousands separators for visible metric columns."""
+    cfg = dict(base or {})
+    preserve_set = {str(x) for x in (preserve or [])}
+    if df is None or df.empty:
+        return cfg
+    for col in df.columns:
+        col_name = str(col)
+        if col_name in preserve_set or col in cfg:
+            continue
+        if not _is_display_numeric_column(df, col):
+            continue
+        cfg[col] = st.column_config.NumberColumn(col_name, format=_infer_number_format(col_name, df[col]))
+    return cfg
+
+
 # ==========================================
 # 🧩 UI Components
 # ==========================================
@@ -326,9 +397,9 @@ def render_big_table(df, key: str, height: int = 400) -> None:
         df = check_df
 
     try:
-        st.dataframe(df, use_container_width=True, height=height, hide_index=True)
+        st.dataframe(df, use_container_width=True, height=height, hide_index=True, column_config=numeric_column_config(check_df))
     except Exception:
-        st.dataframe(check_df, use_container_width=True, height=height, hide_index=True)
+        st.dataframe(check_df, use_container_width=True, height=height, hide_index=True, column_config=numeric_column_config(check_df))
 
 
 def render_budget_month_table_with_bars(df: pd.DataFrame, key: str, height: int = 400) -> None:

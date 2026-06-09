@@ -74,4 +74,9 @@ def render_perf_panel() -> None:
                 "시간(ms)": e.get("elapsed_ms", 0.0),
                 "상세": extra_txt,
             })
-        st.dataframe(rows, use_container_width=True, hide_index=True)
+        st.dataframe(
+            rows,
+            use_container_width=True,
+            hide_index=True,
+            column_config={"시간(ms)": st.column_config.NumberColumn("시간(ms)", format="%,.1f")},
+        )

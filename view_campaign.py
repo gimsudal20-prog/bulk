@@ -23,9 +23,13 @@ from data import (
     get_table_columns,
     _sql_in_str_list,
     format_currency,
+    DASHBOARD_DATA_CACHE_TTL,
 )
 from page_helpers import get_dynamic_cmp_options, period_compare_range, _perf_common_merge_meta
-from ui import render_kpi_strip, render_toolbar, safe_numeric_col
+from ui import render_kpi_strip, render_toolbar, safe_numeric_col, numeric_column_config
+
+CAMPAIGN_NAV_FETCH_LIMIT = 1500
+
 
 def _campaign_fetch_limit(top_n: int) -> int:
     try:
@@ -34,6 +38,10 @@ def _campaign_fetch_limit(top_n: int) -> int:
         top_n = 0
     top_n = max(top_n, 1)
     return min(max(top_n * 3, 800), 1800)
+
+
+def _campaign_summary_fetch_limit(top_n: int) -> int:
+    return max(CAMPAIGN_NAV_FETCH_LIMIT, _campaign_fetch_limit(top_n))
 
 
 def _diag_add(diag: list | None, step: str, status: str = "ok", rows=None, source: str = "", note: str = "") -> None:
@@ -533,11 +541,12 @@ def _campaign_type_column(engine) -> str:
     return "campaign_tp" if "campaign_tp" in cols else ("campaign_type_label" if "campaign_type_label" in cols else "campaign_type")
 
 
-def _query_keyword_detail_for_campaign(engine, d1, d2, customer_id: str, campaign_id: str) -> pd.DataFrame:
-    if not table_exists(engine, "fact_keyword_daily"):
+@st.cache_data(ttl=DASHBOARD_DATA_CACHE_TTL, max_entries=80, show_spinner=False)
+def _query_keyword_detail_for_campaign(_engine, d1, d2, customer_id: str, campaign_id: str) -> pd.DataFrame:
+    if not table_exists(_engine, "fact_keyword_daily"):
         return pd.DataFrame()
-    cp_col = _campaign_type_column(engine)
-    kw_fact_cols = get_table_columns(engine, "fact_keyword_daily")
+    cp_col = _campaign_type_column(_engine)
+    kw_fact_cols = get_table_columns(_engine, "fact_keyword_daily")
     expr = {
         "purchase_conv_expr": "COALESCE(conv,0)",
         "purchase_sales_expr": "COALESCE(sales,0)",
@@ -585,22 +594,23 @@ def _query_keyword_detail_for_campaign(engine, d1, d2, customer_id: str, campaig
         JOIN dim_campaign c ON a.campaign_id = c.campaign_id AND agg.customer_id = c.customer_id
         WHERE agg.customer_id = :cid AND a.campaign_id = :camp_id
     """
-    df = sql_read(engine, sql, {"d1": str(d1), "d2": str(d2), "cid": str(customer_id), "camp_id": str(campaign_id)})
+    df = sql_read(_engine, sql, {"d1": str(d1), "d2": str(d2), "cid": str(customer_id), "camp_id": str(campaign_id)})
     if not df.empty and "campaign_type_label" in df.columns:
         mapping = {"WEB_SITE": "파워링크", "SHOPPING": "쇼핑검색", "POWER_CONTENTS": "파워컨텐츠", "BRAND_SEARCH": "브랜드검색", "PLACE": "플레이스"}
         df["campaign_type_label"] = df["campaign_type_label"].map(lambda x: mapping.get(x, x))
     return df
 
 
-def _query_ad_detail_for_campaign(engine, d1, d2, customer_id: str, campaign_id: str) -> pd.DataFrame:
-    if not table_exists(engine, "fact_ad_daily"):
+@st.cache_data(ttl=DASHBOARD_DATA_CACHE_TTL, max_entries=80, show_spinner=False)
+def _query_ad_detail_for_campaign(_engine, d1, d2, customer_id: str, campaign_id: str) -> pd.DataFrame:
+    if not table_exists(_engine, "fact_ad_daily"):
         return pd.DataFrame()
-    cp_col = _campaign_type_column(engine)
-    ad_cols = get_table_columns(engine, "dim_ad")
+    cp_col = _campaign_type_column(_engine)
+    ad_cols = get_table_columns(_engine, "dim_ad")
     title_select = "ad.ad_title" if "ad_title" in ad_cols else "ad.ad_name as ad_title"
     image_select = "ad.image_url" if "image_url" in ad_cols else "'' as image_url"
     url_select = "ad.pc_landing_url as landing_url" if "pc_landing_url" in ad_cols else "'' as landing_url"
-    ad_fact_cols = get_table_columns(engine, "fact_ad_daily")
+    ad_fact_cols = get_table_columns(_engine, "fact_ad_daily")
     expr = {
         "purchase_conv_expr": "COALESCE(conv,0)",
         "purchase_sales_expr": "COALESCE(sales,0)",
@@ -648,7 +658,7 @@ def _query_ad_detail_for_campaign(engine, d1, d2, customer_id: str, campaign_id:
         JOIN dim_campaign c ON a.campaign_id = c.campaign_id AND agg.customer_id = c.customer_id
         WHERE agg.customer_id = :cid AND a.campaign_id = :camp_id
     """
-    df = sql_read(engine, sql, {"d1": str(d1), "d2": str(d2), "cid": str(customer_id), "camp_id": str(campaign_id)})
+    df = sql_read(_engine, sql, {"d1": str(d1), "d2": str(d2), "cid": str(customer_id), "camp_id": str(campaign_id)})
     if not df.empty and "campaign_type_label" in df.columns:
         mapping = {"WEB_SITE": "파워링크", "SHOPPING": "쇼핑검색", "POWER_CONTENTS": "파워컨텐츠", "BRAND_SEARCH": "브랜드검색", "PLACE": "플레이스"}
         df["campaign_type_label"] = df["campaign_type_label"].map(lambda x: mapping.get(x, x))
@@ -1046,7 +1056,7 @@ def _render_campaign_compare_tab(view: pd.DataFrame, engine, f: Dict, cids: tupl
     cmp_mode = st.radio("비교 기준", cmp_opts if cmp_opts else ["이전 같은 기간 대비"], horizontal=True, key="camp_cmp_mode")
     b1, b2 = period_compare_range(f["start"], f["end"], cmp_mode)
     with st.spinner("🔄 이전 기간의 데이터를 불러오는 중입니다..."):
-        base_bundle = query_campaign_bundle(engine, b1, b2, cids, type_sel, topn_cost=_campaign_fetch_limit(top_n))
+        base_bundle = query_campaign_bundle(engine, b1, b2, cids, type_sel, topn_cost=_campaign_summary_fetch_limit(top_n))
     view_cmp = view.copy()
     valid_keys = [k for k in ["customer_id", "campaign_id"] if k in view_cmp.columns and k in base_bundle.columns]
     if not base_bundle.empty and valid_keys:
@@ -1103,7 +1113,7 @@ def _render_campaign_off_tab(view: pd.DataFrame, meta: pd.DataFrame, engine, f: 
         cols = pivot_df.columns.tolist()
         cols.insert(2, cols.pop(cols.index('통합 ROAS(%)')))
         pivot_df = pivot_df[cols]
-    st.dataframe(pivot_df, width="stretch", hide_index=True)
+    st.dataframe(pivot_df, width="stretch", hide_index=True, column_config=numeric_column_config(pivot_df))
     _render_campaign_downloads(pivot_df, "campaign_off_log", "꺼짐 기록")
 
 
@@ -1130,7 +1140,7 @@ def page_perf_campaign(meta: pd.DataFrame, engine, f: Dict) -> None:
     needs_summary_bundle = selected_tab in ("종합 성과", "기간 비교", "꺼짐 기록")
     if needs_summary_bundle:
         with st.spinner("🔄 최신 필터 조건에 맞추어 데이터를 실시간으로 집계하고 있습니다..."):
-            bundle = query_campaign_bundle(engine, f["start"], f["end"], cids, type_sel, topn_cost=_campaign_fetch_limit(top_n))
+            bundle = query_campaign_bundle(engine, f["start"], f["end"], cids, type_sel, topn_cost=_campaign_summary_fetch_limit(top_n))
             _diag_add(diag, '캠페인집계', 'ok' if bundle is not None and not bundle.empty else 'zero_data', 0 if bundle is None else len(bundle.index), 'query_campaign_bundle', f'기간={f["start"]}~{f["end"]} 고객수={len(cids)} 유형수={len(type_sel)}')
             if bundle is None or bundle.empty:
                 _render_diag_panel(diag, enabled=bool(f.get("show_diagnostics", False)))

@@ -131,9 +131,12 @@ def _build_alert_display(alert_view: pd.DataFrame) -> pd.DataFrame:
     avg_days_label = f"최근 {TOPUP_AVG_DAYS}일 평균소진"
     df[avg_days_label] = avg_cost
     df["담당자"] = df.get("manager", "미배정").fillna("미배정").replace("", "미배정")
-    df["업체명"] = df.get("account_name", df.get("customer_id", "-")).fillna("-").replace("", "-")
+    if "platform" not in df.columns:
+        df["platform"] = "네이버"
+    df = _apply_budget_display_labels(df)
+    df["업체명"] = df["표시업체명"].fillna("-").replace("", "-")
     df = df.sort_values(["_risk_rank", "_sort_days", "업체명"], ascending=[True, True, True]).reset_index(drop=True)
-    return df[["업체명", "소진 위험", "담당자", "비즈머니 잔액", avg_days_label, "잔여일수", "예상 소진일", "계산 기준일"]]
+    return df[["매체", "구분", "업체명", "소진 위험", "담당자", "비즈머니 잔액", avg_days_label, "잔여일수", "예상 소진일", "계산 기준일"]]
 
 
 WEEKDAY_LABELS = [("월", 0), ("화", 1), ("수", 2), ("목", 3), ("금", 4), ("토", 5), ("일", 6)]
@@ -143,6 +146,87 @@ WEEKDAY_INDEX_TO_LABEL = {idx: label for label, idx in WEEKDAY_LABELS}
 def _format_budget_amount(value) -> str:
     parsed = _parse_budget_amount(value)
     return f"{parsed:,}" if parsed is not None else "0"
+
+
+def _budget_media_label(value) -> str:
+    raw = str(value or "").strip()
+    lower = raw.lower()
+    if raw in {"메타", "Meta"} or lower in {"meta", "facebook", "facebook_ads", "instagram"}:
+        return "메타"
+    if raw in {"구글", "Google"} or lower in {"google", "google_ads", "performance_max", "pmax"}:
+        return "구글"
+    if not raw or lower in {"naver", "naver_ads", "naver_search", "searchad", "search_ad", "gfa"}:
+        return "네이버"
+    return raw
+
+
+def _budget_kind_label(account_name: object, platform: object, campaign_type: object = "") -> str:
+    media = _budget_media_label(platform)
+    raw = f"{account_name or ''} {campaign_type or ''}".upper()
+    campaign = str(campaign_type or "").strip()
+    if media == "메타" or campaign == "메타":
+        return "Meta"
+    if "GFA" in raw:
+        return "GFA"
+    if "MCC" in raw:
+        return "MCC"
+    if campaign:
+        return campaign
+    if media == "네이버":
+        return "검색광고"
+    return media
+
+
+def _budget_clean_account_name(account_name: object, platform: object = "", kind: object = "") -> str:
+    name = str(account_name or "").strip()
+    if not name:
+        return "-"
+    media = _budget_media_label(platform)
+    removable = {
+        media,
+        str(kind or "").strip(),
+        "네이버",
+        "메타",
+        "구글",
+        "NAVER",
+        "META",
+        "GOOGLE",
+    }
+    removable = {x for x in removable if x and x not in {"검색광고"}}
+    changed = True
+    while changed and name:
+        changed = False
+        for suffix in sorted(removable, key=len, reverse=True):
+            for sep in (" · ", " - ", " / ", " "):
+                tail = f"{sep}{suffix}"
+                if name.endswith(tail):
+                    name = name[: -len(tail)].strip()
+                    changed = True
+                    break
+            if changed:
+                break
+    return name or str(account_name or "-").strip() or "-"
+
+
+def _apply_budget_display_labels(df: pd.DataFrame, include_campaign_type: bool = False) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
+    out = df.copy()
+    if "platform" not in out.columns:
+        out["platform"] = "네이버"
+    if "account_name" not in out.columns:
+        out["account_name"] = "-"
+    campaign_values = out["campaign_type"] if include_campaign_type and "campaign_type" in out.columns else pd.Series([""] * len(out.index), index=out.index)
+    out["매체"] = out["platform"].apply(_budget_media_label)
+    out["구분"] = [
+        _budget_kind_label(account_name, platform, campaign_type)
+        for account_name, platform, campaign_type in zip(out["account_name"], out["platform"], campaign_values)
+    ]
+    out["표시업체명"] = [
+        _budget_clean_account_name(account_name, platform, kind)
+        for account_name, platform, kind in zip(out["account_name"], out["platform"], out["구분"])
+    ]
+    return out
 
 
 def _parse_budget_amount(value) -> int | None:
@@ -455,11 +539,11 @@ def _build_budget_editor_view(
 ) -> pd.DataFrame:
     if biz_view is None or biz_view.empty:
         return pd.DataFrame()
-    for col in ["customer_id", "account_name", "manager", "monthly_budget", "prev_month_cost", "current_month_cost", "operating_weekdays"]:
+    for col in ["customer_id", "account_name", "manager", "monthly_budget", "prev_month_cost", "current_month_cost", "operating_weekdays", "platform"]:
         if col not in biz_view.columns:
-            biz_view[col] = "" if col in {"customer_id", "account_name", "manager"} else 0
+            biz_view[col] = "" if col in {"customer_id", "account_name", "manager", "platform"} else 0
     budget_view = biz_view[[
-        "customer_id", "account_name", "manager", "monthly_budget", "prev_month_cost", "current_month_cost", "operating_weekdays"
+        "customer_id", "account_name", "manager", "platform", "monthly_budget", "prev_month_cost", "current_month_cost", "operating_weekdays"
     ]].copy()
     budget_view["monthly_budget_val"] = safe_numeric_col(budget_view, "monthly_budget").astype(int)
     budget_view["prev_month_cost_val"] = safe_numeric_col(budget_view, "prev_month_cost").astype(int)
@@ -478,11 +562,11 @@ def _build_budget_type_editor_view(
 ) -> pd.DataFrame:
     if biz_view is None or biz_view.empty:
         return pd.DataFrame()
-    for col in ["customer_id", "account_name", "manager", "campaign_type", "monthly_budget", "prev_month_cost", "current_month_cost", "operating_weekdays"]:
+    for col in ["customer_id", "account_name", "manager", "platform", "campaign_type", "monthly_budget", "prev_month_cost", "current_month_cost", "operating_weekdays"]:
         if col not in biz_view.columns:
-            biz_view[col] = "" if col in {"customer_id", "account_name", "manager", "campaign_type"} else 0
+            biz_view[col] = "" if col in {"customer_id", "account_name", "manager", "platform", "campaign_type"} else 0
     budget_view = biz_view[[
-        "customer_id", "account_name", "manager", "campaign_type", "monthly_budget", "prev_month_cost", "current_month_cost", "operating_weekdays"
+        "customer_id", "account_name", "manager", "platform", "campaign_type", "monthly_budget", "prev_month_cost", "current_month_cost", "operating_weekdays"
     ]].copy()
     budget_view["monthly_budget_val"] = safe_numeric_col(budget_view, "monthly_budget").astype(int)
     budget_view["prev_month_cost_val"] = safe_numeric_col(budget_view, "prev_month_cost").astype(int)
@@ -563,16 +647,20 @@ def render_operating_weekday_editor(budget_view: pd.DataFrame, engine):
 
     with st.expander("업체별 운영 요일 설정", expanded=False):
         st.caption("각 업체의 실제 광고 운영 요일을 체크해두면 현재 일평균, 권장 일평균, 권장 소진 페이스가 업체별로 다시 계산됩니다.")
-        weekday_df = budget_view[["customer_id", "account_name", "manager", "operating_weekdays"]].drop_duplicates("customer_id").copy()
+        for col in ["platform", "account_name", "manager", "operating_weekdays"]:
+            if col not in budget_view.columns:
+                budget_view[col] = "" if col != "operating_weekdays" else DEFAULT_OPERATING_WEEKDAYS
+        weekday_df = budget_view[["customer_id", "account_name", "manager", "platform", "operating_weekdays"]].drop_duplicates("customer_id").copy()
         weekday_df["operating_weekdays"] = weekday_df["operating_weekdays"].apply(_normalize_weekday_csv)
-        weekday_df["업체명"] = weekday_df["account_name"].fillna("").replace("", "-")
+        weekday_df = _apply_budget_display_labels(weekday_df)
+        weekday_df["업체명"] = weekday_df["표시업체명"]
         weekday_df["담당자"] = weekday_df["manager"].fillna("미배정").replace("", "미배정")
 
         for label, weekday_idx in WEEKDAY_LABELS:
             weekday_df[label] = weekday_df["operating_weekdays"].apply(lambda value, idx=weekday_idx: idx in _parse_operating_weekdays(value))
 
         original_map = dict(zip(weekday_df["customer_id"].astype(str), weekday_df["operating_weekdays"]))
-        editor_input = weekday_df[["customer_id", "업체명", "담당자"] + [label for label, _ in WEEKDAY_LABELS]]
+        editor_input = weekday_df[["customer_id", "매체", "구분", "업체명", "담당자"] + [label for label, _ in WEEKDAY_LABELS]]
         editor_height = min(420, max(180, 72 + len(editor_input.index) * 36))
 
         edited_weekdays = st.data_editor(
@@ -583,6 +671,8 @@ def render_operating_weekday_editor(budget_view: pd.DataFrame, engine):
             height=editor_height,
             column_config={
                 "customer_id": None,
+                "매체": st.column_config.TextColumn("매체", disabled=True, width="small"),
+                "구분": st.column_config.TextColumn("구분", disabled=True, width="small"),
                 "업체명": st.column_config.TextColumn("업체명", disabled=True, pinned=True),
                 "담당자": st.column_config.TextColumn("담당자", disabled=True, width="small"),
                 **{
@@ -628,14 +718,15 @@ def render_budget_editor(
     prev_month_dt = (end_dt.replace(day=1) - timedelta(days=1))
     prev_m_num = prev_month_dt.month
     
-    for col in ["current_daily_avg_val", "recommended_daily_avg_val", "operating_label", "operating_days_label"]:
+    for col in ["current_daily_avg_val", "recommended_daily_avg_val", "operating_label", "operating_days_label", "platform"]:
         if col not in budget_view.columns:
-            budget_view[col] = 0 if col.endswith("_val") else "-"
+            budget_view[col] = 0 if col.endswith("_val") else ("네이버" if col == "platform" else "-")
     editor_df = budget_view[[
-        "customer_id", "account_name", "manager", "operating_label", "operating_days_label",
+        "customer_id", "account_name", "manager", "platform", "operating_label", "operating_days_label",
         "monthly_budget_val", "prev_month_cost_val", "current_month_cost_val",
         "current_daily_avg_val", "recommended_daily_avg_val", "usage_pct", "상태"
     ]].copy()
+    editor_df = _apply_budget_display_labels(editor_df)
     
     editor_df["월 예산"] = editor_df["monthly_budget_val"].apply(_format_budget_amount)
     editor_df[f"{end_dt.month}월 사용액"] = editor_df["current_month_cost_val"].apply(_format_budget_amount)
@@ -644,17 +735,17 @@ def render_budget_editor(
     editor_df[f"{prev_m_num}월 사용액"] = editor_df["prev_month_cost_val"].apply(_format_budget_amount)
     
     editor_df = editor_df.rename(columns={
-        "account_name": "업체명", 
-        "manager": "담당자", 
+        "표시업체명": "업체명",
+        "manager": "담당자",
         "operating_label": "운영 요일",
         "operating_days_label": "운영일 기준",
         "usage_pct": "집행률(%)"
     })
 
     ordered_cols = [
-        "customer_id", "monthly_budget_val", "prev_month_cost_val", "current_month_cost_val",
+        "customer_id", "platform", "account_name", "monthly_budget_val", "prev_month_cost_val", "current_month_cost_val",
         "current_daily_avg_val", "recommended_daily_avg_val",
-        "업체명", "담당자", "운영 요일", "운영일 기준", "월 예산", f"{end_dt.month}월 사용액",
+        "매체", "구분", "업체명", "담당자", "운영 요일", "운영일 기준", "월 예산", f"{end_dt.month}월 사용액",
         "현재 일평균 소진액", "일 평균 권장 소진액", f"{prev_m_num}월 사용액", "집행률(%)", "상태"
     ]
     editor_df = editor_df[ordered_cols]
@@ -709,13 +800,17 @@ def render_budget_editor(
         use_container_width=True,
         height=550,
         column_config={
-            "customer_id": None, 
-            "monthly_budget_val": None, 
+            "customer_id": None,
+            "platform": None,
+            "account_name": None,
+            "monthly_budget_val": None,
             "prev_month_cost_val": None,
             "current_month_cost_val": None,
             "current_daily_avg_val": None,
             "recommended_daily_avg_val": None,
-            "업체명": st.column_config.TextColumn("업체명", disabled=True),
+            "매체": st.column_config.TextColumn("매체", disabled=True, width="small"),
+            "구분": st.column_config.TextColumn("구분", disabled=True, width="small"),
+            "업체명": st.column_config.TextColumn("업체명", disabled=True, pinned=True),
             "담당자": st.column_config.TextColumn("담당자", disabled=True),
             "운영 요일": st.column_config.TextColumn("운영 요일", disabled=True, width="small"),
             "운영일 기준": st.column_config.TextColumn(
@@ -770,14 +865,15 @@ def render_budget_type_editor(
     prev_month_dt = (end_dt.replace(day=1) - timedelta(days=1))
     prev_m_num = prev_month_dt.month
 
-    for col in ["current_daily_avg_val", "recommended_daily_avg_val", "operating_label", "operating_days_label", "campaign_type"]:
+    for col in ["current_daily_avg_val", "recommended_daily_avg_val", "operating_label", "operating_days_label", "platform", "campaign_type"]:
         if col not in budget_view.columns:
-            budget_view[col] = 0 if col.endswith("_val") else "-"
+            budget_view[col] = 0 if col.endswith("_val") else ("네이버" if col == "platform" else "-")
     editor_df = budget_view[[
-        "customer_id", "account_name", "manager", "campaign_type", "operating_label", "operating_days_label",
+        "customer_id", "account_name", "manager", "platform", "campaign_type", "operating_label", "operating_days_label",
         "monthly_budget_val", "prev_month_cost_val", "current_month_cost_val",
         "current_daily_avg_val", "recommended_daily_avg_val", "usage_pct", "상태"
     ]].copy()
+    editor_df = _apply_budget_display_labels(editor_df, include_campaign_type=True)
 
     editor_df["월 예산"] = editor_df["monthly_budget_val"].apply(_format_budget_amount)
     editor_df[f"{end_dt.month}월 사용액"] = editor_df["current_month_cost_val"].apply(_format_budget_amount)
@@ -786,7 +882,7 @@ def render_budget_type_editor(
     editor_df[f"{prev_m_num}월 사용액"] = editor_df["prev_month_cost_val"].apply(_format_budget_amount)
 
     editor_df = editor_df.rename(columns={
-        "account_name": "업체명",
+        "표시업체명": "업체명",
         "manager": "담당자",
         "campaign_type": "유형",
         "operating_label": "운영 요일",
@@ -795,9 +891,9 @@ def render_budget_type_editor(
     })
 
     ordered_cols = [
-        "customer_id", "monthly_budget_val", "prev_month_cost_val", "current_month_cost_val",
+        "customer_id", "platform", "account_name", "monthly_budget_val", "prev_month_cost_val", "current_month_cost_val",
         "current_daily_avg_val", "recommended_daily_avg_val",
-        "업체명", "담당자", "유형", "운영 요일", "운영일 기준", "월 예산", f"{end_dt.month}월 사용액",
+        "매체", "업체명", "담당자", "유형", "운영 요일", "운영일 기준", "월 예산", f"{end_dt.month}월 사용액",
         "현재 일평균 소진액", "일 평균 권장 소진액", f"{prev_m_num}월 사용액", "집행률(%)", "상태"
     ]
     editor_df = editor_df[ordered_cols]
@@ -854,12 +950,15 @@ def render_budget_type_editor(
         height=550,
         column_config={
             "customer_id": None,
+            "platform": None,
+            "account_name": None,
             "monthly_budget_val": None,
             "prev_month_cost_val": None,
             "current_month_cost_val": None,
             "current_daily_avg_val": None,
             "recommended_daily_avg_val": None,
-            "업체명": st.column_config.TextColumn("업체명", disabled=True),
+            "매체": st.column_config.TextColumn("매체", disabled=True, width="small"),
+            "업체명": st.column_config.TextColumn("업체명", disabled=True, pinned=True),
             "담당자": st.column_config.TextColumn("담당자", disabled=True),
             "유형": st.column_config.TextColumn("유형", disabled=True, width="small"),
             "운영 요일": st.column_config.TextColumn("운영 요일", disabled=True, width="small"),
@@ -928,6 +1027,8 @@ def render_alert_table(alert_view: pd.DataFrame):
 
     # 다른 뷰와 동일하게 Styler 객체를 전달하고, 첫 번째 주요 컬럼("업체명")을 pinned 처리
     cfg = {
+        "매체": st.column_config.TextColumn("매체", width="small"),
+        "구분": st.column_config.TextColumn("구분", width="small"),
         "업체명": st.column_config.TextColumn("업체명", pinned=True, width="medium"),
         "소진 위험": st.column_config.TextColumn("소진 위험", width="small"),
         "담당자": st.column_config.TextColumn("담당자"),

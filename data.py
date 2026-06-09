@@ -1478,11 +1478,7 @@ def _first_nonblank(*values) -> str:
 def _budget_display_account_name(account_name: object, platform: object) -> str:
     name = str(account_name or "").strip()
     label = str(platform or "").strip()
-    if not name:
-        return label or ""
-    if label and label not in name:
-        return f"{name} {label}"
-    return name
+    return name or label or ""
 
 
 def _budget_customer_platform_lookup(_engine) -> dict[str, str]:

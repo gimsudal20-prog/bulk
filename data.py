@@ -2782,6 +2782,131 @@ def query_overview_report_source_cache(_engine, source_kind: str, d1: date, d2: 
         {"d1": str(d1), "d2": str(d2), "source_kind": str(source_kind), **cid_params, **type_params},
     )
 
+
+@st.cache_data(ttl=3600, max_entries=200, show_spinner=False)
+def query_overview_report_source_cache_by_type(_engine, source_kind: str, d1: date, d2: date, cids: tuple, type_sel: tuple, limit_n: int = 5) -> pd.DataFrame:
+    safe_limit = _safe_limit(limit_n, 5, 50)
+    try:
+        ensure_overview_report_source_cache(_engine)
+    except Exception:
+        return pd.DataFrame()
+
+    cids_tuple = _normalize_filter_values(cids)
+    where_cid, cid_params = _build_in_filter("c.customer_id", cids_tuple, f"report_cache_type_cid_{source_kind}")
+    normalized_types = _normalize_filter_values(type_sel)
+    type_where_sql = ""
+    type_params = {}
+    if normalized_types:
+        rev_map = {
+            "파워링크": "WEB_SITE",
+            "쇼핑검색": "SHOPPING",
+            "파워컨텐츠": "POWER_CONTENTS",
+            "브랜드검색": "BRAND_SEARCH",
+            "플레이스": "PLACE",
+        }
+        db_type_values = []
+        for t in normalized_types:
+            key = rev_map.get(t, t)
+            aliases = _CAMPAIGN_TYPE_ALIASES.get(t) or _CAMPAIGN_TYPE_ALIASES.get(key) or [key]
+            db_type_values.extend(aliases)
+        db_types = tuple(dict.fromkeys(str(v) for v in db_type_values if str(v).strip()))
+        type_where_sql, type_params = _build_in_filter("c.campaign_type", db_types, f"report_cache_type_map_{source_kind}")
+
+    sql = f"""
+        WITH grouped AS (
+            SELECT
+                COALESCE(NULLIF(CAST(c.campaign_type AS TEXT), ''), '미분류') AS campaign_type,
+                c.source_text,
+                SUM(c.metric_value) as metric_value,
+                SUM(c.sales_value) as sales_value
+            FROM overview_report_source_cache c
+            WHERE c.dt BETWEEN :d1 AND :d2
+              AND c.source_kind = :source_kind
+              {where_cid}
+              {type_where_sql}
+            GROUP BY COALESCE(NULLIF(CAST(c.campaign_type AS TEXT), ''), '미분류'), c.source_text
+            HAVING SUM(c.metric_value) > 0 OR SUM(c.sales_value) > 0
+        ), ranked AS (
+            SELECT
+                *,
+                ROW_NUMBER() OVER (
+                    PARTITION BY campaign_type
+                    ORDER BY metric_value DESC, sales_value DESC, source_text
+                ) AS rank_no
+            FROM grouped
+        )
+        SELECT campaign_type, source_text, metric_value, sales_value, rank_no
+        FROM ranked
+        WHERE rank_no <= {safe_limit}
+        ORDER BY campaign_type, rank_no
+    """
+    return sql_read(
+        _engine,
+        sql,
+        {"d1": str(d1), "d2": str(d2), "source_kind": str(source_kind), **cid_params, **type_params},
+    )
+
+
+@st.cache_data(ttl=DASHBOARD_DATA_CACHE_TTL, max_entries=80, show_spinner=False)
+def query_shopping_top_search_terms(_engine, d1: date, d2: date, cids: tuple, prefer_purchase: bool = True, limit_n: int = 3) -> pd.DataFrame:
+    if not table_exists(_engine, "fact_shopping_query_daily"):
+        return pd.DataFrame()
+    safe_limit = _safe_limit(limit_n, 3, 50)
+    cids_tuple = _normalize_filter_values(cids)
+    where_cid, cid_params = _build_in_filter("f.customer_id", cids_tuple, "shopping_top_terms_cid")
+
+    sq_cols = set(get_table_columns(_engine, "fact_shopping_query_daily"))
+
+    def _coalesce_expr(candidates: list[str]) -> str:
+        picked = [f"f.{col}" for col in candidates if col in sq_cols]
+        if not picked:
+            return "0"
+        if len(picked) == 1:
+            return f"COALESCE({picked[0]}, 0)"
+        return f"COALESCE({', '.join(picked)}, 0)"
+
+    def _greatest_expr(candidates: list[str]) -> str:
+        picked = [f"COALESCE(f.{col}, 0)" for col in candidates if col in sq_cols]
+        if not picked:
+            return "0"
+        if len(picked) == 1:
+            return picked[0]
+        return f"GREATEST({', '.join(picked)})"
+
+    purchase_conv_expr = _coalesce_expr(["purchase_conv", "primary_conv"])
+    purchase_sales_expr = _coalesce_expr(["purchase_sales", "primary_sales"])
+    total_conv_expr = _greatest_expr(["total_conv", "conv", "primary_conv", "purchase_conv"])
+    total_sales_expr = _greatest_expr(["total_sales", "sales", "primary_sales", "purchase_sales"])
+    metric_expr = purchase_conv_expr if prefer_purchase else total_conv_expr
+    sales_expr = purchase_sales_expr if prefer_purchase else total_sales_expr
+    query_expr = "COALESCE(NULLIF(TRIM(CAST(f.query_text AS TEXT)), ''), '(검색어 미제공 영역)')"
+
+    type_where_sql = ""
+    type_params = {}
+    if table_exists(_engine, "dim_campaign"):
+        dim_cols = get_table_columns(_engine, "dim_campaign")
+        cp_col = "campaign_tp" if "campaign_tp" in dim_cols else ("campaign_type_label" if "campaign_type_label" in dim_cols else "campaign_type")
+        if cp_col in dim_cols:
+            raw_type_where, type_params = _build_in_filter(f"c.{cp_col}", _CAMPAIGN_TYPE_ALIASES["쇼핑검색"], "shopping_top_terms_type")
+            if raw_type_where:
+                type_where_sql = raw_type_where.replace("AND ", f"AND (c.{cp_col} IS NULL OR ", 1) + ")"
+
+    sql = f"""
+        SELECT
+            {query_expr} AS query_text,
+            SUM({metric_expr}) AS metric_value,
+            SUM({sales_expr}) AS sales_value
+        FROM fact_shopping_query_daily f
+        LEFT JOIN dim_campaign c ON f.campaign_id = c.campaign_id AND f.customer_id = c.customer_id
+        WHERE f.dt BETWEEN :d1 AND :d2 {where_cid} {type_where_sql}
+        GROUP BY {query_expr}
+        HAVING SUM({metric_expr}) > 0 OR SUM({sales_expr}) > 0
+        ORDER BY SUM({metric_expr}) DESC, SUM({sales_expr}) DESC, {query_expr}
+        LIMIT {safe_limit}
+    """
+    return sql_read(_engine, sql, {"d1": str(d1), "d2": str(d2), **cid_params, **type_params})
+
+
 @st.cache_data(ttl=DASHBOARD_DATA_CACHE_TTL, max_entries=40, show_spinner=False)
 def query_shopping_search_terms(_engine, d1: date, d2: date, cids: tuple) -> pd.DataFrame:
     if not table_exists(_engine, "fact_shopping_query_daily"):

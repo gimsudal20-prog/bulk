@@ -26,7 +26,7 @@ from data import (
     DASHBOARD_DATA_CACHE_TTL,
 )
 from page_helpers import get_dynamic_cmp_options, period_compare_range, _perf_common_merge_meta
-from ui import render_kpi_strip, render_toolbar, safe_numeric_col, numeric_column_config
+from ui import render_kpi_strip, render_ops_cards, render_toolbar, safe_numeric_col, numeric_column_config
 
 CAMPAIGN_NAV_FETCH_LIMIT = 1500
 
@@ -808,7 +808,7 @@ def _normalize_detail_metric_frame(df: pd.DataFrame, item_col: str) -> pd.DataFr
         "adgroup_name": "광고그룹",
         item_col: "항목명",
         "imp": "노출",
-        "클릭": "클릭",
+        "clk": "클릭",
         "cost": "광고비",
         "cart_conv": "장바구니수",
         "cart_sales": "장바구니 매출액",
@@ -816,6 +816,8 @@ def _normalize_detail_metric_frame(df: pd.DataFrame, item_col: str) -> pd.DataFr
         "wishlist_sales": "위시리스트 매출액",
         "conv": "구매완료수",
         "sales": "구매완료 매출",
+        "tot_conv": "총 전환수",
+        "tot_sales": "총 전환매출",
     }).copy()
 
     if "광고그룹" not in renamed.columns:
@@ -956,25 +958,226 @@ def _build_detail_source(kw_bundle: pd.DataFrame, ad_bundle: pd.DataFrame) -> pd
     return _prefer_detail_source_by_campaign(kw_tmp, ad_tmp)
 
 
+def _fmt_signed_pct(value) -> str:
+    try:
+        if pd.isna(value):
+            return "-"
+        return f"{float(value):+,.1f}%"
+    except Exception:
+        return "-"
+
+
+def _fmt_signed_num(value, suffix: str = "") -> str:
+    try:
+        if pd.isna(value):
+            return "-"
+        return f"{float(value):+,.0f}{suffix}"
+    except Exception:
+        return "-"
+
+
+def _group_signal_masks(df: pd.DataFrame) -> dict[str, pd.Series]:
+    if df is None or df.empty:
+        empty = pd.Series(dtype=bool)
+        return {"cpc_up": empty, "rank_down": empty, "cost_high": empty, "click_low": empty, "imp_low": empty}
+
+    idx = df.index
+    cost = safe_numeric_col(df, "광고비")
+    b_clk = safe_numeric_col(df, "b_clk")
+    b_cost = safe_numeric_col(df, "b_cost")
+    b_imp = safe_numeric_col(df, "b_imp")
+    base_cpc = np.where(b_clk > 0, b_cost / b_clk, 0.0)
+
+    cost_rank = cost.rank(method="first", ascending=False)
+    high_cost_cut = min(len(df.index), max(3, int(np.ceil(len(df.index) * 0.1))))
+
+    cpc_up = (safe_numeric_col(df, "CPC 차이") > 0) & (base_cpc > 0)
+    rank_down = (safe_numeric_col(df, "순위 변화", default=np.nan) > 0) & (safe_numeric_col(df, "b_avg_rank", default=np.nan) > 0)
+    cost_high = (cost > 0) & (cost_rank <= high_cost_cut)
+    click_low = (safe_numeric_col(df, "클릭 차이") < 0) & (b_clk > 0)
+    imp_low = (safe_numeric_col(df, "노출 차이") < 0) & (b_imp > 0)
+
+    return {
+        "cpc_up": pd.Series(cpc_up, index=idx).fillna(False),
+        "rank_down": pd.Series(rank_down, index=idx).fillna(False),
+        "cost_high": pd.Series(cost_high, index=idx).fillna(False),
+        "click_low": pd.Series(click_low, index=idx).fillna(False),
+        "imp_low": pd.Series(imp_low, index=idx).fillna(False),
+    }
+
+
+def _annotate_group_signals(grouped: pd.DataFrame) -> pd.DataFrame:
+    if grouped is None or grouped.empty:
+        return grouped
+    out = grouped.copy()
+    total_cost = float(safe_numeric_col(out, "광고비").sum())
+    out["지출 비중(%)"] = np.where(total_cost > 0, (safe_numeric_col(out, "광고비") / total_cost) * 100.0, 0.0)
+    masks = _group_signal_masks(out)
+    labels = [
+        ("CPC 상승", masks["cpc_up"]),
+        ("순위 하락", masks["rank_down"]),
+        ("비용 상위", masks["cost_high"]),
+        ("클릭 저조", masks["click_low"]),
+        ("노출 저조", masks["imp_low"]),
+    ]
+    issue_values = []
+    for i in out.index:
+        issue = [label for label, mask in labels if bool(mask.get(i, False))]
+        issue_values.append(", ".join(issue) if issue else "정상")
+    out["업무 신호"] = issue_values
+    return out
+
+
+def _top_group_note(df: pd.DataFrame, mask: pd.Series, sort_col: str, value_col: str, formatter, *, ascending: bool = False) -> str:
+    if df is None or df.empty or sort_col not in df.columns:
+        return "해당 그룹 없음"
+    work = df[mask.reindex(df.index, fill_value=False)].copy()
+    if work.empty:
+        return "해당 그룹 없음"
+    work["_sort"] = pd.to_numeric(work[sort_col], errors="coerce")
+    work = work.dropna(subset=["_sort"]).sort_values("_sort", ascending=ascending)
+    if work.empty:
+        return "해당 그룹 없음"
+    row = work.iloc[0]
+    group_name = str(row.get("광고그룹", "-") or "-")
+    if len(group_name) > 22:
+        group_name = f"{group_name[:22]}..."
+    return f"{group_name} · {formatter(row.get(value_col))}"
+
+
+def _render_group_signal_overview(grouped: pd.DataFrame, cmp_mode: str, b1, b2) -> None:
+    if grouped is None or grouped.empty:
+        return
+    masks = _group_signal_masks(grouped)
+    top_cost = grouped.sort_values("광고비", ascending=False).iloc[0] if "광고비" in grouped.columns else None
+    top_cost_note = "해당 그룹 없음"
+    top_cost_value = "-"
+    if top_cost is not None:
+        top_cost_value = format_currency(float(top_cost.get("광고비", 0) or 0))
+        group_name = str(top_cost.get("광고그룹", "-") or "-")
+        if len(group_name) > 22:
+            group_name = f"{group_name[:22]}..."
+        share = float(top_cost.get("지출 비중(%)", 0) or 0)
+        top_cost_note = f"{group_name} · 전체 {share:.1f}%"
+
+    render_toolbar(
+        "그룹 위험 신호",
+        "비교 기간 대비 변화와 현재 지출 규모를 기준으로 점검할 광고그룹을 압축해서 보여줍니다.",
+        [{"label": f"{cmp_mode} {b1} ~ {b2}", "tone": "primary"}, {"label": f"{len(grouped.index):,}개 그룹", "tone": "info"}],
+    )
+    render_ops_cards([
+        {
+            "title": "CPC 상승",
+            "value": f"{int(masks['cpc_up'].sum()):,}개",
+            "note": _top_group_note(grouped, masks["cpc_up"], "CPC 차이", "CPC 증감", _fmt_signed_pct),
+            "tone": "danger" if bool(masks["cpc_up"].any()) else "success",
+            "icon": "CPC",
+        },
+        {
+            "title": "순위 하락",
+            "value": f"{int(masks['rank_down'].sum()):,}개",
+            "note": _top_group_note(grouped, masks["rank_down"], "순위 변화", "순위 변화", lambda v: _fmt_signed_num(v, "위")),
+            "tone": "danger" if bool(masks["rank_down"].any()) else "success",
+            "icon": "R",
+        },
+        {
+            "title": "비용 상위",
+            "value": top_cost_value,
+            "note": top_cost_note,
+            "tone": "warning",
+            "icon": "비용",
+        },
+        {
+            "title": "클릭 저조",
+            "value": f"{int(masks['click_low'].sum()):,}개",
+            "note": _top_group_note(grouped, masks["click_low"], "클릭 증감", "클릭 증감", _fmt_signed_pct, ascending=True),
+            "tone": "warning" if bool(masks["click_low"].any()) else "success",
+            "icon": "CLK",
+        },
+        {
+            "title": "노출 저조",
+            "value": f"{int(masks['imp_low'].sum()):,}개",
+            "note": _top_group_note(grouped, masks["imp_low"], "노출 증감", "노출 증감", _fmt_signed_pct, ascending=True),
+            "tone": "warning" if bool(masks["imp_low"].any()) else "success",
+            "icon": "IMP",
+        },
+    ])
+
+
+def _filter_group_signal_preset(grouped: pd.DataFrame, preset: str) -> pd.DataFrame:
+    if grouped is None or grouped.empty or preset == "전체":
+        return grouped
+    masks = _group_signal_masks(grouped)
+    key_map = {
+        "CPC 상승": "cpc_up",
+        "순위 하락": "rank_down",
+        "비용 상위": "cost_high",
+        "클릭 저조": "click_low",
+        "노출 저조": "imp_low",
+    }
+    key = key_map.get(str(preset))
+    if not key:
+        return grouped
+    return grouped[masks[key]].copy()
+
+
+def _sort_group_signal_view(grouped: pd.DataFrame, preset: str) -> pd.DataFrame:
+    if grouped is None or grouped.empty:
+        return grouped
+    sort_map = {
+        "CPC 상승": ("CPC 차이", False),
+        "순위 하락": ("순위 변화", False),
+        "비용 상위": ("광고비", False),
+        "클릭 저조": ("클릭 증감", True),
+        "노출 저조": ("노출 증감", True),
+    }
+    sort_col, ascending = sort_map.get(str(preset), ("광고비", False))
+    if sort_col not in grouped.columns:
+        sort_col, ascending = "광고비", False
+    return grouped.sort_values(sort_col, ascending=ascending)
+
+
+def _render_group_item_detail(detail_bundle: pd.DataFrame, selected_group: pd.Series, has_pre_patch_cur: bool) -> None:
+    if detail_bundle is None or detail_bundle.empty or selected_group is None:
+        return
+    detail = detail_bundle.copy()
+    for key in ["customer_id", "campaign_id", "adgroup_id"]:
+        if key in detail.columns and key in selected_group.index:
+            detail[key] = detail[key].astype(str)
+            detail = detail[detail[key] == str(selected_group.get(key, ""))]
+    group_name = str(selected_group.get("광고그룹", selected_group.get("adgroup_name", "")) or "선택 그룹")
+    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+    with st.container(border=True):
+        render_toolbar(
+            f"{group_name} 상세 분석",
+            "선택한 광고그룹의 하위 키워드 또는 소재 성과를 광고비 기준으로 정렬합니다.",
+            [{"label": f"{len(detail.index):,}개 항목", "tone": "info"}],
+        )
+        if detail.empty:
+            st.info("선택한 광고그룹의 하위 키워드/소재 데이터가 없습니다.")
+            return
+        norm = _normalize_detail_metric_frame(detail, "item_name").rename(columns={"항목명": "키워드/소재"})
+        cols = [c for c in _detail_display_columns(has_pre_patch_cur, "키워드/소재") if c in norm.columns]
+        disp = norm[cols].sort_values("광고비", ascending=False).head(120)
+        st.dataframe(disp, width="stretch", hide_index=True, column_config=_campaign_fast_col_config(disp, "키워드/소재"))
+        _render_campaign_downloads(disp, "campaign_adgroup_item_detail", "그룹 상세")
+
+
 def _render_campaign_group_tab(meta: pd.DataFrame, engine, f: Dict, cids: tuple, type_sel: tuple, top_n: int, patch_date: date, has_pre_patch_cur: bool) -> None:
-    st.markdown("<div style='display:flex; justify-content:flex-end; margin-bottom:8px;'>", unsafe_allow_html=True)
-    show_deltas_grp = st.toggle(" 증감율 보기", value=False, key="grp_abs_toggle")
-    st.markdown("</div>", unsafe_allow_html=True)
-    cmp_mode_grp = None
-    b1_grp, b2_grp = None, None
-    if show_deltas_grp:
-        opts = get_dynamic_cmp_options(f["start"], f["end"])
-        cmp_opts = [o for o in opts if o != "비교 안함"]
-        cmp_mode_grp = st.radio("비교 기준", cmp_opts if cmp_opts else ["이전 같은 기간 대비"], horizontal=True, key="grp_cmp_mode")
-        b1_grp, b2_grp = period_compare_range(f["start"], f["end"], cmp_mode_grp)
+    ctrl_a, ctrl_b = st.columns([2.2, 1], gap="small")
+    opts = get_dynamic_cmp_options(f["start"], f["end"])
+    cmp_opts = [o for o in opts if o != "비교 안함"] or ["이전 같은 기간 대비"]
+    with ctrl_a:
+        cmp_mode_grp = st.radio("비교 기준", cmp_opts, horizontal=True, key="grp_cmp_mode")
+    with ctrl_b:
+        show_deltas_grp = st.toggle("증감 컬럼 보기", value=True, key="grp_abs_toggle")
+    b1_grp, b2_grp = period_compare_range(f["start"], f["end"], cmp_mode_grp)
     with st.spinner("🔄 광고그룹 성과를 불러오는 중입니다..."):
         kw_bundle_grp = query_keyword_bundle(engine, f["start"], f["end"], list(cids), type_sel, topn_cost=_campaign_fetch_limit(top_n))
         ad_bundle_grp = query_ad_bundle(engine, f["start"], f["end"], cids, type_sel, topn_cost=_campaign_fetch_limit(top_n), top_k=50)
-        base_detail_bundle_grp = pd.DataFrame()
-        if show_deltas_grp and b1_grp and b2_grp:
-            b_kw_bundle_grp = query_keyword_bundle(engine, b1_grp, b2_grp, list(cids), type_sel, topn_cost=_campaign_fetch_limit(top_n))
-            b_ad_bundle_grp = query_ad_bundle(engine, b1_grp, b2_grp, cids, type_sel, topn_cost=_campaign_fetch_limit(top_n), top_k=50)
-            base_detail_bundle_grp = _build_detail_source(b_kw_bundle_grp, b_ad_bundle_grp)
+        b_kw_bundle_grp = query_keyword_bundle(engine, b1_grp, b2_grp, list(cids), type_sel, topn_cost=_campaign_fetch_limit(top_n))
+        b_ad_bundle_grp = query_ad_bundle(engine, b1_grp, b2_grp, cids, type_sel, topn_cost=_campaign_fetch_limit(top_n), top_k=50)
+        base_detail_bundle_grp = _build_detail_source(b_kw_bundle_grp, b_ad_bundle_grp)
         detail_bundle_grp = _build_detail_source(kw_bundle_grp, ad_bundle_grp)
     if detail_bundle_grp is None or detail_bundle_grp.empty:
         st.info("광고그룹 성과 데이터가 없습니다.")
@@ -999,10 +1202,11 @@ def _render_campaign_group_tab(meta: pd.DataFrame, engine, f: Dict, cids: tuple,
     if "avg_rank" in grouped.columns:
         grouped["평균순위"] = grouped["avg_rank"].apply(_format_avg_rank)
     valid_keys_grp = [k for k in ["customer_id", "campaign_id", "adgroup_id"] if k in grouped.columns]
-    if show_deltas_grp:
-        if not base_detail_bundle_grp.empty and valid_keys_grp:
-            b_grp_cols = [c for c in valid_keys_grp if c in base_detail_bundle_grp.columns]
-            b_grp = base_detail_bundle_grp.groupby(b_grp_cols, as_index=False)[val_cols].sum()
+    if not base_detail_bundle_grp.empty and valid_keys_grp:
+        b_grp_cols = [c for c in valid_keys_grp if c in base_detail_bundle_grp.columns]
+        b_val_cols = [c for c in val_cols if c in base_detail_bundle_grp.columns]
+        if set(b_grp_cols) == set(valid_keys_grp) and b_val_cols:
+            b_grp = base_detail_bundle_grp.groupby(b_grp_cols, as_index=False)[b_val_cols].sum()
             b_grp = _apply_shopping_adgroup_purchase_override(b_grp, engine, b1_grp, b2_grp, cids, type_sel)
             b_rank_grp = _keyword_rank_by_keys(base_detail_bundle_grp, b_grp_cols)
             if not b_rank_grp.empty:
@@ -1010,24 +1214,59 @@ def _render_campaign_group_tab(meta: pd.DataFrame, engine, f: Dict, cids: tuple,
             grouped = _apply_comparison_metrics(grouped, b_grp, valid_keys_grp)
         else:
             grouped = _apply_comparison_metrics(grouped, pd.DataFrame(), valid_keys_grp)
+    else:
+        grouped = _apply_comparison_metrics(grouped, pd.DataFrame(), valid_keys_grp)
+    grouped = _annotate_group_signals(grouped)
+    _render_group_signal_overview(grouped, cmp_mode_grp, b1_grp, b2_grp)
     camps = ["전체"] + sorted([str(x) for x in grouped["캠페인"].dropna().unique() if str(x).strip()]) if "캠페인" in grouped.columns else ["전체"]
-    sel_camp = st.selectbox("캠페인 필터", camps, key="camp_group_filter")
+    filter_col_a, filter_col_b = st.columns([1.1, 2], gap="small")
+    with filter_col_a:
+        sel_camp = st.selectbox("캠페인 필터", camps, key="camp_group_filter")
     if sel_camp != "전체":
         grouped = grouped[grouped["캠페인"] == sel_camp]
+    with filter_col_b:
+        signal_preset = st.segmented_control(
+            "그룹 업무 보기",
+            ["전체", "CPC 상승", "순위 하락", "비용 상위", "클릭 저조", "노출 저조"],
+            default="전체",
+            key="grp_signal_preset",
+        )
+    grouped = _filter_group_signal_preset(grouped, signal_preset)
     has_pre_patch_base = (b1_grp < patch_date) if (show_deltas_grp and b1_grp) else False
     show_mode = "integrated_only" if (has_pre_patch_base or has_pre_patch_cur) else "purchase_default"
     if show_deltas_grp and show_mode == "integrated_only":
         st.warning("⚠️ 비교 기간에 3월 11일 이전(네이버 퍼널 분리 패치 전) 데이터가 포함되어 '통합 전환' 기준으로 표시합니다.")
     metrics_cols_grp = _group_mode_columns(show_deltas_grp, show_mode)
-    base_cols_grp = ["업체명", "담당자", "캠페인유형", "캠페인", "광고그룹"]
+    base_cols_grp = ["업체명", "담당자", "캠페인유형", "캠페인", "광고그룹", "업무 신호", "지출 비중(%)"]
     if "avg_rank" in grouped.columns or "평균순위" in grouped.columns:
-        base_cols_grp.append("평균순위")
+        base_cols_grp.insert(5, "평균순위")
         if show_deltas_grp:
             metrics_cols_grp.append("순위 변화")
     cols_grp = [c for c in base_cols_grp + metrics_cols_grp if c in grouped.columns]
-    disp_grp = grouped[cols_grp].sort_values("광고비", ascending=False).head(top_n).copy()
-    _render_campaign_sticky_table(disp_grp, "광고그룹", apply_delta_styles=show_deltas_grp)
+    disp_grp_src = _sort_group_signal_view(grouped, signal_preset).head(top_n).reset_index(drop=True)
+    disp_grp = disp_grp_src[cols_grp].copy()
+    render_toolbar(
+        "그룹별 상세 성과",
+        "업무 신호로 좁혀 보고, 행을 선택하면 하위 키워드/소재까지 이어서 확인합니다.",
+        [{"label": f"{signal_preset}", "tone": "primary"}, {"label": f"{len(disp_grp.index):,}행 표시", "tone": "info"}],
+    )
+    if disp_grp.empty:
+        st.info("선택한 그룹 업무 보기 조건에 맞는 광고그룹이 없습니다.")
+        return
+    event = st.dataframe(
+        disp_grp,
+        width="stretch",
+        hide_index=True,
+        selection_mode="single-row",
+        on_select="rerun",
+        column_config=_campaign_fast_col_config(disp_grp, "광고그룹"),
+    )
     _render_campaign_downloads(disp_grp, "campaign_adgroup_performance", "그룹 성과")
+    selected_rows = event.selection.rows
+    if selected_rows:
+        selected_idx = selected_rows[0]
+        if 0 <= selected_idx < len(disp_grp_src.index):
+            _render_group_item_detail(detail_bundle_grp, disp_grp_src.iloc[selected_idx], has_pre_patch_cur)
 
 
 def _compare_mode_columns(show_deltas: bool, show_mode: str) -> list[str]:

@@ -276,6 +276,14 @@ def _cached_keyword_full_bundle(_engine, start_dt, end_dt, cids: tuple, type_sel
         return pd.DataFrame()
 
 
+@st.cache_data(ttl=43200, max_entries=6, show_spinner=False)
+def _cached_ad_full_bundle(_engine, start_dt, end_dt, cids: tuple, type_sel: tuple) -> pd.DataFrame:
+    try:
+        return query_ad_bundle(_engine, start_dt, end_dt, cids, type_sel, topn_cost=-1, top_k=0)
+    except Exception:
+        return pd.DataFrame()
+
+
 @st.cache_data(ttl=43200, max_entries=10, show_spinner=False)
 def _cached_campaign_timeseries(_engine, start_dt, end_dt, cids: tuple, type_sel: tuple) -> pd.DataFrame:
     try: return query_campaign_timeseries(_engine, start_dt, end_dt, cids, type_sel)
@@ -634,6 +642,221 @@ def _build_overview_keyword_frames(cur_kw: pd.DataFrame, base_kw: pd.DataFrame, 
     if kw_col:
         kw_disp = _build_comparison_df(cur_kw, base_kw, kw_col, '키워드')
     return kw_disp
+
+
+def _overview_prepare_ad_source(ad_bundle: pd.DataFrame) -> pd.DataFrame:
+    if ad_bundle is None or ad_bundle.empty:
+        return pd.DataFrame()
+    out = ad_bundle.copy()
+    if "ad_title" in out.columns:
+        out["item_name"] = out["ad_title"].fillna("").astype(str).str.strip()
+        empty = out["item_name"].isin(["", "nan", "None"])
+        fallback = out["ad_name"].astype(str) if "ad_name" in out.columns else pd.Series([""] * len(out.index), index=out.index)
+        out.loc[empty, "item_name"] = fallback.loc[empty]
+    elif "ad_name" in out.columns:
+        out["item_name"] = out["ad_name"].astype(str)
+    else:
+        out["item_name"] = "소재"
+    out = out[~out["item_name"].astype(str).str.contains("확장소재", na=False)].copy()
+    return out
+
+
+def _overview_build_detail_source(kw_bundle: pd.DataFrame, ad_bundle: pd.DataFrame) -> pd.DataFrame:
+    kw_df = _filter_overview_keyword_rows(kw_bundle).rename(columns={"keyword": "item_name"}) if kw_bundle is not None and not kw_bundle.empty else pd.DataFrame()
+    ad_df = _overview_prepare_ad_source(ad_bundle)
+
+    if kw_df.empty:
+        return ad_df.reset_index(drop=True)
+    if ad_df.empty:
+        return kw_df.reset_index(drop=True)
+
+    for df in (kw_df, ad_df):
+        if "campaign_id" in df.columns:
+            df["campaign_id"] = df["campaign_id"].astype(str)
+
+    campaign_ids = set()
+    if "campaign_id" in kw_df.columns:
+        campaign_ids.update(kw_df["campaign_id"].dropna().astype(str).unique().tolist())
+    if "campaign_id" in ad_df.columns:
+        campaign_ids.update(ad_df["campaign_id"].dropna().astype(str).unique().tolist())
+
+    preferred: dict[str, str] = {}
+    for campaign_id in campaign_ids:
+        kw_rows = kw_df[kw_df["campaign_id"] == campaign_id] if "campaign_id" in kw_df.columns else pd.DataFrame()
+        ad_rows = ad_df[ad_df["campaign_id"] == campaign_id] if "campaign_id" in ad_df.columns else pd.DataFrame()
+        campaign_type = ""
+        if not kw_rows.empty and "campaign_type_label" in kw_rows.columns:
+            campaign_type = str(kw_rows["campaign_type_label"].iloc[0]).upper()
+        elif not ad_rows.empty and "campaign_type_label" in ad_rows.columns:
+            campaign_type = str(ad_rows["campaign_type_label"].iloc[0]).upper()
+
+        if any(token in campaign_type for token in ["쇼핑", "SHOPPING", "브랜드", "BRAND", "플레이스", "PLACE", "META", "GOOGLE"]):
+            preferred[campaign_id] = "ad"
+        elif any(token in campaign_type for token in ["파워링크", "WEB_SITE", "파워컨텐츠", "POWER"]):
+            preferred[campaign_id] = "kw"
+        else:
+            preferred[campaign_id] = "kw" if not kw_rows.empty else "ad"
+
+    kept = []
+    if "campaign_id" in kw_df.columns:
+        kw_keep = kw_df[kw_df["campaign_id"].map(lambda x: preferred.get(str(x), "kw") == "kw")].copy()
+        if not kw_keep.empty:
+            kept.append(kw_keep)
+    if "campaign_id" in ad_df.columns:
+        ad_keep = ad_df[ad_df["campaign_id"].map(lambda x: preferred.get(str(x), "ad") == "ad")].copy()
+        if not ad_keep.empty:
+            kept.append(ad_keep)
+    if kept:
+        return pd.concat(kept, ignore_index=True)
+    return kw_df.reset_index(drop=True) if not kw_df.empty else ad_df.reset_index(drop=True)
+
+
+def _weighted_avg_rank_by_keys(df: pd.DataFrame, keys: list[str], rank_col: str = "avg_rank", imp_col: str = "imp") -> pd.DataFrame:
+    usable_keys = [k for k in keys if k in df.columns]
+    if df is None or df.empty or not usable_keys or rank_col not in df.columns:
+        return pd.DataFrame(columns=usable_keys + [rank_col])
+    tmp = df[usable_keys].copy()
+    tmp[imp_col] = safe_numeric_col(df, imp_col, default=0.0) if imp_col in df.columns else pd.Series([0.0] * len(df.index), index=df.index)
+    tmp[rank_col] = pd.to_numeric(df[rank_col], errors="coerce")
+    tmp["_rank_imp"] = tmp[rank_col].fillna(0.0) * tmp[imp_col]
+    grp = tmp.groupby(usable_keys, as_index=False, dropna=False)[["_rank_imp", imp_col]].sum()
+    grp[rank_col] = np.where(grp[imp_col] > 0, grp["_rank_imp"] / grp[imp_col], np.nan)
+    return grp[usable_keys + [rank_col]]
+
+
+def _aggregate_overview_group_source(detail_df: pd.DataFrame, meta: pd.DataFrame, _engine=None) -> pd.DataFrame:
+    if detail_df is None or detail_df.empty:
+        return pd.DataFrame()
+    work = _attach_account_names(detail_df, meta, _engine)
+    if "adgroup_name" not in work.columns and "adgroup_id" in work.columns:
+        work["adgroup_name"] = work["adgroup_id"].astype(str)
+    group_keys = [
+        c for c in ["customer_id", "campaign_id", "adgroup_id", "account_name", "campaign_type_label", "campaign_name", "adgroup_name"]
+        if c in work.columns
+    ]
+    if not group_keys:
+        return pd.DataFrame()
+    metric_cols = [c for c in ["imp", "clk", "cost", "conv", "sales", "tot_conv", "tot_sales", "cart_conv", "cart_sales", "wishlist_conv", "wishlist_sales"] if c in work.columns]
+    if not metric_cols:
+        return pd.DataFrame()
+    for c in metric_cols:
+        work[c] = pd.to_numeric(work[c], errors="coerce").fillna(0.0)
+    grouped = work.groupby(group_keys, as_index=False, dropna=False)[metric_cols].sum()
+    rank_grp = _weighted_avg_rank_by_keys(work, group_keys)
+    if not rank_grp.empty:
+        grouped = grouped.merge(rank_grp, on=group_keys, how="left")
+    return grouped
+
+
+def _base_group_for_merge(base_group: pd.DataFrame, merge_keys: list[str]) -> pd.DataFrame:
+    if base_group is None or base_group.empty or not merge_keys:
+        return pd.DataFrame(columns=merge_keys)
+    metric_cols = [c for c in ["imp", "clk", "cost", "conv", "sales", "tot_conv", "tot_sales", "cart_conv", "cart_sales", "wishlist_conv", "wishlist_sales"] if c in base_group.columns]
+    if not metric_cols:
+        return pd.DataFrame(columns=merge_keys)
+    out = base_group.groupby(merge_keys, as_index=False, dropna=False)[metric_cols].sum()
+    rank_grp = _weighted_avg_rank_by_keys(base_group, merge_keys)
+    if not rank_grp.empty:
+        out = out.merge(rank_grp, on=merge_keys, how="left")
+    return out
+
+
+def _build_overview_group_frames(cur_detail: pd.DataFrame, base_detail: pd.DataFrame, meta: pd.DataFrame, _engine=None) -> pd.DataFrame:
+    cur_group = _aggregate_overview_group_source(cur_detail, meta, _engine)
+    base_group = _aggregate_overview_group_source(base_detail, meta, _engine)
+    if cur_group.empty:
+        return pd.DataFrame()
+
+    stable_keys = [k for k in ["customer_id", "campaign_id", "adgroup_id"] if k in cur_group.columns and k in base_group.columns]
+    if not stable_keys:
+        stable_keys = [k for k in ["account_name", "campaign_name", "adgroup_name"] if k in cur_group.columns and k in base_group.columns]
+
+    if stable_keys and not base_group.empty:
+        base_merge = _base_group_for_merge(base_group, stable_keys).rename(columns={
+            c: f"{c}_base" for c in base_group.columns if c not in stable_keys
+        })
+        merged = cur_group.merge(base_merge, on=stable_keys, how="left")
+    else:
+        merged = cur_group.copy()
+
+    for c in ["imp", "clk", "cost", "conv", "sales", "tot_conv", "tot_sales", "cart_conv", "cart_sales", "wishlist_conv", "wishlist_sales"]:
+        if c not in merged.columns:
+            merged[c] = 0.0
+        if f"{c}_base" not in merged.columns:
+            merged[f"{c}_base"] = 0.0
+        merged[c] = pd.to_numeric(merged[c], errors="coerce").fillna(0.0)
+        merged[f"{c}_base"] = pd.to_numeric(merged[f"{c}_base"], errors="coerce").fillna(0.0)
+    if "avg_rank_base" not in merged.columns:
+        merged["avg_rank_base"] = np.nan
+
+    out = pd.DataFrame(index=merged.index)
+    out["계정명"] = merged.get("account_name", "")
+    out["캠페인유형"] = merged.get("campaign_type_label", "")
+    out["캠페인명"] = merged.get("campaign_name", "")
+    out["광고그룹"] = merged.get("adgroup_name", merged.get("adgroup_id", "미분류"))
+    out["노출수"] = merged["imp"]
+    out["클릭수"] = merged["clk"]
+    out["클릭률(%)"] = _safe_div(merged["clk"], merged["imp"], 100.0)
+    out["광고비"] = merged["cost"]
+    out["CPC"] = _safe_div(merged["cost"], merged["clk"])
+
+    if "avg_rank" in merged.columns:
+        out["avg_rank"] = pd.to_numeric(merged["avg_rank"], errors="coerce")
+        out["평균순위"] = out["avg_rank"].apply(_format_avg_rank)
+
+    out["구매완료수"] = merged["conv"]
+    out["구매 전환율(%)"] = _safe_div(merged["conv"], merged["clk"], 100.0)
+    out["구매완료 매출"] = merged["sales"]
+    out["구매완료 ROAS(%)"] = _safe_div(merged["sales"], merged["cost"], 100.0)
+
+    out["총 전환수"] = merged["tot_conv"]
+    out["총 전환율(%)"] = _safe_div(merged["tot_conv"], merged["clk"], 100.0)
+    out["총 전환매출"] = merged["tot_sales"]
+    out["통합 ROAS(%)"] = _safe_div(merged["tot_sales"], merged["cost"], 100.0)
+
+    base_imp = merged["imp_base"]
+    base_clk = merged["clk_base"]
+    base_cost = merged["cost_base"]
+    base_conv = merged["conv_base"]
+    base_sales = merged["sales_base"]
+    base_tot_conv = merged["tot_conv_base"]
+    base_tot_sales = merged["tot_sales_base"]
+    base_cpc = _safe_div(base_cost, base_clk)
+
+    def _apply_pct_diff(cur_val, base_val, pct_col, abs_col):
+        diff = cur_val - base_val
+        safe_base = np.where(base_val == 0, 1, base_val)
+        out[pct_col] = np.where(base_val == 0, np.where(cur_val > 0, 100.0, 0.0), (diff / safe_base) * 100.0)
+        out[abs_col] = diff
+
+    _apply_pct_diff(merged["imp"], base_imp, "노출 증감", "노출 차이")
+    _apply_pct_diff(merged["clk"], base_clk, "클릭 증감", "클릭 차이")
+    _apply_pct_diff(merged["cost"], base_cost, "광고비 증감", "광고비 차이")
+    _apply_pct_diff(out["CPC"], base_cpc, "CPC 증감", "CPC 차이")
+    _apply_pct_diff(merged["conv"], base_conv, "구매완료 증감", "구매완료 차이")
+    _apply_pct_diff(merged["sales"], base_sales, "구매완료 매출 증감", "구매완료 매출 차이")
+    _apply_pct_diff(merged["tot_conv"], base_tot_conv, "총 전환 증감", "총 전환 차이")
+    _apply_pct_diff(merged["tot_sales"], base_tot_sales, "총 매출 증감", "총 매출 차이")
+
+    out["클릭률 증감"] = out["클릭률(%)"] - _safe_div(base_clk, base_imp, 100.0)
+    out["구매 전환율 증감"] = out["구매 전환율(%)"] - _safe_div(base_conv, base_clk, 100.0)
+    out["구매완료 ROAS 증감"] = out["구매완료 ROAS(%)"] - _safe_div(base_sales, base_cost, 100.0)
+    out["총 전환율 증감"] = out["총 전환율(%)"] - _safe_div(base_tot_conv, base_clk, 100.0)
+    out["통합 ROAS 증감"] = out["통합 ROAS(%)"] - _safe_div(base_tot_sales, base_cost, 100.0)
+
+    if "avg_rank" in merged.columns:
+        cur_rank = pd.to_numeric(merged["avg_rank"], errors="coerce")
+        base_rank = pd.to_numeric(merged["avg_rank_base"], errors="coerce")
+        out["순위 변화"] = np.where((cur_rank > 0) & (base_rank > 0), cur_rank - base_rank, np.nan)
+        out["b_avg_rank"] = base_rank
+
+    out["b_imp"] = base_imp
+    out["b_clk"] = base_clk
+    out["b_cost"] = base_cost
+    total_cost = float(pd.to_numeric(out["광고비"], errors="coerce").fillna(0.0).sum())
+    out["지출 비중(%)"] = np.where(total_cost > 0, (out["광고비"] / total_cost) * 100.0, 0.0)
+    out = _add_overview_group_status(out)
+    return out.sort_values("광고비", ascending=False).reset_index(drop=True)
 
 @st.cache_data(ttl=43200, max_entries=16, show_spinner=False)
 def _build_overview_timeseries_frames(daily_ts: pd.DataFrame, base_daily_ts: pd.DataFrame):
@@ -1189,6 +1412,7 @@ def _build_overview_excel_bytes(
     df_display: pd.DataFrame,
     df_type_display: pd.DataFrame,
     camp_disp: pd.DataFrame,
+    group_disp: pd.DataFrame,
     kw_disp: pd.DataFrame,
     daily_disp: pd.DataFrame,
     dow_disp: pd.DataFrame,
@@ -1202,6 +1426,8 @@ def _build_overview_excel_bytes(
             format_for_csv(df_type_display).to_excel(writer, sheet_name='유형별_성과상세', index=False)
         if not camp_disp.empty:
             format_for_csv(camp_disp).to_excel(writer, sheet_name='캠페인별_성과상세', index=False)
+        if group_disp is not None and not group_disp.empty:
+            format_for_csv(_overview_export_cols(group_disp)).to_excel(writer, sheet_name='그룹별_성과상세', index=False)
         if not kw_disp.empty:
             format_for_csv(kw_disp).to_excel(writer, sheet_name='키워드별_성과상세', index=False)
         if not daily_disp.empty:
@@ -1616,6 +1842,194 @@ def _overview_keyword_visible_cols(df: pd.DataFrame, show_deltas: bool, mode: st
     return seen
 
 
+def _overview_group_signal_masks(df: pd.DataFrame) -> dict[str, pd.Series]:
+    if df is None or df.empty:
+        empty = pd.Series(dtype=bool)
+        return {"cpc_up": empty, "rank_down": empty, "cost_high": empty, "click_low": empty, "imp_low": empty}
+
+    idx = df.index
+    cost = safe_numeric_col(df, "광고비")
+    base_clk = safe_numeric_col(df, "b_clk")
+    base_cost = safe_numeric_col(df, "b_cost")
+    base_imp = safe_numeric_col(df, "b_imp")
+    base_cpc = np.where(base_clk > 0, base_cost / base_clk, 0.0)
+    cost_rank = cost.rank(method="first", ascending=False)
+    high_cost_cut = min(len(df.index), max(3, int(np.ceil(len(df.index) * 0.1))))
+
+    return {
+        "cpc_up": pd.Series((safe_numeric_col(df, "CPC 차이") > 0) & (base_cpc > 0), index=idx).fillna(False),
+        "rank_down": pd.Series((safe_numeric_col(df, "순위 변화", default=np.nan) > 0) & (safe_numeric_col(df, "b_avg_rank", default=np.nan) > 0), index=idx).fillna(False),
+        "cost_high": pd.Series((cost > 0) & (cost_rank <= high_cost_cut), index=idx).fillna(False),
+        "click_low": pd.Series((safe_numeric_col(df, "클릭 차이") < 0) & (base_clk > 0), index=idx).fillna(False),
+        "imp_low": pd.Series((safe_numeric_col(df, "노출 차이") < 0) & (base_imp > 0), index=idx).fillna(False),
+    }
+
+
+def _format_overview_signed_pct(value) -> str:
+    try:
+        if pd.isna(value):
+            return "-"
+        return f"{float(value):+,.1f}%"
+    except Exception:
+        return "-"
+
+
+def _format_overview_signed_rank(value) -> str:
+    try:
+        if pd.isna(value):
+            return "-"
+        return f"{float(value):+,.0f}위"
+    except Exception:
+        return "-"
+
+
+def _overview_top_group_note(df: pd.DataFrame, mask: pd.Series, sort_col: str, value_col: str, formatter, *, ascending: bool = False) -> str:
+    if df is None or df.empty or sort_col not in df.columns:
+        return "해당 그룹 없음"
+    work = df[mask.reindex(df.index, fill_value=False)].copy()
+    if work.empty:
+        return "해당 그룹 없음"
+    work["_sort"] = pd.to_numeric(work[sort_col], errors="coerce")
+    work = work.dropna(subset=["_sort"]).sort_values("_sort", ascending=ascending)
+    if work.empty:
+        return "해당 그룹 없음"
+    row = work.iloc[0]
+    group_name = str(row.get("광고그룹", "-") or "-")
+    if len(group_name) > 22:
+        group_name = f"{group_name[:22]}..."
+    return f"{group_name} · {formatter(row.get(value_col))}"
+
+
+def _add_overview_group_status(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame() if df is None else df
+    work = df.copy()
+    if "업무 신호" in work.columns:
+        return work
+    masks = _overview_group_signal_masks(work)
+    labels = [
+        ("CPC 상승", masks["cpc_up"]),
+        ("순위 하락", masks["rank_down"]),
+        ("비용 상위", masks["cost_high"]),
+        ("클릭 저조", masks["click_low"]),
+        ("노출 저조", masks["imp_low"]),
+    ]
+    signals = []
+    for idx in work.index:
+        active = [label for label, mask in labels if bool(mask.get(idx, False))]
+        signals.append(", ".join(active) if active else "정상")
+    insert_at = 1 if "광고그룹" in work.columns else 0
+    work.insert(insert_at, "업무 신호", signals)
+    return work
+
+
+def _filter_overview_group_workbench(df: pd.DataFrame, preset: str) -> pd.DataFrame:
+    if df is None or df.empty or preset == "전체":
+        return pd.DataFrame() if df is None else df
+    masks = _overview_group_signal_masks(df)
+    key_map = {
+        "CPC 상승": "cpc_up",
+        "순위 하락": "rank_down",
+        "비용 상위": "cost_high",
+        "클릭 저조": "click_low",
+        "노출 저조": "imp_low",
+    }
+    key = key_map.get(str(preset))
+    if not key:
+        return df
+    return df[masks[key]].copy()
+
+
+def _sort_overview_group_workbench(df: pd.DataFrame, preset: str) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame() if df is None else df
+    sort_map = {
+        "CPC 상승": ("CPC 차이", False),
+        "순위 하락": ("순위 변화", False),
+        "비용 상위": ("광고비", False),
+        "클릭 저조": ("클릭 증감", True),
+        "노출 저조": ("노출 증감", True),
+    }
+    sort_col, ascending = sort_map.get(str(preset), ("광고비", False))
+    if sort_col not in df.columns:
+        sort_col, ascending = "광고비", False
+    return df.sort_values(sort_col, ascending=ascending).reset_index(drop=True)
+
+
+def _render_overview_group_signal_cards(df: pd.DataFrame, cmp_mode: str, b1, b2) -> None:
+    if df is None or df.empty:
+        return
+    masks = _overview_group_signal_masks(df)
+    top_cost = df.sort_values("광고비", ascending=False).iloc[0] if "광고비" in df.columns else None
+    top_cost_value = "-"
+    top_cost_note = "해당 그룹 없음"
+    if top_cost is not None:
+        top_cost_value = format_currency(float(top_cost.get("광고비", 0) or 0))
+        group_name = str(top_cost.get("광고그룹", "-") or "-")
+        if len(group_name) > 22:
+            group_name = f"{group_name[:22]}..."
+        top_cost_note = f"{group_name} · 전체 {float(top_cost.get('지출 비중(%)', 0) or 0):.1f}%"
+    render_ops_cards([
+        {
+            "title": "CPC 상승",
+            "value": f"{int(masks['cpc_up'].sum()):,}개",
+            "note": _overview_top_group_note(df, masks["cpc_up"], "CPC 차이", "CPC 증감", _format_overview_signed_pct),
+            "tone": "danger" if bool(masks["cpc_up"].any()) else "success",
+            "icon": "CPC",
+        },
+        {
+            "title": "순위 하락",
+            "value": f"{int(masks['rank_down'].sum()):,}개",
+            "note": _overview_top_group_note(df, masks["rank_down"], "순위 변화", "순위 변화", _format_overview_signed_rank),
+            "tone": "danger" if bool(masks["rank_down"].any()) else "success",
+            "icon": "R",
+        },
+        {
+            "title": "비용 상위",
+            "value": top_cost_value,
+            "note": top_cost_note,
+            "tone": "warning",
+            "icon": "비용",
+        },
+        {
+            "title": "클릭 저조",
+            "value": f"{int(masks['click_low'].sum()):,}개",
+            "note": _overview_top_group_note(df, masks["click_low"], "클릭 증감", "클릭 증감", _format_overview_signed_pct, ascending=True),
+            "tone": "warning" if bool(masks["click_low"].any()) else "success",
+            "icon": "CLK",
+        },
+        {
+            "title": "노출 저조",
+            "value": f"{int(masks['imp_low'].sum()):,}개",
+            "note": _overview_top_group_note(df, masks["imp_low"], "노출 증감", "노출 증감", _format_overview_signed_pct, ascending=True),
+            "tone": "warning" if bool(masks["imp_low"].any()) else "success",
+            "icon": "IMP",
+        },
+    ])
+    st.caption(f"비교 기준: {cmp_mode} · {b1} ~ {b2}")
+
+
+def _overview_group_visible_cols(df: pd.DataFrame, show_deltas: bool, funnel_cols: list[str]) -> list[str]:
+    if df is None or df.empty:
+        return []
+    cols = [
+        "광고그룹", "업무 신호", "캠페인명", "계정명", "캠페인유형", "지출 비중(%)",
+        *[c for c in funnel_cols if c in df.columns],
+    ]
+    seen = []
+    for col in cols:
+        if col in df.columns and col not in seen:
+            seen.append(col)
+    return seen
+
+
+def _overview_export_cols(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame() if df is None else df
+    hidden = {c for c in df.columns if str(c).startswith("b_") or str(c) == "avg_rank"}
+    return df[[c for c in df.columns if c not in hidden]].copy()
+
+
 def _delta_chip(cur_val, base_val, improve_when_up=True):
     diff = pct_change(float(cur_val or 0), float(base_val or 0)) if base_val is not None else 0.0
     if abs(diff) < 5: return "neu", f"유지 ({diff:+.1f}%)"
@@ -1991,6 +2405,7 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
     # ----------------------------------------------------
     df_display, df_type_display, camp_disp = pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
     daily_disp, dow_disp, weekly_disp = pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+    group_disp = pd.DataFrame()
     kw_disp = pd.DataFrame() 
 
     fmt_dict_standard = {
@@ -2007,6 +2422,7 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
         "총 전환율(%)": "{:,.2f}%", "총 전환율 증감": "{:+.2f}%",
         "총 전환매출": "{:,.0f}원", "총 매출 증감": "{:+.1f}%", "총 매출 차이": "{:+,.0f}원",
         "통합 ROAS(%)": "{:,.1f}%", "통합 ROAS 증감": "{:+.1f}%",
+        "지출 비중(%)": "{:,.1f}%",
         "순위 변화": lambda x: f"{x:+.0f}" if pd.notna(x) else "-"
     }
 
@@ -2017,7 +2433,7 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
     
     render_toolbar(
         "세부 성과 표",
-        "업체, 유형, 기간, 캠페인, 키워드 단위로 같은 KPI 묶음을 비교합니다.",
+        "업체, 유형, 기간, 캠페인, 광고그룹, 키워드 단위로 같은 KPI 묶음을 비교합니다.",
         [{"label": "절대값/증감 전환", "tone": "primary", "icon": "표시 "}, {"label": "표시 행 전체 정렬", "tone": "info", "icon": "정렬 "}],
     )
     show_deltas = st.toggle("증감율 보기", value=True, key="ov_abs_toggle_v2")
@@ -2044,7 +2460,7 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
 
     detail_panel = st.segmented_control(
         "세부 성과 보기",
-        ["업체별 요약", "유형별 요약", "기간별 상세", "캠페인 상세 분석", "키워드 상세 분석"],
+        ["업체별 요약", "유형별 요약", "기간별 상세", "캠페인 상세 분석", "그룹 상세 분석", "키워드 상세 분석"],
         default="업체별 요약",
         key="overview_detail_panel",
         label_visibility="collapsed",
@@ -2073,6 +2489,25 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
             base_kw = pd.DataFrame()
             _diag_add(diag, "키워드 번들(비교/전체)", "error", 0, "query_keyword_bundle", f"{type(e).__name__}: {e}")
         kw_disp = _build_overview_keyword_frames(cur_kw, base_kw, cur_camp, base_camp)
+
+    if detail_panel == "그룹 상세 분석":
+        try:
+            cur_group_kw = _cached_keyword_full_bundle(engine, f["start"], f["end"], cids, type_sel)
+            cur_group_ad = _cached_ad_full_bundle(engine, f["start"], f["end"], cids, type_sel)
+            cur_group_detail = _overview_build_detail_source(cur_group_kw, cur_group_ad)
+            _diag_add(diag, "그룹 번들(현재/전체)", "ok" if not cur_group_detail.empty else "zero_data", len(cur_group_detail.index), "keyword/ad bundle", "광고그룹 상세 전체 행")
+        except Exception as e:
+            cur_group_detail = pd.DataFrame()
+            _diag_add(diag, "그룹 번들(현재/전체)", "error", 0, "keyword/ad bundle", f"{type(e).__name__}: {e}")
+        try:
+            base_group_kw = _cached_keyword_full_bundle(engine, b1, b2, cids, type_sel)
+            base_group_ad = _cached_ad_full_bundle(engine, b1, b2, cids, type_sel)
+            base_group_detail = _overview_build_detail_source(base_group_kw, base_group_ad)
+            _diag_add(diag, "그룹 번들(비교/전체)", "ok" if not base_group_detail.empty else "zero_data", len(base_group_detail.index), "keyword/ad bundle", "광고그룹 상세 비교 전체 행")
+        except Exception as e:
+            base_group_detail = pd.DataFrame()
+            _diag_add(diag, "그룹 번들(비교/전체)", "error", 0, "keyword/ad bundle", f"{type(e).__name__}: {e}")
+        group_disp = _build_overview_group_frames(cur_group_detail, base_group_detail, meta, engine)
 
     if detail_panel == "기간별 상세":
         if base_daily_ts is None or base_daily_ts.empty:
@@ -2138,6 +2573,28 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
         else:
             st.info("조건에 맞는 데이터가 없습니다.")
 
+    elif detail_panel == "그룹 상세 분석":
+        if not group_disp.empty:
+            _render_overview_group_signal_cards(group_disp, cmp_mode, b1, b2)
+            group_preset = st.segmented_control(
+                "그룹 업무 보기",
+                ["전체", "CPC 상승", "순위 하락", "비용 상위", "클릭 저조", "노출 저조"],
+                default="전체",
+                key="overview_group_preset",
+            )
+            group_work = _sort_overview_group_workbench(_filter_overview_group_workbench(group_disp, group_preset), group_preset)
+            if group_work.empty:
+                st.info("선택한 그룹 업무 보기 조건에 맞는 광고그룹이 없습니다.")
+            else:
+                view_cols = _overview_group_visible_cols(group_work, show_deltas, get_funnel_cols(show_deltas))
+                disp_group = group_work[view_cols].head(500).copy()
+                styled_group_df = disp_group.style.format(fmt_dict_standard)
+                styled_group_df = _apply_overview_delta_styles(styled_group_df, disp_group)
+                _render_overview_sticky_table(styled_group_df, "광고그룹", height=500, hide_index=True)
+                st.caption(f"총 {len(group_disp):,}개 광고그룹 중 {len(disp_group):,}개를 표시했습니다.")
+        else:
+            st.info("조건에 맞는 데이터가 없습니다.")
+
     elif detail_panel == "키워드 상세 분석":
         if not kw_disp.empty:
             kw_tool_a, kw_tool_b = st.columns([2, 1], gap="small")
@@ -2184,6 +2641,20 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
     if df_display.empty or camp_disp.empty:
         df_display, df_type_display, camp_disp = _build_overview_campaign_frames(cur_camp, base_camp, meta, engine)
 
+    if group_disp.empty:
+        try:
+            cur_group_detail_export = _overview_build_detail_source(
+                _cached_keyword_full_bundle(engine, f["start"], f["end"], cids, type_sel),
+                _cached_ad_full_bundle(engine, f["start"], f["end"], cids, type_sel),
+            )
+            base_group_detail_export = _overview_build_detail_source(
+                _cached_keyword_full_bundle(engine, b1, b2, cids, type_sel),
+                _cached_ad_full_bundle(engine, b1, b2, cids, type_sel),
+            )
+            group_disp = _build_overview_group_frames(cur_group_detail_export, base_group_detail_export, meta, engine)
+        except Exception:
+            group_disp = pd.DataFrame()
+
     if base_kw is None or base_kw.empty:
         try: base_kw = _cached_keyword_full_bundle(engine, b1, b2, cids, type_sel)
         except Exception: base_kw = pd.DataFrame()
@@ -2200,12 +2671,12 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
     if daily_disp.empty:
         daily_disp, dow_disp, weekly_disp = _build_overview_timeseries_frames(daily_ts, base_daily_ts)
 
-    has_data_to_export = any([not df_display.empty, not df_type_display.empty, not camp_disp.empty, not daily_disp.empty, not kw_disp.empty])
+    has_data_to_export = any([not df_display.empty, not df_type_display.empty, not camp_disp.empty, not group_disp.empty, not daily_disp.empty, not kw_disp.empty])
     if has_data_to_export:
         with st.container(border=True):
             st.markdown("<div style='font-size:14px; font-weight:700; margin-bottom:8px;'>엑셀 데이터 일괄 다운로드</div>", unsafe_allow_html=True)
-            st.markdown("<div style='font-size:12px; color:var(--nv-muted); margin-bottom:10px;'>계정/유형/캠페인/키워드/일자/요일별 상세 데이터를 하나의 엑셀 파일로 내려받습니다.</div>", unsafe_allow_html=True)
-            excel_bytes = _build_overview_excel_bytes(df_display, df_type_display, camp_disp, kw_disp, daily_disp, dow_disp, weekly_disp)
+            st.markdown("<div style='font-size:12px; color:var(--nv-muted); margin-bottom:10px;'>계정/유형/캠페인/그룹/키워드/일자/요일별 상세 데이터를 하나의 엑셀 파일로 내려받습니다.</div>", unsafe_allow_html=True)
+            excel_bytes = _build_overview_excel_bytes(df_display, df_type_display, camp_disp, group_disp, kw_disp, daily_disp, dow_disp, weekly_disp)
             st.download_button("통합 엑셀 다운로드", data=excel_bytes, file_name=f"통합_상세_성과보고서_{f['start']}_{f['end']}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", width="stretch")
 
     with st.expander("텍스트 보고서 생성", expanded=False):

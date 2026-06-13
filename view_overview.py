@@ -1962,21 +1962,21 @@ def _overview_group_priority(active: list[str]) -> tuple[str, int]:
     if "비용 상위" in active:
         score += 10
     if score >= 45:
-        return "P1 조치", score
+        return "조치 필요", score
     if score >= 20:
-        return "P2 확인", score
+        return "확인 필요", score
     if score > 0:
-        return "P3 관찰", score
-    return "OK 정상", score
+        return "관찰", score
+    return "정상", score
 
 
 def _add_overview_group_status(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame() if df is None else df
     work = df.copy()
-    if {"우선순위", "핵심 신호", "판단 근거", "다음 확인"}.issubset(set(work.columns)):
+    if {"검토 상태", "핵심 신호", "판단 근거", "다음 확인"}.issubset(set(work.columns)):
         return work
-    signal_cols = ["신호 등급", "우선순위", "핵심 신호", "업무 신호", "판단 근거", "다음 확인", "_신호 점수"]
+    signal_cols = ["신호 등급", "우선순위", "검토 상태", "핵심 신호", "업무 신호", "판단 근거", "다음 확인", "_신호 점수"]
     work = work.drop(columns=[c for c in signal_cols if c in work.columns])
     masks = _overview_group_signal_masks(work)
     labels = [
@@ -1986,7 +1986,7 @@ def _add_overview_group_status(df: pd.DataFrame) -> pd.DataFrame:
         ("노출 저조", masks["imp_low"]),
         ("비용 상위", masks["cost_high"]),
     ]
-    priorities = []
+    review_states = []
     primary_signals = []
     signals = []
     evidences = []
@@ -1994,15 +1994,15 @@ def _add_overview_group_status(df: pd.DataFrame) -> pd.DataFrame:
     scores = []
     for idx in work.index:
         active = [label for label, mask in labels if bool(mask.get(idx, False))]
-        priority, score = _overview_group_priority(active)
-        priorities.append(priority)
+        review_state, score = _overview_group_priority(active)
+        review_states.append(review_state)
         primary_signals.append(active[0] if active else "정상")
         signals.append(" · ".join(active) if active else "정상")
         evidences.append(_overview_group_signal_evidence(work.loc[idx], active))
         next_actions.append(_overview_group_next_action(active))
         scores.append(score)
     insert_at = 1 if "광고그룹" in work.columns else 0
-    work.insert(insert_at, "우선순위", priorities)
+    work.insert(insert_at, "검토 상태", review_states)
     work.insert(insert_at + 1, "핵심 신호", primary_signals)
     work.insert(insert_at + 2, "판단 근거", evidences)
     work.insert(insert_at + 3, "다음 확인", next_actions)
@@ -2014,8 +2014,8 @@ def _add_overview_group_status(df: pd.DataFrame) -> pd.DataFrame:
 def _filter_overview_group_workbench(df: pd.DataFrame, preset: str) -> pd.DataFrame:
     if df is None or df.empty or preset == "전체":
         return pd.DataFrame() if df is None else df
-    if preset in {"P1 조치", "P2 확인", "P3 관찰", "OK 정상"} and "우선순위" in df.columns:
-        return df[df["우선순위"].astype(str) == str(preset)].copy()
+    if preset in {"조치 필요", "확인 필요", "관찰", "정상"} and "검토 상태" in df.columns:
+        return df[df["검토 상태"].astype(str) == str(preset)].copy()
     masks = _overview_group_signal_masks(df)
     key_map = {
         "CPC 상승": "cpc_up",
@@ -2033,7 +2033,7 @@ def _filter_overview_group_workbench(df: pd.DataFrame, preset: str) -> pd.DataFr
 def _sort_overview_group_workbench(df: pd.DataFrame, preset: str) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame() if df is None else df
-    if preset in {"전체", "P1 조치", "P2 확인", "P3 관찰", "OK 정상"} and "_신호 점수" in df.columns:
+    if preset in {"전체", "조치 필요", "확인 필요", "관찰", "정상"} and "_신호 점수" in df.columns:
         sort_cols = ["_신호 점수"] + (["광고비"] if "광고비" in df.columns else [])
         return df.sort_values(sort_cols, ascending=[False] * len(sort_cols)).reset_index(drop=True)
     sort_map = {
@@ -2106,7 +2106,7 @@ def _overview_group_visible_cols(df: pd.DataFrame, show_deltas: bool, funnel_col
     if df is None or df.empty:
         return []
     cols = [
-        "광고그룹", "우선순위", "핵심 신호", "판단 근거", "다음 확인", "캠페인명", "계정명", "캠페인유형", "지출 비중(%)",
+        "광고그룹", "검토 상태", "핵심 신호", "판단 근거", "다음 확인", "캠페인명", "계정명", "캠페인유형", "지출 비중(%)",
         *[c for c in funnel_cols if c in df.columns],
     ]
     seen = []
@@ -2126,14 +2126,14 @@ def _overview_group_preset_order(view_cols: list[str], mode: str) -> list[str]:
         return view_cols
     if mode == "운영":
         preferred = [
-            "광고그룹", "우선순위", "핵심 신호", "판단 근거", "다음 확인", "지출 비중(%)", "광고비", "광고비 증감", "광고비 차이",
+            "광고그룹", "검토 상태", "핵심 신호", "판단 근거", "다음 확인", "지출 비중(%)", "광고비", "광고비 증감", "광고비 차이",
             "CPC", "CPC 증감", "CPC 차이", "평균순위", "순위 변화",
             "클릭수", "클릭 증감", "클릭 차이", "노출수", "노출 증감", "노출 차이",
             "캠페인명", "계정명", "캠페인유형",
         ]
     elif mode == "성과":
         preferred = [
-            "광고그룹", "우선순위", "핵심 신호", "판단 근거", "다음 확인", "구매완료수", "구매완료 증감", "구매완료 차이",
+            "광고그룹", "검토 상태", "핵심 신호", "판단 근거", "다음 확인", "구매완료수", "구매완료 증감", "구매완료 차이",
             "구매완료 매출", "구매완료 매출 증감", "구매완료 매출 차이",
             "총 전환수", "총 전환 증감", "총 전환 차이",
             "총 전환매출", "총 매출 증감", "총 매출 차이",
@@ -2141,7 +2141,7 @@ def _overview_group_preset_order(view_cols: list[str], mode: str) -> list[str]:
         ]
     elif mode == "효율":
         preferred = [
-            "광고그룹", "우선순위", "핵심 신호", "판단 근거", "다음 확인", "클릭률(%)", "클릭률 증감",
+            "광고그룹", "검토 상태", "핵심 신호", "판단 근거", "다음 확인", "클릭률(%)", "클릭률 증감",
             "CPC", "CPC 증감", "CPC 차이",
             "구매 전환율(%)", "구매 전환율 증감",
             "구매완료 ROAS(%)", "구매완료 ROAS 증감",
@@ -2743,7 +2743,7 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
             with group_tool_a:
                 group_preset = st.segmented_control(
                     "그룹 업무 보기",
-                    ["전체", "P1 조치", "P2 확인", "P3 관찰", "OK 정상", "CPC 상승", "순위 하락", "비용 상위", "클릭 저조", "노출 저조"],
+                    ["전체", "조치 필요", "확인 필요", "관찰", "정상", "CPC 상승", "순위 하락", "비용 상위", "클릭 저조", "노출 저조"],
                     default="전체",
                     key="overview_group_preset",
                 )

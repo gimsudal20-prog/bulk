@@ -1454,32 +1454,6 @@ def _style_delta_numeric_neg(val):
     return 'color: #EA4335; font-weight: 700;' if v > 0 else 'color: #1A73E8; font-weight: 700;'
 
 
-def _style_group_signal_grade(val):
-    text = str(val or "")
-    if text == "주의":
-        return "background-color: #FEE2E2; color: #991B1B; font-weight: 800;"
-    if text == "확인":
-        return "background-color: #FEF3C7; color: #92400E; font-weight: 800;"
-    if text == "관찰":
-        return "background-color: #DBEAFE; color: #1E40AF; font-weight: 800;"
-    if text == "정상":
-        return "background-color: #DCFCE7; color: #166534; font-weight: 800;"
-    return ""
-
-
-def _style_group_signal_text(val):
-    text = str(val or "")
-    if "CPC 상승" in text or "순위 하락" in text:
-        return "color: #B91C1C; font-weight: 800;"
-    if "클릭 저조" in text or "노출 저조" in text:
-        return "color: #B45309; font-weight: 800;"
-    if "비용 상위" in text:
-        return "color: #1D4ED8; font-weight: 800;"
-    if text == "정상":
-        return "color: #15803D; font-weight: 800;"
-    return ""
-
-
 def _apply_overview_delta_styles(styler, df: pd.DataFrame):
     positive_cols = [
         '노출 증감', '노출 차이', '클릭 증감', '클릭 차이', '클릭률 증감',
@@ -1487,8 +1461,6 @@ def _apply_overview_delta_styles(styler, df: pd.DataFrame):
         '총 전환 증감', '총 전환 차이', '총 전환율 증감', '총 매출 증감', '총 매출 차이', '통합 ROAS 증감'
     ]
     negative_cols = ['광고비 증감', '광고비 차이', 'CPC 증감', 'CPC 차이', '순위 변화']
-    signal_grade_cols = [c for c in ["신호 등급"] if c in df.columns]
-    signal_text_cols = [c for c in ["핵심 신호", "업무 신호"] if c in df.columns]
 
     pos_subset = [c for c in positive_cols if c in df.columns]
     neg_subset = [c for c in negative_cols if c in df.columns]
@@ -1496,13 +1468,9 @@ def _apply_overview_delta_styles(styler, df: pd.DataFrame):
     try:
         if pos_subset: styler = styler.map(_style_delta_numeric, subset=pos_subset)
         if neg_subset: styler = styler.map(_style_delta_numeric_neg, subset=neg_subset)
-        if signal_grade_cols: styler = styler.map(_style_group_signal_grade, subset=signal_grade_cols)
-        if signal_text_cols: styler = styler.map(_style_group_signal_text, subset=signal_text_cols)
     except AttributeError:
         if pos_subset: styler = styler.applymap(_style_delta_numeric, subset=pos_subset)
         if neg_subset: styler = styler.applymap(_style_delta_numeric_neg, subset=neg_subset)
-        if signal_grade_cols: styler = styler.applymap(_style_group_signal_grade, subset=signal_grade_cols)
-        if signal_text_cols: styler = styler.applymap(_style_group_signal_text, subset=signal_text_cols)
     return styler
 
 def _safe_div(n, d, mult=1.0):
@@ -1932,13 +1900,84 @@ def _overview_top_group_note(df: pd.DataFrame, mask: pd.Series, sort_col: str, v
     return f"{group_name} · {formatter(row.get(value_col))}"
 
 
+def _format_overview_signed_currency(value) -> str:
+    try:
+        if pd.isna(value):
+            return "-"
+        return f"{float(value):+,.0f}원"
+    except Exception:
+        return "-"
+
+
+def _format_overview_signed_count(value) -> str:
+    try:
+        if pd.isna(value):
+            return "-"
+        return f"{float(value):+,.0f}"
+    except Exception:
+        return "-"
+
+
+def _overview_group_signal_evidence(row: pd.Series, active: list[str]) -> str:
+    if not active:
+        return "특이 변화 없음"
+    parts: list[str] = []
+    for signal in active:
+        if signal == "CPC 상승":
+            parts.append(f"CPC {_format_overview_signed_currency(row.get('CPC 차이'))} ({_format_overview_signed_pct(row.get('CPC 증감'))})")
+        elif signal == "순위 하락":
+            parts.append(f"순위 {_format_overview_signed_rank(row.get('순위 변화'))}")
+        elif signal == "클릭 저조":
+            parts.append(f"클릭 {_format_overview_signed_count(row.get('클릭 차이'))} ({_format_overview_signed_pct(row.get('클릭 증감'))})")
+        elif signal == "노출 저조":
+            parts.append(f"노출 {_format_overview_signed_count(row.get('노출 차이'))} ({_format_overview_signed_pct(row.get('노출 증감'))})")
+        elif signal == "비용 상위":
+            parts.append(f"지출 비중 {float(row.get('지출 비중(%)', 0) or 0):.1f}%")
+    return " · ".join([p for p in parts if p][:3]) or "특이 변화 없음"
+
+
+def _overview_group_next_action(active: list[str]) -> str:
+    if not active:
+        return "유지"
+    action_map = {
+        "CPC 상승": "입찰가와 품질요인 확인",
+        "순위 하락": "입찰·경쟁 변화 확인",
+        "클릭 저조": "소재·상품명·검색어 확인",
+        "노출 저조": "예산·노출 제한 확인",
+        "비용 상위": "예산 배분 우선 검토",
+    }
+    return action_map.get(active[0], "확인")
+
+
+def _overview_group_priority(active: list[str]) -> tuple[str, int]:
+    score = 0
+    if "CPC 상승" in active:
+        score += 45
+    if "순위 하락" in active:
+        score += 40
+    if "클릭 저조" in active:
+        score += 28
+    if "노출 저조" in active:
+        score += 20
+    if "비용 상위" in active:
+        score += 10
+    if score >= 45:
+        return "P1 조치", score
+    if score >= 20:
+        return "P2 확인", score
+    if score > 0:
+        return "P3 관찰", score
+    return "OK 정상", score
+
+
 def _add_overview_group_status(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame() if df is None else df
     work = df.copy()
-    if {"신호 등급", "핵심 신호", "업무 신호"}.issubset(set(work.columns)):
+    if {"우선순위", "핵심 신호", "판단 근거", "다음 확인"}.issubset(set(work.columns)):
         return work
-    work = work.drop(columns=[c for c in ["신호 등급", "핵심 신호", "업무 신호"] if c in work.columns])
+    signal_cols = ["신호 등급", "우선순위", "핵심 신호", "업무 신호", "판단 근거", "다음 확인", "_신호 점수"]
+    work = work.drop(columns=[c for c in signal_cols if c in work.columns])
     masks = _overview_group_signal_masks(work)
     labels = [
         ("CPC 상승", masks["cpc_up"]),
@@ -1947,36 +1986,36 @@ def _add_overview_group_status(df: pd.DataFrame) -> pd.DataFrame:
         ("노출 저조", masks["imp_low"]),
         ("비용 상위", masks["cost_high"]),
     ]
-    grade_labels = []
+    priorities = []
     primary_signals = []
     signals = []
+    evidences = []
+    next_actions = []
+    scores = []
     for idx in work.index:
         active = [label for label, mask in labels if bool(mask.get(idx, False))]
-        has_urgent = any(label in active for label in ["CPC 상승", "순위 하락"])
-        has_check = any(label in active for label in ["클릭 저조", "노출 저조"])
-        if has_urgent:
-            grade = "주의"
-        elif has_check:
-            grade = "확인"
-        elif "비용 상위" in active:
-            grade = "관찰"
-        else:
-            grade = "정상"
-        grade_labels.append(grade)
+        priority, score = _overview_group_priority(active)
+        priorities.append(priority)
         primary_signals.append(active[0] if active else "정상")
         signals.append(" · ".join(active) if active else "정상")
+        evidences.append(_overview_group_signal_evidence(work.loc[idx], active))
+        next_actions.append(_overview_group_next_action(active))
+        scores.append(score)
     insert_at = 1 if "광고그룹" in work.columns else 0
-    work.insert(insert_at, "신호 등급", grade_labels)
+    work.insert(insert_at, "우선순위", priorities)
     work.insert(insert_at + 1, "핵심 신호", primary_signals)
-    work.insert(insert_at + 2, "업무 신호", signals)
+    work.insert(insert_at + 2, "판단 근거", evidences)
+    work.insert(insert_at + 3, "다음 확인", next_actions)
+    work.insert(insert_at + 4, "업무 신호", signals)
+    work["_신호 점수"] = scores
     return work
 
 
 def _filter_overview_group_workbench(df: pd.DataFrame, preset: str) -> pd.DataFrame:
     if df is None or df.empty or preset == "전체":
         return pd.DataFrame() if df is None else df
-    if preset in {"주의", "확인", "관찰", "정상"} and "신호 등급" in df.columns:
-        return df[df["신호 등급"].astype(str) == str(preset)].copy()
+    if preset in {"P1 조치", "P2 확인", "P3 관찰", "OK 정상"} and "우선순위" in df.columns:
+        return df[df["우선순위"].astype(str) == str(preset)].copy()
     masks = _overview_group_signal_masks(df)
     key_map = {
         "CPC 상승": "cpc_up",
@@ -1994,8 +2033,9 @@ def _filter_overview_group_workbench(df: pd.DataFrame, preset: str) -> pd.DataFr
 def _sort_overview_group_workbench(df: pd.DataFrame, preset: str) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame() if df is None else df
-    if preset in {"주의", "확인", "관찰", "정상"}:
-        return df.sort_values("광고비" if "광고비" in df.columns else df.columns[0], ascending=False).reset_index(drop=True)
+    if preset in {"전체", "P1 조치", "P2 확인", "P3 관찰", "OK 정상"} and "_신호 점수" in df.columns:
+        sort_cols = ["_신호 점수"] + (["광고비"] if "광고비" in df.columns else [])
+        return df.sort_values(sort_cols, ascending=[False] * len(sort_cols)).reset_index(drop=True)
     sort_map = {
         "CPC 상승": ("CPC 차이", False),
         "순위 하락": ("순위 변화", False),
@@ -2066,7 +2106,7 @@ def _overview_group_visible_cols(df: pd.DataFrame, show_deltas: bool, funnel_col
     if df is None or df.empty:
         return []
     cols = [
-        "광고그룹", "신호 등급", "핵심 신호", "업무 신호", "캠페인명", "계정명", "캠페인유형", "지출 비중(%)",
+        "광고그룹", "우선순위", "핵심 신호", "판단 근거", "다음 확인", "캠페인명", "계정명", "캠페인유형", "지출 비중(%)",
         *[c for c in funnel_cols if c in df.columns],
     ]
     seen = []
@@ -2086,14 +2126,14 @@ def _overview_group_preset_order(view_cols: list[str], mode: str) -> list[str]:
         return view_cols
     if mode == "운영":
         preferred = [
-            "광고그룹", "신호 등급", "핵심 신호", "업무 신호", "지출 비중(%)", "광고비", "광고비 증감", "광고비 차이",
+            "광고그룹", "우선순위", "핵심 신호", "판단 근거", "다음 확인", "지출 비중(%)", "광고비", "광고비 증감", "광고비 차이",
             "CPC", "CPC 증감", "CPC 차이", "평균순위", "순위 변화",
             "클릭수", "클릭 증감", "클릭 차이", "노출수", "노출 증감", "노출 차이",
             "캠페인명", "계정명", "캠페인유형",
         ]
     elif mode == "성과":
         preferred = [
-            "광고그룹", "신호 등급", "핵심 신호", "업무 신호", "구매완료수", "구매완료 증감", "구매완료 차이",
+            "광고그룹", "우선순위", "핵심 신호", "판단 근거", "다음 확인", "구매완료수", "구매완료 증감", "구매완료 차이",
             "구매완료 매출", "구매완료 매출 증감", "구매완료 매출 차이",
             "총 전환수", "총 전환 증감", "총 전환 차이",
             "총 전환매출", "총 매출 증감", "총 매출 차이",
@@ -2101,7 +2141,7 @@ def _overview_group_preset_order(view_cols: list[str], mode: str) -> list[str]:
         ]
     elif mode == "효율":
         preferred = [
-            "광고그룹", "신호 등급", "핵심 신호", "업무 신호", "클릭률(%)", "클릭률 증감",
+            "광고그룹", "우선순위", "핵심 신호", "판단 근거", "다음 확인", "클릭률(%)", "클릭률 증감",
             "CPC", "CPC 증감", "CPC 차이",
             "구매 전환율(%)", "구매 전환율 증감",
             "구매완료 ROAS(%)", "구매완료 ROAS 증감",
@@ -2149,7 +2189,7 @@ def _overview_group_custom_order(view_cols: list[str], show_deltas: bool) -> lis
 def _overview_export_cols(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame() if df is None else df
-    hidden = {c for c in df.columns if str(c).startswith("b_") or str(c) == "avg_rank"}
+    hidden = {c for c in df.columns if str(c).startswith("b_") or str(c).startswith("_") or str(c) == "avg_rank"}
     return df[[c for c in df.columns if c not in hidden]].copy()
 
 
@@ -2703,7 +2743,7 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
             with group_tool_a:
                 group_preset = st.segmented_control(
                     "그룹 업무 보기",
-                    ["전체", "주의", "확인", "관찰", "정상", "CPC 상승", "순위 하락", "비용 상위", "클릭 저조", "노출 저조"],
+                    ["전체", "P1 조치", "P2 확인", "P3 관찰", "OK 정상", "CPC 상승", "순위 하락", "비용 상위", "클릭 저조", "노출 저조"],
                     default="전체",
                     key="overview_group_preset",
                 )

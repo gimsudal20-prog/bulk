@@ -2023,6 +2023,76 @@ def _overview_group_visible_cols(df: pd.DataFrame, show_deltas: bool, funnel_col
     return seen
 
 
+def _overview_cols_by_preference(view_cols: list[str], preferred_cols: list[str]) -> list[str]:
+    preferred = [c for c in preferred_cols if c in view_cols]
+    return preferred + [c for c in view_cols if c not in preferred]
+
+
+def _overview_group_preset_order(view_cols: list[str], mode: str) -> list[str]:
+    if not view_cols or mode == "기본":
+        return view_cols
+    if mode == "운영":
+        preferred = [
+            "광고그룹", "업무 신호", "지출 비중(%)", "광고비", "광고비 증감", "광고비 차이",
+            "CPC", "CPC 증감", "CPC 차이", "평균순위", "순위 변화",
+            "클릭수", "클릭 증감", "클릭 차이", "노출수", "노출 증감", "노출 차이",
+            "캠페인명", "계정명", "캠페인유형",
+        ]
+    elif mode == "성과":
+        preferred = [
+            "광고그룹", "업무 신호", "구매완료수", "구매완료 증감", "구매완료 차이",
+            "구매완료 매출", "구매완료 매출 증감", "구매완료 매출 차이",
+            "총 전환수", "총 전환 증감", "총 전환 차이",
+            "총 전환매출", "총 매출 증감", "총 매출 차이",
+            "광고비", "지출 비중(%)", "캠페인명", "계정명", "캠페인유형",
+        ]
+    elif mode == "효율":
+        preferred = [
+            "광고그룹", "업무 신호", "클릭률(%)", "클릭률 증감",
+            "CPC", "CPC 증감", "CPC 차이",
+            "구매 전환율(%)", "구매 전환율 증감",
+            "구매완료 ROAS(%)", "구매완료 ROAS 증감",
+            "통합 ROAS(%)", "통합 ROAS 증감",
+            "광고비", "지출 비중(%)", "캠페인명", "계정명", "캠페인유형",
+        ]
+    else:
+        return view_cols
+    return _overview_cols_by_preference(view_cols, preferred)
+
+
+def _overview_group_custom_order(view_cols: list[str], show_deltas: bool) -> list[str]:
+    if not view_cols:
+        return view_cols
+    fixed_cols = [c for c in ["광고그룹"] if c in view_cols]
+    editable_cols = [c for c in view_cols if c not in fixed_cols]
+    state_key = "overview_group_custom_column_order"
+    saved = st.session_state.get(state_key, [])
+    saved = [c for c in saved if c in editable_cols] + [c for c in editable_cols if c not in saved]
+
+    order_df = pd.DataFrame({"컬럼": saved, "순서": list(range(1, len(saved) + 1))})
+    edited = st.data_editor(
+        order_df,
+        width="stretch",
+        hide_index=True,
+        disabled=["컬럼"],
+        key=f"overview_group_column_order_editor_{int(show_deltas)}_{len(editable_cols)}",
+        column_config={
+            "컬럼": st.column_config.TextColumn("컬럼", width="medium"),
+            "순서": st.column_config.NumberColumn("순서", min_value=1, step=1, format="%d"),
+        },
+    )
+    if isinstance(edited, pd.DataFrame) and {"컬럼", "순서"}.issubset(edited.columns):
+        edited = edited.copy()
+        edited["_default_order"] = range(len(edited.index))
+        edited["_sort_order"] = pd.to_numeric(edited["순서"], errors="coerce").fillna(9999)
+        ordered = edited.sort_values(["_sort_order", "_default_order"])["컬럼"].astype(str).tolist()
+        ordered = [c for c in ordered if c in editable_cols]
+        st.session_state[state_key] = ordered
+        return fixed_cols + ordered
+    st.session_state[state_key] = saved
+    return fixed_cols + saved
+
+
 def _overview_export_cols(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame() if df is None else df
@@ -2576,17 +2646,29 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
     elif detail_panel == "그룹 상세 분석":
         if not group_disp.empty:
             _render_overview_group_signal_cards(group_disp, cmp_mode, b1, b2)
-            group_preset = st.segmented_control(
-                "그룹 업무 보기",
-                ["전체", "CPC 상승", "순위 하락", "비용 상위", "클릭 저조", "노출 저조"],
-                default="전체",
-                key="overview_group_preset",
-            )
+            group_tool_a, group_tool_b = st.columns([1.45, 1], gap="small")
+            with group_tool_a:
+                group_preset = st.segmented_control(
+                    "그룹 업무 보기",
+                    ["전체", "CPC 상승", "순위 하락", "비용 상위", "클릭 저조", "노출 저조"],
+                    default="전체",
+                    key="overview_group_preset",
+                )
+            with group_tool_b:
+                group_col_order = st.segmented_control(
+                    "컬럼 순서",
+                    ["기본", "운영", "성과", "효율", "직접"],
+                    default="기본",
+                    key="overview_group_col_order",
+                )
             group_work = _sort_overview_group_workbench(_filter_overview_group_workbench(group_disp, group_preset), group_preset)
             if group_work.empty:
                 st.info("선택한 그룹 업무 보기 조건에 맞는 광고그룹이 없습니다.")
             else:
                 view_cols = _overview_group_visible_cols(group_work, show_deltas, get_funnel_cols(show_deltas))
+                view_cols = _overview_group_preset_order(view_cols, group_col_order)
+                if group_col_order == "직접":
+                    view_cols = _overview_group_custom_order(view_cols, show_deltas)
                 disp_group = group_work[view_cols].head(500).copy()
                 styled_group_df = disp_group.style.format(fmt_dict_standard)
                 styled_group_df = _apply_overview_delta_styles(styled_group_df, disp_group)

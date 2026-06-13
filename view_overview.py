@@ -1845,10 +1845,21 @@ def _overview_keyword_visible_cols(df: pd.DataFrame, show_deltas: bool, mode: st
 def _overview_group_signal_masks(df: pd.DataFrame) -> dict[str, pd.Series]:
     if df is None or df.empty:
         empty = pd.Series(dtype=bool)
-        return {"cpc_up": empty, "rank_down": empty, "cost_high": empty, "click_low": empty, "imp_low": empty}
+        return {
+            "cpc_up": empty, "roas_down": empty, "rank_down": empty, "cost_high": empty, "click_low": empty, "imp_low": empty,
+            "cost_leak": empty, "efficiency_down": empty, "exposure_weak": empty,
+            "growth_candidate": empty, "data_sparse": empty, "normal": empty,
+        }
 
     idx = df.index
+    imp = safe_numeric_col(df, "노출수")
+    clk = safe_numeric_col(df, "클릭수")
     cost = safe_numeric_col(df, "광고비")
+    total_conv = safe_numeric_col(df, "총 전환수")
+    purchase_conv = safe_numeric_col(df, "구매완료수")
+    total_roas = safe_numeric_col(df, "통합 ROAS(%)")
+    purchase_roas = safe_numeric_col(df, "구매완료 ROAS(%)")
+    cost_share = safe_numeric_col(df, "지출 비중(%)")
     base_clk = safe_numeric_col(df, "b_clk")
     base_cost = safe_numeric_col(df, "b_cost")
     base_imp = safe_numeric_col(df, "b_imp")
@@ -1856,13 +1867,44 @@ def _overview_group_signal_masks(df: pd.DataFrame) -> dict[str, pd.Series]:
     cost_rank = cost.rank(method="first", ascending=False)
     high_cost_cut = min(len(df.index), max(3, int(np.ceil(len(df.index) * 0.1))))
 
-    return {
-        "cpc_up": pd.Series((safe_numeric_col(df, "CPC 차이") > 0) & (base_cpc > 0), index=idx).fillna(False),
-        "rank_down": pd.Series((safe_numeric_col(df, "순위 변화", default=np.nan) > 0) & (safe_numeric_col(df, "b_avg_rank", default=np.nan) > 0), index=idx).fillna(False),
+    cpc_diff = safe_numeric_col(df, "CPC 차이")
+    cpc_pct = safe_numeric_col(df, "CPC 증감")
+    rank_change = safe_numeric_col(df, "순위 변화", default=np.nan)
+    click_diff = safe_numeric_col(df, "클릭 차이")
+    click_pct = safe_numeric_col(df, "클릭 증감")
+    imp_diff = safe_numeric_col(df, "노출 차이")
+    imp_pct = safe_numeric_col(df, "노출 증감")
+    roas_delta = safe_numeric_col(df, "통합 ROAS 증감", default=np.nan)
+    purchase_roas_delta = safe_numeric_col(df, "구매완료 ROAS 증감", default=np.nan)
+
+    enough_cost = cost >= 1000
+    enough_click_base = base_clk >= 5
+    enough_imp_base = base_imp >= 50
+    median_cost = float(cost.median()) if pd.notna(cost.median()) else 0.0
+    cpc_up_mask = enough_cost & enough_click_base & (clk >= 3) & (base_cpc > 0) & (cpc_diff > 0) & ((cpc_pct >= 20) | (cpc_diff >= 100))
+    roas_down_mask = enough_cost & ((roas_delta <= -30) | (purchase_roas_delta <= -30))
+    rank_down_mask = (rank_change >= 1) & (safe_numeric_col(df, "b_avg_rank", default=np.nan) > 0) & (enough_imp_base | enough_cost)
+    click_low_mask = enough_click_base & (click_diff <= -3) & (click_pct <= -20)
+    imp_low_mask = enough_imp_base & (imp_diff <= -50) & (imp_pct <= -20)
+    masks = {
+        "cpc_up": pd.Series(cpc_up_mask, index=idx).fillna(False),
+        "roas_down": pd.Series(roas_down_mask, index=idx).fillna(False),
+        "rank_down": pd.Series(rank_down_mask, index=idx).fillna(False),
         "cost_high": pd.Series((cost > 0) & (cost_rank <= high_cost_cut), index=idx).fillna(False),
-        "click_low": pd.Series((safe_numeric_col(df, "클릭 차이") < 0) & (base_clk > 0), index=idx).fillna(False),
-        "imp_low": pd.Series((safe_numeric_col(df, "노출 차이") < 0) & (base_imp > 0), index=idx).fillna(False),
+        "click_low": pd.Series(click_low_mask, index=idx).fillna(False),
+        "imp_low": pd.Series(imp_low_mask, index=idx).fillna(False),
+        "cost_leak": pd.Series(enough_cost & (clk >= 3) & (total_conv <= 0) & (purchase_conv <= 0), index=idx).fillna(False),
+        "efficiency_down": pd.Series(cpc_up_mask | roas_down_mask, index=idx).fillna(False),
+        "exposure_weak": pd.Series(rank_down_mask | imp_low_mask, index=idx).fillna(False),
+        "growth_candidate": pd.Series((total_conv > 0) & ((total_roas >= 300) | (purchase_roas >= 300)) & ((cost_share <= 5) | (cost < median_cost)), index=idx).fillna(False),
+        "data_sparse": pd.Series((cost > 0) & ((imp < 50) | (clk < 3) | (cost < 1000)), index=idx).fillna(False),
     }
+    category_cols = ["cost_leak", "efficiency_down", "exposure_weak", "growth_candidate", "data_sparse"]
+    has_category = pd.Series(False, index=idx)
+    for key in category_cols:
+        has_category = has_category | masks[key].reindex(idx, fill_value=False)
+    masks["normal"] = (~has_category).fillna(False)
+    return masks
 
 
 def _format_overview_signed_pct(value) -> str:
@@ -1918,7 +1960,26 @@ def _format_overview_signed_count(value) -> str:
         return "-"
 
 
-def _overview_group_signal_evidence(row: pd.Series, active: list[str]) -> str:
+def _overview_group_signal_evidence(row: pd.Series, judgment: str, active: list[str]) -> str:
+    if judgment == "비용 누수":
+        return (
+            f"광고비 {format_currency(float(row.get('광고비', 0) or 0))} · "
+            f"클릭 {float(row.get('클릭수', 0) or 0):,.0f} · "
+            f"전환 {float(row.get('총 전환수', 0) or 0):,.0f}"
+        )
+    if judgment == "확장 후보":
+        roas = float(row.get("통합 ROAS(%)", 0) or row.get("구매완료 ROAS(%)", 0) or 0)
+        return (
+            f"ROAS {roas:,.1f}% · "
+            f"전환 {float(row.get('총 전환수', 0) or 0):,.0f} · "
+            f"지출 비중 {float(row.get('지출 비중(%)', 0) or 0):.1f}%"
+        )
+    if judgment == "데이터 부족":
+        return (
+            f"노출 {float(row.get('노출수', 0) or 0):,.0f} · "
+            f"클릭 {float(row.get('클릭수', 0) or 0):,.0f} · "
+            f"광고비 {format_currency(float(row.get('광고비', 0) or 0))}"
+        )
     if not active:
         return "특이 변화 없음"
     parts: list[str] = []
@@ -1933,79 +1994,85 @@ def _overview_group_signal_evidence(row: pd.Series, active: list[str]) -> str:
             parts.append(f"노출 {_format_overview_signed_count(row.get('노출 차이'))} ({_format_overview_signed_pct(row.get('노출 증감'))})")
         elif signal == "비용 상위":
             parts.append(f"지출 비중 {float(row.get('지출 비중(%)', 0) or 0):.1f}%")
+        elif signal == "ROAS 하락":
+            parts.append(f"ROAS {_format_overview_signed_pct(row.get('통합 ROAS 증감'))}")
     return " · ".join([p for p in parts if p][:3]) or "특이 변화 없음"
 
 
-def _overview_group_next_action(active: list[str]) -> str:
-    if not active:
+def _overview_group_check_target(judgment: str, active: list[str]) -> str:
+    if judgment == "비용 누수":
+        return "검색어·소재·랜딩"
+    if judgment == "효율 악화":
+        return "입찰가·CPC·ROAS"
+    if judgment == "노출 약화":
+        return "예산·순위·노출"
+    if judgment == "확장 후보":
+        return "예산 증액 후보"
+    if judgment == "데이터 부족":
+        return "기간 확대 후 판단"
+    if judgment == "정상":
         return "유지"
     action_map = {
-        "CPC 상승": "입찰가와 품질요인 확인",
-        "순위 하락": "입찰·경쟁 변화 확인",
-        "클릭 저조": "소재·상품명·검색어 확인",
-        "노출 저조": "예산·노출 제한 확인",
-        "비용 상위": "예산 배분 우선 검토",
+        "CPC 상승": "입찰가·품질요인",
+        "순위 하락": "입찰·경쟁 변화",
+        "클릭 저조": "소재·상품명·검색어",
+        "노출 저조": "예산·노출 제한",
+        "비용 상위": "예산 배분",
     }
-    return action_map.get(active[0], "확인")
+    return action_map.get(active[0], "확인") if active else "유지"
 
 
-def _overview_group_priority(active: list[str]) -> tuple[str, int]:
-    score = 0
-    if "CPC 상승" in active:
-        score += 45
-    if "순위 하락" in active:
-        score += 40
-    if "클릭 저조" in active:
-        score += 28
-    if "노출 저조" in active:
-        score += 20
-    if "비용 상위" in active:
-        score += 10
-    if score >= 45:
-        return "조치 필요", score
-    if score >= 20:
-        return "확인 필요", score
-    if score > 0:
-        return "관찰", score
-    return "정상", score
+def _overview_group_judgment(masks: dict[str, pd.Series], idx) -> tuple[str, int]:
+    if bool(masks["cost_leak"].get(idx, False)):
+        return "비용 누수", 90
+    if bool(masks["efficiency_down"].get(idx, False)):
+        return "효율 악화", 75
+    if bool(masks["exposure_weak"].get(idx, False)):
+        return "노출 약화", 60
+    if bool(masks["growth_candidate"].get(idx, False)):
+        return "확장 후보", 45
+    if bool(masks["data_sparse"].get(idx, False)):
+        return "데이터 부족", 15
+    return "정상", 0
 
 
 def _add_overview_group_status(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame() if df is None else df
     work = df.copy()
-    if {"검토 상태", "핵심 신호", "판단 근거", "다음 확인"}.issubset(set(work.columns)):
+    if {"운영 판단", "판단 근거", "확인 대상"}.issubset(set(work.columns)):
         return work
-    signal_cols = ["신호 등급", "우선순위", "검토 상태", "핵심 신호", "업무 신호", "판단 근거", "다음 확인", "_신호 점수"]
+    signal_cols = ["신호 등급", "우선순위", "검토 상태", "운영 판단", "핵심 신호", "업무 신호", "판단 근거", "다음 확인", "확인 대상", "_신호 점수"]
     work = work.drop(columns=[c for c in signal_cols if c in work.columns])
     masks = _overview_group_signal_masks(work)
-    labels = [
+    signal_labels = [
         ("CPC 상승", masks["cpc_up"]),
+        ("ROAS 하락", masks["roas_down"]),
         ("순위 하락", masks["rank_down"]),
         ("클릭 저조", masks["click_low"]),
         ("노출 저조", masks["imp_low"]),
         ("비용 상위", masks["cost_high"]),
     ]
-    review_states = []
+    judgments = []
     primary_signals = []
     signals = []
     evidences = []
-    next_actions = []
+    check_targets = []
     scores = []
     for idx in work.index:
-        active = [label for label, mask in labels if bool(mask.get(idx, False))]
-        review_state, score = _overview_group_priority(active)
-        review_states.append(review_state)
-        primary_signals.append(active[0] if active else "정상")
+        active = [label for label, mask in signal_labels if bool(mask.get(idx, False))]
+        judgment, score = _overview_group_judgment(masks, idx)
+        judgments.append(judgment)
+        primary_signals.append(active[0] if active else judgment)
         signals.append(" · ".join(active) if active else "정상")
-        evidences.append(_overview_group_signal_evidence(work.loc[idx], active))
-        next_actions.append(_overview_group_next_action(active))
+        evidences.append(_overview_group_signal_evidence(work.loc[idx], judgment, active))
+        check_targets.append(_overview_group_check_target(judgment, active))
         scores.append(score)
     insert_at = 1 if "광고그룹" in work.columns else 0
-    work.insert(insert_at, "검토 상태", review_states)
+    work.insert(insert_at, "운영 판단", judgments)
     work.insert(insert_at + 1, "핵심 신호", primary_signals)
     work.insert(insert_at + 2, "판단 근거", evidences)
-    work.insert(insert_at + 3, "다음 확인", next_actions)
+    work.insert(insert_at + 3, "확인 대상", check_targets)
     work.insert(insert_at + 4, "업무 신호", signals)
     work["_신호 점수"] = scores
     return work
@@ -2014,8 +2081,8 @@ def _add_overview_group_status(df: pd.DataFrame) -> pd.DataFrame:
 def _filter_overview_group_workbench(df: pd.DataFrame, preset: str) -> pd.DataFrame:
     if df is None or df.empty or preset == "전체":
         return pd.DataFrame() if df is None else df
-    if preset in {"조치 필요", "확인 필요", "관찰", "정상"} and "검토 상태" in df.columns:
-        return df[df["검토 상태"].astype(str) == str(preset)].copy()
+    if preset in {"비용 누수", "효율 악화", "노출 약화", "확장 후보", "데이터 부족", "정상"} and "운영 판단" in df.columns:
+        return df[df["운영 판단"].astype(str) == str(preset)].copy()
     masks = _overview_group_signal_masks(df)
     key_map = {
         "CPC 상승": "cpc_up",
@@ -2033,7 +2100,7 @@ def _filter_overview_group_workbench(df: pd.DataFrame, preset: str) -> pd.DataFr
 def _sort_overview_group_workbench(df: pd.DataFrame, preset: str) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame() if df is None else df
-    if preset in {"전체", "조치 필요", "확인 필요", "관찰", "정상"} and "_신호 점수" in df.columns:
+    if preset in {"전체", "비용 누수", "효율 악화", "노출 약화", "확장 후보", "데이터 부족", "정상"} and "_신호 점수" in df.columns:
         sort_cols = ["_신호 점수"] + (["광고비"] if "광고비" in df.columns else [])
         return df.sort_values(sort_cols, ascending=[False] * len(sort_cols)).reset_index(drop=True)
     sort_map = {
@@ -2049,54 +2116,62 @@ def _sort_overview_group_workbench(df: pd.DataFrame, preset: str) -> pd.DataFram
     return df.sort_values(sort_col, ascending=ascending).reset_index(drop=True)
 
 
+def _overview_top_operational_note(df: pd.DataFrame, mask: pd.Series, sort_col: str = "광고비") -> str:
+    if df is None or df.empty:
+        return "해당 그룹 없음"
+    work = df[mask.reindex(df.index, fill_value=False)].copy()
+    if work.empty:
+        return "해당 그룹 없음"
+    if sort_col not in work.columns:
+        sort_col = "광고비" if "광고비" in work.columns else work.columns[0]
+    work["_sort"] = pd.to_numeric(work[sort_col], errors="coerce").fillna(0)
+    row = work.sort_values("_sort", ascending=False).iloc[0]
+    group_name = str(row.get("광고그룹", "-") or "-")
+    if len(group_name) > 22:
+        group_name = f"{group_name[:22]}..."
+    evidence = str(row.get("판단 근거", "") or "")
+    return f"{group_name} · {evidence}" if evidence else group_name
+
+
 def _render_overview_group_signal_cards(df: pd.DataFrame, cmp_mode: str, b1, b2) -> None:
     if df is None or df.empty:
         return
     masks = _overview_group_signal_masks(df)
-    top_cost = df.sort_values("광고비", ascending=False).iloc[0] if "광고비" in df.columns else None
-    top_cost_value = "-"
-    top_cost_note = "해당 그룹 없음"
-    if top_cost is not None:
-        top_cost_value = format_currency(float(top_cost.get("광고비", 0) or 0))
-        group_name = str(top_cost.get("광고그룹", "-") or "-")
-        if len(group_name) > 22:
-            group_name = f"{group_name[:22]}..."
-        top_cost_note = f"{group_name} · 전체 {float(top_cost.get('지출 비중(%)', 0) or 0):.1f}%"
     render_ops_cards([
         {
-            "title": "CPC 상승",
-            "value": f"{int(masks['cpc_up'].sum()):,}개",
-            "note": _overview_top_group_note(df, masks["cpc_up"], "CPC 차이", "CPC 증감", _format_overview_signed_pct),
-            "tone": "danger" if bool(masks["cpc_up"].any()) else "success",
-            "icon": "CPC",
+            "title": "비용 누수",
+            "value": f"{int(masks['cost_leak'].sum()):,}개",
+            "note": _overview_top_operational_note(df, masks["cost_leak"], "광고비"),
+            "tone": "danger" if bool(masks["cost_leak"].any()) else "success",
+            "icon": "누수",
         },
         {
-            "title": "순위 하락",
-            "value": f"{int(masks['rank_down'].sum()):,}개",
-            "note": _overview_top_group_note(df, masks["rank_down"], "순위 변화", "순위 변화", _format_overview_signed_rank),
-            "tone": "danger" if bool(masks["rank_down"].any()) else "success",
-            "icon": "R",
+            "title": "효율 악화",
+            "value": f"{int(masks['efficiency_down'].sum()):,}개",
+            "note": _overview_top_operational_note(df, masks["efficiency_down"], "광고비"),
+            "tone": "danger" if bool(masks["efficiency_down"].any()) else "success",
+            "icon": "효율",
         },
         {
-            "title": "비용 상위",
-            "value": top_cost_value,
-            "note": top_cost_note,
-            "tone": "warning",
-            "icon": "비용",
+            "title": "노출 약화",
+            "value": f"{int(masks['exposure_weak'].sum()):,}개",
+            "note": _overview_top_operational_note(df, masks["exposure_weak"], "광고비"),
+            "tone": "warning" if bool(masks["exposure_weak"].any()) else "success",
+            "icon": "노출",
         },
         {
-            "title": "클릭 저조",
-            "value": f"{int(masks['click_low'].sum()):,}개",
-            "note": _overview_top_group_note(df, masks["click_low"], "클릭 증감", "클릭 증감", _format_overview_signed_pct, ascending=True),
-            "tone": "warning" if bool(masks["click_low"].any()) else "success",
-            "icon": "CLK",
+            "title": "확장 후보",
+            "value": f"{int(masks['growth_candidate'].sum()):,}개",
+            "note": _overview_top_operational_note(df, masks["growth_candidate"], "통합 ROAS(%)"),
+            "tone": "success" if bool(masks["growth_candidate"].any()) else "info",
+            "icon": "확장",
         },
         {
-            "title": "노출 저조",
-            "value": f"{int(masks['imp_low'].sum()):,}개",
-            "note": _overview_top_group_note(df, masks["imp_low"], "노출 증감", "노출 증감", _format_overview_signed_pct, ascending=True),
-            "tone": "warning" if bool(masks["imp_low"].any()) else "success",
-            "icon": "IMP",
+            "title": "데이터 부족",
+            "value": f"{int(masks['data_sparse'].sum()):,}개",
+            "note": _overview_top_operational_note(df, masks["data_sparse"], "광고비"),
+            "tone": "info" if bool(masks["data_sparse"].any()) else "success",
+            "icon": "보류",
         },
     ])
     st.caption(f"비교 기준: {cmp_mode} · {b1} ~ {b2}")
@@ -2106,7 +2181,7 @@ def _overview_group_visible_cols(df: pd.DataFrame, show_deltas: bool, funnel_col
     if df is None or df.empty:
         return []
     cols = [
-        "광고그룹", "검토 상태", "핵심 신호", "판단 근거", "다음 확인", "캠페인명", "계정명", "캠페인유형", "지출 비중(%)",
+        "광고그룹", "운영 판단", "판단 근거", "확인 대상", "캠페인명", "계정명", "캠페인유형", "지출 비중(%)",
         *[c for c in funnel_cols if c in df.columns],
     ]
     seen = []
@@ -2126,14 +2201,14 @@ def _overview_group_preset_order(view_cols: list[str], mode: str) -> list[str]:
         return view_cols
     if mode == "운영":
         preferred = [
-            "광고그룹", "검토 상태", "핵심 신호", "판단 근거", "다음 확인", "지출 비중(%)", "광고비", "광고비 증감", "광고비 차이",
+            "광고그룹", "운영 판단", "판단 근거", "확인 대상", "지출 비중(%)", "광고비", "광고비 증감", "광고비 차이",
             "CPC", "CPC 증감", "CPC 차이", "평균순위", "순위 변화",
             "클릭수", "클릭 증감", "클릭 차이", "노출수", "노출 증감", "노출 차이",
             "캠페인명", "계정명", "캠페인유형",
         ]
     elif mode == "성과":
         preferred = [
-            "광고그룹", "검토 상태", "핵심 신호", "판단 근거", "다음 확인", "구매완료수", "구매완료 증감", "구매완료 차이",
+            "광고그룹", "운영 판단", "판단 근거", "확인 대상", "구매완료수", "구매완료 증감", "구매완료 차이",
             "구매완료 매출", "구매완료 매출 증감", "구매완료 매출 차이",
             "총 전환수", "총 전환 증감", "총 전환 차이",
             "총 전환매출", "총 매출 증감", "총 매출 차이",
@@ -2141,7 +2216,7 @@ def _overview_group_preset_order(view_cols: list[str], mode: str) -> list[str]:
         ]
     elif mode == "효율":
         preferred = [
-            "광고그룹", "검토 상태", "핵심 신호", "판단 근거", "다음 확인", "클릭률(%)", "클릭률 증감",
+            "광고그룹", "운영 판단", "판단 근거", "확인 대상", "클릭률(%)", "클릭률 증감",
             "CPC", "CPC 증감", "CPC 차이",
             "구매 전환율(%)", "구매 전환율 증감",
             "구매완료 ROAS(%)", "구매완료 ROAS 증감",
@@ -2743,7 +2818,7 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
             with group_tool_a:
                 group_preset = st.segmented_control(
                     "그룹 업무 보기",
-                    ["전체", "조치 필요", "확인 필요", "관찰", "정상", "CPC 상승", "순위 하락", "비용 상위", "클릭 저조", "노출 저조"],
+                    ["전체", "비용 누수", "효율 악화", "노출 약화", "확장 후보", "데이터 부족", "정상"],
                     default="전체",
                     key="overview_group_preset",
                 )

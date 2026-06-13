@@ -111,11 +111,16 @@ def _is_display_numeric_column(df: pd.DataFrame, col: str) -> bool:
 
 def _infer_number_format(col: str, series: pd.Series | None = None) -> str:
     name = str(col or "")
-    is_delta = any(token in name for token in ["증감", "차이", "변화"])
+    is_change_rate = "증감" in name
+    is_delta_amount = any(token in name for token in ["차이", "변화"])
+    is_delta = is_change_rate or is_delta_amount
     is_currency = any(token in name for token in ["원", "비용", "광고비", "예산", "잔액", "매출", "소진", "CPC", "CPA", "cpc", "cpa"])
     is_pct = any(token in name for token in ["%", "율", "ROAS", "CTR", "CVR", "roas", "ctr", "cvr"])
     if "잔여일수" in name or (name.endswith("일수") and not is_delta):
         return "%,.1f 일"
+    if is_change_rate:
+        decimals = 2 if any(token in name for token in ["CTR", "CVR", "클릭률", "전환율"]) else 1
+        return f"%+,.{decimals}f %%"
     if is_currency:
         return "%+,.0f 원" if is_delta else "%,.0f 원"
     if is_pct:

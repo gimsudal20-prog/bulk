@@ -3017,7 +3017,7 @@ def query_shopping_search_terms(_engine, d1: date, d2: date, cids: tuple) -> pd.
 
 
 @st.cache_data(ttl=DASHBOARD_DATA_CACHE_TTL, max_entries=40, show_spinner=False)
-def query_shopping_placement_performance(_engine, d1: date, d2: date, cids: tuple) -> pd.DataFrame:
+def query_shopping_placement_performance(_engine, d1: date, d2: date, cids: tuple, type_sel: tuple = ()) -> pd.DataFrame:
     if not table_exists(_engine, "fact_adgroup_placement_daily"):
         return pd.DataFrame()
     cols = set(get_table_columns(_engine, "fact_adgroup_placement_daily"))
@@ -3047,7 +3047,8 @@ def query_shopping_placement_performance(_engine, d1: date, d2: date, cids: tupl
     type_label_sql = _budget_campaign_type_case_sql(type_source_sql)
     type_where_sql = ""
     if type_filter_source_sql:
-        type_where_sql, type_params = _build_in_filter(type_filter_source_sql, _BUDGET_CAMPAIGN_TYPE_FILTER_VALUES, "placement_campaign_type")
+        type_filter_values = _expand_campaign_type_filter_values(type_sel) or list(_BUDGET_CAMPAIGN_TYPE_FILTER_VALUES)
+        type_where_sql, type_params = _build_in_filter(type_filter_source_sql, type_filter_values, "placement_campaign_type")
 
     sql = f"""
         SELECT

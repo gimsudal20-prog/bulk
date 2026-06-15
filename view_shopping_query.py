@@ -228,7 +228,7 @@ def _render_shopping_search_terms_tab(meta: pd.DataFrame, engine, f: Dict, cids:
     filtered, filter_state = _render_filter_panel(view)
 
     display_cols = [
-        "업체명", "캠페인", "광고그룹", "실제 검색어", "전환출처",
+        "캠페인", "광고그룹", "실제 검색어", "전환출처",
         "구매완료수", "구매완료 매출", "장바구니수", "총 전환수", "총 전환매출",
         "구매완료수 증감", "구매완료 매출 증감", "총 전환수 증감",
     ]
@@ -416,7 +416,7 @@ def _render_shopping_placement_tab(meta: pd.DataFrame, engine, f: Dict, cids: tu
     _render_placement_cards(view)
     filtered, filter_state = _render_placement_filter_panel(view)
     display_cols = [
-        "업체명", "캠페인유형", "캠페인", "광고그룹", "지면", "기기",
+        "캠페인유형", "캠페인", "광고그룹", "지면", "기기",
         "노출수", "클릭수", "CTR(%)", "CPC", "광고비",
         "구매완료수", "구매완료 매출", "구매완료 ROAS(%)",
         "총 전환수", "총 전환매출", "총 ROAS(%)",

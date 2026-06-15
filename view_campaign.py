@@ -15,6 +15,7 @@ from data import (
     query_campaign_bundle,
     query_keyword_bundle,
     query_ad_bundle,
+    query_shopping_placement_performance,
     query_shopping_query_adgroup_purchase_summary,
     query_campaign_off_log,
     load_dim_campaign,
@@ -242,6 +243,14 @@ def _apply_shopping_adgroup_purchase_override(group_df: pd.DataFrame, engine, d1
             merged.loc[mask & replacement.notna(), c] = replacement[mask & replacement.notna()]
     drop_cols = [c for c in merged.columns if c.endswith("__shopping_query")]
     return merged.drop(columns=drop_cols)
+
+
+@st.cache_data(ttl=DASHBOARD_DATA_CACHE_TTL, max_entries=8, show_spinner=False)
+def _cached_campaign_group_placement(_engine, d1, d2, cids: tuple, type_sel: tuple) -> pd.DataFrame:
+    try:
+        return query_shopping_placement_performance(_engine, d1, d2, cids, type_sel)
+    except Exception:
+        return pd.DataFrame()
 
 
 def _format_avg_rank(value):
@@ -942,6 +951,120 @@ def _group_mode_columns(show_deltas_grp: bool, show_mode: str) -> list[str]:
     return ["노출", "클릭", "CTR(%)", "CPC(원)", "광고비", "장바구니수", "장바구니 매출액", "장바구니 ROAS(%)", "구매완료수", "구매완료 매출", "구매 ROAS(%)", "총 전환수", "총 전환매출", "통합 ROAS(%)"]
 
 
+def _campaign_placement_label(value) -> str:
+    raw = str(value or "").strip().upper()
+    if raw == "SEARCH":
+        return "검색"
+    if raw == "CONTENT":
+        return "콘텐츠"
+    return str(value or "미분류")
+
+
+def _prepare_campaign_group_placement_source(place_df: pd.DataFrame) -> pd.DataFrame:
+    if place_df is None or place_df.empty or "placement_type" not in place_df.columns:
+        return pd.DataFrame()
+    work = place_df.copy()
+    work["placement_type"] = work["placement_type"].astype(str).str.strip().str.upper()
+    work = work[work["placement_type"].isin(["SEARCH", "CONTENT"])].copy()
+    if work.empty:
+        return pd.DataFrame()
+    metric_cols = ["imp", "clk", "cost", "conv", "sales", "purchase_conv", "purchase_sales"]
+    for col in metric_cols:
+        if col not in work.columns:
+            work[col] = 0.0
+        work[col] = pd.to_numeric(work[col], errors="coerce").fillna(0.0)
+    group_keys = [
+        c for c in [
+            "customer_id", "campaign_id", "adgroup_id", "placement_type",
+            "campaign_type_label", "campaign_name", "adgroup_name",
+        ]
+        if c in work.columns
+    ]
+    if not group_keys:
+        return pd.DataFrame()
+    grouped = work.groupby(group_keys, as_index=False, dropna=False)[metric_cols].sum()
+    total_conv = pd.to_numeric(grouped.get("conv", 0.0), errors="coerce").fillna(0.0)
+    total_sales = pd.to_numeric(grouped.get("sales", 0.0), errors="coerce").fillna(0.0)
+    purchase_conv = pd.to_numeric(grouped.get("purchase_conv", 0.0), errors="coerce").fillna(0.0)
+    purchase_sales = pd.to_numeric(grouped.get("purchase_sales", 0.0), errors="coerce").fillna(0.0)
+    grouped["conv"] = purchase_conv
+    grouped["sales"] = purchase_sales
+    grouped["tot_conv"] = np.maximum(total_conv, purchase_conv)
+    grouped["tot_sales"] = np.maximum(total_sales, purchase_sales)
+    return grouped
+
+
+def _build_campaign_group_placement_df(cur_place: pd.DataFrame, base_place: pd.DataFrame) -> pd.DataFrame:
+    cur = _prepare_campaign_group_placement_source(cur_place)
+    if cur.empty:
+        return pd.DataFrame()
+    grouped = cur.rename(columns={
+        "campaign_type_label": "캠페인유형",
+        "campaign_name": "캠페인",
+        "adgroup_name": "광고그룹",
+        "imp": "노출",
+        "clk": "클릭",
+        "cost": "광고비",
+        "conv": "구매완료수",
+        "sales": "구매완료 매출",
+    }).copy()
+    grouped["지면"] = grouped["placement_type"].apply(_campaign_placement_label)
+    grouped = _add_perf_metrics(grouped)
+    valid_keys = [k for k in ["customer_id", "campaign_id", "adgroup_id", "placement_type"] if k in grouped.columns]
+    base = _prepare_campaign_group_placement_source(base_place)
+    if not base.empty and valid_keys:
+        grouped = _apply_comparison_metrics(grouped, base, valid_keys)
+    else:
+        grouped = _apply_comparison_metrics(grouped, pd.DataFrame(), valid_keys)
+    grouped["_지면순서"] = grouped["지면"].map({"검색": 0, "콘텐츠": 1}).fillna(9)
+    sort_cols = [c for c in ["캠페인", "광고그룹", "_지면순서"] if c in grouped.columns]
+    return grouped.sort_values(sort_cols).reset_index(drop=True)
+
+
+def _filter_campaign_group_placement_rows(place_df: pd.DataFrame, group_df: pd.DataFrame) -> pd.DataFrame:
+    if place_df is None or place_df.empty:
+        return pd.DataFrame()
+    if group_df is None or group_df.empty:
+        return pd.DataFrame()
+    key_cols = [c for c in ["customer_id", "campaign_id", "adgroup_id"] if c in place_df.columns and c in group_df.columns]
+    if not key_cols:
+        key_cols = [c for c in ["캠페인", "광고그룹"] if c in place_df.columns and c in group_df.columns]
+    if not key_cols:
+        return place_df.copy()
+    valid_keys = {
+        tuple(str(row.get(col, "") or "") for col in key_cols)
+        for _, row in group_df[key_cols].drop_duplicates().iterrows()
+    }
+    out = place_df.copy()
+    mask = out[key_cols].apply(lambda row: tuple(str(row.get(col, "") or "") for col in key_cols) in valid_keys, axis=1)
+    return out[mask].copy()
+
+
+def _render_campaign_group_placement_table(place_df: pd.DataFrame, group_df: pd.DataFrame, show_mode: str, top_n: int) -> None:
+    work = _filter_campaign_group_placement_rows(place_df, group_df)
+    if work.empty:
+        return
+    if "_지면순서" in work.columns:
+        work = work.sort_values([c for c in ["캠페인", "광고그룹", "_지면순서"] if c in work.columns])
+    metric_cols = ["노출", "클릭", "CTR(%)", "CPC(원)", "광고비", "총 전환수", "통합 ROAS(%)"]
+    if show_mode != "integrated_only":
+        metric_cols = ["노출", "클릭", "CTR(%)", "CPC(원)", "광고비", "구매완료수", "구매완료 매출", "구매 ROAS(%)", "총 전환수", "통합 ROAS(%)"]
+    display_cols = [c for c in ["캠페인유형", "캠페인", "광고그룹", "지면", *metric_cols] if c in work.columns]
+    disp = work[display_cols].head(max(int(top_n or 0), 1)).reset_index(drop=True)
+    render_toolbar(
+        "검색/콘텐츠 지면별 그룹 성과",
+        "선택 조건 기준",
+        [{"label": f"{len(disp.index):,}행 표시", "tone": "info"}],
+    )
+    st.dataframe(
+        disp,
+        width="stretch",
+        hide_index=True,
+        column_config=_campaign_fast_col_config(disp, "광고그룹"),
+    )
+    _render_campaign_downloads(disp, "campaign_adgroup_placement_performance", "그룹 지면 성과")
+
+
 def _build_detail_source(kw_bundle: pd.DataFrame, ad_bundle: pd.DataFrame) -> pd.DataFrame:
     kw_tmp = kw_bundle.rename(columns={"keyword": "item_name"}) if not kw_bundle.empty else pd.DataFrame()
     if not ad_bundle.empty:
@@ -1179,6 +1302,8 @@ def _render_campaign_group_tab(meta: pd.DataFrame, engine, f: Dict, cids: tuple,
         b_ad_bundle_grp = query_ad_bundle(engine, b1_grp, b2_grp, cids, type_sel, topn_cost=_campaign_fetch_limit(top_n), top_k=50)
         base_detail_bundle_grp = _build_detail_source(b_kw_bundle_grp, b_ad_bundle_grp)
         detail_bundle_grp = _build_detail_source(kw_bundle_grp, ad_bundle_grp)
+        cur_place_grp = _cached_campaign_group_placement(engine, f["start"], f["end"], cids, type_sel)
+        base_place_grp = _cached_campaign_group_placement(engine, b1_grp, b2_grp, cids, type_sel)
     if detail_bundle_grp is None or detail_bundle_grp.empty:
         st.info("광고그룹 성과 데이터가 없습니다.")
         return
@@ -1237,7 +1362,8 @@ def _render_campaign_group_tab(meta: pd.DataFrame, engine, f: Dict, cids: tuple,
     if show_deltas_grp and show_mode == "integrated_only":
         st.warning("⚠️ 비교 기간에 3월 11일 이전(네이버 퍼널 분리 패치 전) 데이터가 포함되어 '통합 전환' 기준으로 표시합니다.")
     metrics_cols_grp = _group_mode_columns(show_deltas_grp, show_mode)
-    base_cols_grp = ["업체명", "담당자", "캠페인유형", "캠페인", "광고그룹", "업무 신호", "지출 비중(%)"]
+    group_place_disp = _build_campaign_group_placement_df(cur_place_grp, base_place_grp)
+    base_cols_grp = ["캠페인유형", "캠페인", "광고그룹", "업무 신호", "지출 비중(%)"]
     if "avg_rank" in grouped.columns or "평균순위" in grouped.columns:
         base_cols_grp.insert(5, "평균순위")
         if show_deltas_grp:
@@ -1262,6 +1388,7 @@ def _render_campaign_group_tab(meta: pd.DataFrame, engine, f: Dict, cids: tuple,
         column_config=_campaign_fast_col_config(disp_grp, "광고그룹"),
     )
     _render_campaign_downloads(disp_grp, "campaign_adgroup_performance", "그룹 성과")
+    _render_campaign_group_placement_table(group_place_disp, disp_grp_src, show_mode, top_n)
     selected_rows = event.selection.rows
     if selected_rows:
         selected_idx = selected_rows[0]

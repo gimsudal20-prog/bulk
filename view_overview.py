@@ -284,6 +284,14 @@ def _cached_ad_full_bundle(_engine, start_dt, end_dt, cids: tuple, type_sel: tup
         return pd.DataFrame()
 
 
+@st.cache_data(ttl=43200, max_entries=6, show_spinner=False)
+def _cached_group_placement_bundle(_engine, start_dt, end_dt, cids: tuple, type_sel: tuple) -> pd.DataFrame:
+    try:
+        return query_shopping_placement_performance(_engine, start_dt, end_dt, cids, type_sel)
+    except Exception:
+        return pd.DataFrame()
+
+
 @st.cache_data(ttl=43200, max_entries=10, show_spinner=False)
 def _cached_campaign_timeseries(_engine, start_dt, end_dt, cids: tuple, type_sel: tuple) -> pd.DataFrame:
     try: return query_campaign_timeseries(_engine, start_dt, end_dt, cids, type_sel)
@@ -857,6 +865,144 @@ def _build_overview_group_frames(cur_detail: pd.DataFrame, base_detail: pd.DataF
     out["지출 비중(%)"] = np.where(total_cost > 0, (out["광고비"] / total_cost) * 100.0, 0.0)
     out = _add_overview_group_status(out)
     return out.sort_values("광고비", ascending=False).reset_index(drop=True)
+
+
+def _overview_placement_label(value) -> str:
+    raw = str(value or "").strip().upper()
+    if raw == "SEARCH":
+        return "검색"
+    if raw == "CONTENT":
+        return "콘텐츠"
+    return str(value or "미분류")
+
+
+def _aggregate_overview_group_placement_source(place_df: pd.DataFrame, meta: pd.DataFrame, _engine=None) -> pd.DataFrame:
+    if place_df is None or place_df.empty or "placement_type" not in place_df.columns:
+        return pd.DataFrame()
+    work = _attach_account_names(place_df, meta, _engine)
+    if "adgroup_name" not in work.columns and "adgroup_id" in work.columns:
+        work["adgroup_name"] = work["adgroup_id"].astype(str)
+    work["placement_type"] = work["placement_type"].astype(str).str.strip().str.upper()
+    work = work[work["placement_type"].isin(["SEARCH", "CONTENT"])].copy()
+    if work.empty:
+        return pd.DataFrame()
+    work["placement_label"] = work["placement_type"].apply(_overview_placement_label)
+    group_keys = [
+        c for c in [
+            "customer_id", "campaign_id", "adgroup_id", "placement_type", "placement_label",
+            "account_name", "campaign_type_label", "campaign_name", "adgroup_name",
+        ]
+        if c in work.columns
+    ]
+    if not group_keys:
+        return pd.DataFrame()
+    metric_cols = [
+        c for c in [
+            "imp", "clk", "cost", "conv", "sales", "purchase_conv", "purchase_sales",
+            "total_conv", "total_sales", "tot_conv", "tot_sales",
+        ]
+        if c in work.columns
+    ]
+    if not metric_cols:
+        return pd.DataFrame()
+    for col in metric_cols:
+        work[col] = pd.to_numeric(work[col], errors="coerce").fillna(0.0)
+    grouped = work.groupby(group_keys, as_index=False, dropna=False)[metric_cols].sum()
+    zero = pd.Series([0.0] * len(grouped.index), index=grouped.index)
+    purchase_conv = grouped["purchase_conv"] if "purchase_conv" in grouped.columns else grouped.get("conv", zero)
+    purchase_sales = grouped["purchase_sales"] if "purchase_sales" in grouped.columns else grouped.get("sales", zero)
+    total_conv = grouped["total_conv"] if "total_conv" in grouped.columns else grouped.get("tot_conv", grouped.get("conv", zero))
+    total_sales = grouped["total_sales"] if "total_sales" in grouped.columns else grouped.get("tot_sales", grouped.get("sales", zero))
+    grouped["conv"] = purchase_conv
+    grouped["sales"] = purchase_sales
+    grouped["tot_conv"] = np.maximum(pd.to_numeric(total_conv, errors="coerce").fillna(0.0), pd.to_numeric(purchase_conv, errors="coerce").fillna(0.0))
+    grouped["tot_sales"] = np.maximum(pd.to_numeric(total_sales, errors="coerce").fillna(0.0), pd.to_numeric(purchase_sales, errors="coerce").fillna(0.0))
+    return grouped
+
+
+def _build_overview_group_placement_frames(cur_place: pd.DataFrame, base_place: pd.DataFrame, meta: pd.DataFrame, _engine=None) -> pd.DataFrame:
+    cur_group = _aggregate_overview_group_placement_source(cur_place, meta, _engine)
+    base_group = _aggregate_overview_group_placement_source(base_place, meta, _engine)
+    if cur_group.empty:
+        return pd.DataFrame()
+
+    stable_keys = [k for k in ["customer_id", "campaign_id", "adgroup_id", "placement_type"] if k in cur_group.columns and k in base_group.columns]
+    if not stable_keys:
+        stable_keys = [k for k in ["account_name", "campaign_name", "adgroup_name", "placement_label"] if k in cur_group.columns and k in base_group.columns]
+
+    if stable_keys and not base_group.empty:
+        base_merge = _base_group_for_merge(base_group, stable_keys).rename(columns={
+            c: f"{c}_base" for c in base_group.columns if c not in stable_keys
+        })
+        merged = cur_group.merge(base_merge, on=stable_keys, how="left")
+    else:
+        merged = cur_group.copy()
+
+    for col in ["imp", "clk", "cost", "conv", "sales", "tot_conv", "tot_sales"]:
+        if col not in merged.columns:
+            merged[col] = 0.0
+        if f"{col}_base" not in merged.columns:
+            merged[f"{col}_base"] = 0.0
+        merged[col] = pd.to_numeric(merged[col], errors="coerce").fillna(0.0)
+        merged[f"{col}_base"] = pd.to_numeric(merged[f"{col}_base"], errors="coerce").fillna(0.0)
+
+    out = pd.DataFrame(index=merged.index)
+    out["계정명"] = merged.get("account_name", "")
+    out["캠페인유형"] = merged.get("campaign_type_label", "")
+    out["캠페인명"] = merged.get("campaign_name", "")
+    out["광고그룹"] = merged.get("adgroup_name", merged.get("adgroup_id", "미분류"))
+    out["지면"] = merged.get("placement_label", merged.get("placement_type", "미분류"))
+    out["노출수"] = merged["imp"]
+    out["클릭수"] = merged["clk"]
+    out["클릭률(%)"] = _safe_div(merged["clk"], merged["imp"], 100.0)
+    out["광고비"] = merged["cost"]
+    out["CPC"] = _safe_div(merged["cost"], merged["clk"])
+    out["구매완료수"] = merged["conv"]
+    out["구매 전환율(%)"] = _safe_div(merged["conv"], merged["clk"], 100.0)
+    out["구매완료 매출"] = merged["sales"]
+    out["구매완료 ROAS(%)"] = _safe_div(merged["sales"], merged["cost"], 100.0)
+    out["총 전환수"] = merged["tot_conv"]
+    out["총 전환율(%)"] = _safe_div(merged["tot_conv"], merged["clk"], 100.0)
+    out["총 전환매출"] = merged["tot_sales"]
+    out["통합 ROAS(%)"] = _safe_div(merged["tot_sales"], merged["cost"], 100.0)
+
+    base_imp = merged["imp_base"]
+    base_clk = merged["clk_base"]
+    base_cost = merged["cost_base"]
+    base_conv = merged["conv_base"]
+    base_sales = merged["sales_base"]
+    base_tot_conv = merged["tot_conv_base"]
+    base_tot_sales = merged["tot_sales_base"]
+    base_cpc = _safe_div(base_cost, base_clk)
+
+    def _apply_pct_diff(cur_val, base_val, pct_col, abs_col):
+        diff = cur_val - base_val
+        safe_base = np.where(base_val == 0, 1, base_val)
+        out[pct_col] = np.where(base_val == 0, np.where(cur_val > 0, 100.0, 0.0), (diff / safe_base) * 100.0)
+        out[abs_col] = diff
+
+    _apply_pct_diff(merged["imp"], base_imp, "노출 증감", "노출 차이")
+    _apply_pct_diff(merged["clk"], base_clk, "클릭 증감", "클릭 차이")
+    _apply_pct_diff(merged["cost"], base_cost, "광고비 증감", "광고비 차이")
+    _apply_pct_diff(out["CPC"], base_cpc, "CPC 증감", "CPC 차이")
+    _apply_pct_diff(merged["conv"], base_conv, "구매완료 증감", "구매완료 차이")
+    _apply_pct_diff(merged["sales"], base_sales, "구매완료 매출 증감", "구매완료 매출 차이")
+    _apply_pct_diff(merged["tot_conv"], base_tot_conv, "총 전환 증감", "총 전환 차이")
+    _apply_pct_diff(merged["tot_sales"], base_tot_sales, "총 매출 증감", "총 매출 차이")
+    out["클릭률 증감"] = out["클릭률(%)"] - _safe_div(base_clk, base_imp, 100.0)
+    out["구매 전환율 증감"] = out["구매 전환율(%)"] - _safe_div(base_conv, base_clk, 100.0)
+    out["구매완료 ROAS 증감"] = out["구매완료 ROAS(%)"] - _safe_div(base_sales, base_cost, 100.0)
+    out["총 전환율 증감"] = out["총 전환율(%)"] - _safe_div(base_tot_conv, base_clk, 100.0)
+    out["통합 ROAS 증감"] = out["통합 ROAS(%)"] - _safe_div(base_tot_sales, base_cost, 100.0)
+    out["b_imp"] = base_imp
+    out["b_clk"] = base_clk
+    out["b_cost"] = base_cost
+    total_cost = float(pd.to_numeric(out["광고비"], errors="coerce").fillna(0.0).sum())
+    out["지출 비중(%)"] = np.where(total_cost > 0, (out["광고비"] / total_cost) * 100.0, 0.0)
+    out["_지면순서"] = out["지면"].map({"검색": 0, "콘텐츠": 1}).fillna(9)
+    sort_cols = [c for c in ["계정명", "캠페인명", "광고그룹", "_지면순서"] if c in out.columns]
+    return out.sort_values(sort_cols).reset_index(drop=True)
+
 
 @st.cache_data(ttl=43200, max_entries=16, show_spinner=False)
 def _build_overview_timeseries_frames(daily_ts: pd.DataFrame, base_daily_ts: pd.DataFrame):
@@ -2179,7 +2325,7 @@ def _overview_group_visible_cols(df: pd.DataFrame, show_deltas: bool, funnel_col
     if df is None or df.empty:
         return []
     cols = [
-        "광고그룹", "운영 판단", "판단 근거", "확인 대상", "캠페인명", "계정명", "캠페인유형", "지출 비중(%)",
+        "광고그룹", "운영 판단", "판단 근거", "확인 대상", "캠페인명", "캠페인유형", "지출 비중(%)",
         *[c for c in funnel_cols if c in df.columns],
     ]
     seen = []
@@ -2187,6 +2333,43 @@ def _overview_group_visible_cols(df: pd.DataFrame, show_deltas: bool, funnel_col
         if col in df.columns and col not in seen:
             seen.append(col)
     return seen
+
+
+def _filter_overview_group_placement_rows(place_df: pd.DataFrame, group_df: pd.DataFrame) -> pd.DataFrame:
+    if place_df is None or place_df.empty:
+        return pd.DataFrame()
+    if group_df is None or group_df.empty:
+        return pd.DataFrame()
+    key_cols = [c for c in ["계정명", "캠페인명", "광고그룹"] if c in place_df.columns and c in group_df.columns]
+    if not key_cols:
+        return place_df.copy()
+    valid_keys = {
+        tuple(str(row.get(col, "") or "") for col in key_cols)
+        for _, row in group_df[key_cols].drop_duplicates().iterrows()
+    }
+    out = place_df.copy()
+    mask = out[key_cols].apply(lambda row: tuple(str(row.get(col, "") or "") for col in key_cols) in valid_keys, axis=1)
+    return out[mask].copy()
+
+
+def _render_overview_group_placement_table(place_df: pd.DataFrame, fmt_dict_standard: dict, group_df: pd.DataFrame) -> None:
+    work = _filter_overview_group_placement_rows(place_df, group_df)
+    if work.empty:
+        return
+    st.markdown("<div style='height: 14px;'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='font-size:15px;font-weight:700;margin-bottom:8px;'>검색/콘텐츠 지면별 그룹 성과</div>", unsafe_allow_html=True)
+    simple_cols = [
+        "광고그룹", "지면", "캠페인명", "캠페인유형",
+        "노출수", "클릭수", "클릭률(%)", "광고비", "CPC",
+        "구매완료수", "구매완료 ROAS(%)", "총 전환수", "통합 ROAS(%)",
+    ]
+    view_cols = [c for c in simple_cols if c in work.columns]
+    if "_지면순서" in work.columns:
+        work = work.sort_values([c for c in ["계정명", "캠페인명", "광고그룹", "_지면순서"] if c in work.columns])
+    disp = work[view_cols].head(500).copy()
+    styled = disp.style.format(fmt_dict_standard)
+    _render_overview_sticky_table(styled, "광고그룹", height=360, hide_index=True)
+    st.caption(f"검색/콘텐츠 지면 성과 {len(work):,}행 중 {len(disp):,}행을 표시했습니다.")
 
 
 def _overview_export_cols(df: pd.DataFrame) -> pd.DataFrame:
@@ -2572,6 +2755,7 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
     df_display, df_type_display, camp_disp = pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
     daily_disp, dow_disp, weekly_disp = pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
     group_disp = pd.DataFrame()
+    group_place_disp = pd.DataFrame()
     kw_disp = pd.DataFrame() 
 
     fmt_dict_standard = {
@@ -2674,6 +2858,14 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
             base_group_detail = pd.DataFrame()
             _diag_add(diag, "그룹 번들(비교/전체)", "error", 0, "keyword/ad bundle", f"{type(e).__name__}: {e}")
         group_disp = _build_overview_group_frames(cur_group_detail, base_group_detail, meta, engine)
+        try:
+            cur_group_place = _cached_group_placement_bundle(engine, f["start"], f["end"], cids, type_sel)
+            base_group_place = _cached_group_placement_bundle(engine, b1, b2, cids, type_sel)
+            group_place_disp = _build_overview_group_placement_frames(cur_group_place, base_group_place, meta, engine)
+            _diag_add(diag, "그룹 지면(현재/비교)", "ok" if not group_place_disp.empty else "zero_data", len(group_place_disp.index), "fact_adgroup_placement_daily", "광고그룹 검색/콘텐츠 지면별 행")
+        except Exception as e:
+            group_place_disp = pd.DataFrame()
+            _diag_add(diag, "그룹 지면(현재/비교)", "error", 0, "fact_adgroup_placement_daily", f"{type(e).__name__}: {e}")
 
     if detail_panel == "기간별 상세":
         if base_daily_ts is None or base_daily_ts.empty:
@@ -2760,6 +2952,7 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
                 styled_group_df = _apply_overview_delta_styles(styled_group_df, disp_group)
                 _render_overview_sticky_table(styled_group_df, "광고그룹", height=500, hide_index=True)
                 st.caption(f"총 {len(group_disp):,}개 광고그룹 중 {len(disp_group):,}개를 표시했습니다.")
+                _render_overview_group_placement_table(group_place_disp, fmt_dict_standard, group_work)
         else:
             st.info("조건에 맞는 데이터가 없습니다.")
 

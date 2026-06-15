@@ -374,6 +374,15 @@ def fetch_placement_rows_from_sources(
         report_attempts.append(report_meta)
         counts = placement_type_counts(report_rows)
         log(f"   [{report_type}] 지면 리포트 파싱: status={report_meta.get('status')} rows={len(report_rows)} placements={counts}")
+        if report_rows and str(report_type or "").upper() == "DA_RAW_SSA":
+            return report_rows, {
+                "status": "ok",
+                "source": "report_DA_RAW_SSA",
+                "report": report_meta,
+                "report_attempts": report_attempts,
+                "source_backfill": {"mode": "skipped_authoritative_report", "added_rows": 0},
+                "placement_type_counts": counts,
+            }
         if report_rows and int(counts.get("CONTENT", 0) or 0) > 0:
             report_rows, source_backfill = add_missing_source_fact_rows(engine, customer_id, target_date, report_rows)
             counts = placement_type_counts(report_rows)
@@ -788,17 +797,24 @@ def main() -> None:
         die("검색/콘텐츠 지면 수집이 전 계정에서 실패했습니다.")
     if rows_saved <= 0:
         die("검색/콘텐츠 지면 저장 행이 0건입니다.")
-    if int((saved_summary.get("CONTENT") or {}).get("rows") or 0) <= 0:
+    used_raw_report = any(
+        str(((r.get("parser_meta") or {}).get("source")) or "").lower() == "report_da_raw_ssa"
+        for r in results
+    )
+    if int((saved_summary.get("CONTENT") or {}).get("rows") or 0) <= 0 and not used_raw_report:
         die("CONTENT 지면 저장 행이 0건입니다. debug_reports의 placement_no_content 아티팩트를 확인하세요.")
 
 
-    if (float(source_summary.get("purchase_conv") or 0.0) > 0.0 or int(source_summary.get("purchase_sales") or 0) > 0) and (
-        float(saved_total.get("purchase_conv") or 0.0) <= 0.0 and int(saved_total.get("purchase_sales") or 0) <= 0
-    ):
-        die("purchase metrics exist in source facts, but saved placement purchase metrics are zero.")
-    mismatches = placement_metric_mismatches(saved_total, source_summary)
-    if mismatches:
-        die("placement/source metric totals do not match: " + "; ".join(mismatches[:8]))
+    if used_raw_report:
+        log("DA_RAW_SSA 원본 지면 리포트를 사용했으므로 기존 fact 총합 강제 보정/검증은 건너뜁니다.")
+    else:
+        if (float(source_summary.get("purchase_conv") or 0.0) > 0.0 or int(source_summary.get("purchase_sales") or 0) > 0) and (
+            float(saved_total.get("purchase_conv") or 0.0) <= 0.0 and int(saved_total.get("purchase_sales") or 0) <= 0
+        ):
+            die("purchase metrics exist in source facts, but saved placement purchase metrics are zero.")
+        mismatches = placement_metric_mismatches(saved_total, source_summary)
+        if mismatches:
+            die("placement/source metric totals do not match: " + "; ".join(mismatches[:8]))
 
 
 if __name__ == "__main__":

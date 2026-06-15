@@ -3050,6 +3050,23 @@ def query_shopping_placement_performance(_engine, d1: date, d2: date, cids: tupl
         type_filter_values = _expand_campaign_type_filter_values(type_sel) or list(_BUDGET_CAMPAIGN_TYPE_FILTER_VALUES)
         type_where_sql, type_params = _build_in_filter(type_filter_source_sql, type_filter_values, "placement_campaign_type")
 
+    source_where_sql = ""
+    source_params = {}
+    source_report_select_sql = "'' AS source_report"
+    if "source_report" in cols:
+        source_report_select_sql = "STRING_AGG(DISTINCT COALESCE(NULLIF(TRIM(f.source_report), ''), 'UNKNOWN'), ',') AS source_report"
+        source_values = [
+            str(x or "").strip().upper()
+            for x in str(os.getenv("PLACEMENT_DASHBOARD_SOURCE_REPORTS", "DA_RAW_SSA") or "").replace(";", ",").split(",")
+            if str(x or "").strip()
+        ]
+        if source_values:
+            source_where_sql, source_params = _build_in_filter(
+                "UPPER(COALESCE(NULLIF(TRIM(f.source_report), ''), 'UNKNOWN'))",
+                source_values,
+                "placement_source_report",
+            )
+
     sql = f"""
         SELECT
             f.customer_id,
@@ -3066,11 +3083,12 @@ def query_shopping_placement_performance(_engine, d1: date, d2: date, cids: tupl
             {_sum_col("conv", "conv")},
             {_sum_col("sales", "sales")},
             {_sum_col("purchase_conv", "purchase_conv")},
-            {_sum_col("purchase_sales", "purchase_sales")}
+            {_sum_col("purchase_sales", "purchase_sales")},
+            {source_report_select_sql}
         FROM fact_adgroup_placement_daily f
         LEFT JOIN dim_campaign c ON f.campaign_id = c.campaign_id AND f.customer_id = c.customer_id
         LEFT JOIN dim_adgroup a ON f.adgroup_id = a.adgroup_id AND f.customer_id = a.customer_id
-        WHERE f.dt BETWEEN :d1 AND :d2 {where_cid} {type_where_sql}
+        WHERE f.dt BETWEEN :d1 AND :d2 {where_cid} {type_where_sql} {source_where_sql}
         GROUP BY
             f.customer_id,
             f.campaign_id,
@@ -3088,4 +3106,4 @@ def query_shopping_placement_performance(_engine, d1: date, d2: date, cids: tupl
         ORDER BY SUM(COALESCE(f.cost, 0)) DESC, SUM(COALESCE(f.clk, 0)) DESC
         LIMIT 10000
     """
-    return sql_read(_engine, sql, {"d1": str(d1), "d2": str(d2), **cid_params, **type_params})
+    return sql_read(_engine, sql, {"d1": str(d1), "d2": str(d2), **cid_params, **type_params, **source_params})

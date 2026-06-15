@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import os
 import re
 import sys
@@ -145,6 +146,71 @@ def _raw_totals(df: pd.DataFrame) -> Tuple[Dict[str, float], int]:
     return totals, len(keys)
 
 
+def _stable_id(prefix: str, *parts: Any) -> str:
+    raw = "\x1f".join(str(part or "") for part in parts)
+    return f"{prefix}_{hashlib.sha1(raw.encode('utf-8')).hexdigest()[:20]}"
+
+
+def _augment_lookup_with_csv_dims(engine, customer_id: str, df: pd.DataFrame, lookup: Dict[Tuple[str, str], Dict[str, str] | None]) -> Tuple[Dict[Tuple[str, str], Dict[str, str] | None], int, int]:
+    header_idx = _detect_report_header_idx(df)
+    if header_idx == -1:
+        die("CSV header row was not found.")
+    headers = [str(x or "") for x in df.iloc[header_idx].fillna("").tolist()]
+    data_df = df.iloc[header_idx + 1:].reset_index(drop=True)
+    idx = {
+        "campaign_type": _get_col_idx(headers, CAMPAIGN_TYPE_HEADER_CANDIDATES),
+        "campaign": _get_col_idx(headers, CAMPAIGN_HEADER_CANDIDATES),
+        "adgroup": _get_col_idx(headers, ADGROUP_HEADER_CANDIDATES),
+    }
+    if idx["campaign"] == -1 or idx["adgroup"] == -1:
+        die("CSV campaign/adgroup columns missing.")
+
+    out = dict(lookup or {})
+    campaign_rows_by_id: Dict[str, Dict[str, Any]] = {}
+    adgroup_rows_by_id: Dict[str, Dict[str, Any]] = {}
+    for _, row in data_df.iterrows():
+        campaign_name_raw = str(row.iloc[idx["campaign"]] or "").strip()
+        adgroup_name_raw = str(row.iloc[idx["adgroup"]] or "").strip()
+        campaign_name = _normalize_name(campaign_name_raw)
+        adgroup_name = _normalize_name(adgroup_name_raw)
+        if not campaign_name or not adgroup_name:
+            continue
+        key = (campaign_name, adgroup_name)
+        if out.get(key):
+            continue
+
+        campaign_type = str(row.iloc[idx["campaign_type"]] if idx["campaign_type"] != -1 else "").strip()
+        campaign_id = _stable_id("csvcmp", customer_id, campaign_name)
+        adgroup_id = _stable_id("csvag", customer_id, campaign_name, adgroup_name)
+        out[key] = {
+            "campaign_id": campaign_id,
+            "adgroup_id": adgroup_id,
+            "campaign_type": campaign_type,
+        }
+        campaign_rows_by_id[campaign_id] = {
+            "customer_id": str(customer_id),
+            "campaign_id": campaign_id,
+            "campaign_name": campaign_name_raw,
+            "campaign_tp": campaign_type,
+            "status": "CSV_IMPORT",
+        }
+        adgroup_rows_by_id[adgroup_id] = {
+            "customer_id": str(customer_id),
+            "adgroup_id": adgroup_id,
+            "adgroup_name": adgroup_name_raw,
+            "campaign_id": campaign_id,
+            "status": "CSV_IMPORT",
+        }
+
+    campaign_rows = list(campaign_rows_by_id.values())
+    adgroup_rows = list(adgroup_rows_by_id.values())
+    if campaign_rows:
+        collector_db.upsert_many(engine, "dim_campaign", campaign_rows, ["customer_id", "campaign_id"])
+    if adgroup_rows:
+        collector_db.upsert_many(engine, "dim_adgroup", adgroup_rows, ["customer_id", "adgroup_id"])
+    return out, len(campaign_rows), len(adgroup_rows)
+
+
 def _summarize_rows(rows: Iterable[Dict[str, Any]]) -> Dict[str, float]:
     totals = {field: 0.0 for field in METRIC_FIELDS}
     count = 0
@@ -278,6 +344,9 @@ def main() -> None:
     lookup = build_adgroup_name_lookup(engine, customer_id)
     if not lookup:
         die(f"No dim_adgroup mapping for customer_id={customer_id}")
+    lookup, synthetic_campaigns, synthetic_adgroups = _augment_lookup_with_csv_dims(engine, customer_id, report_df, lookup)
+    if synthetic_campaigns or synthetic_adgroups:
+        log(f"CSV dim backfill: campaigns={synthetic_campaigns} adgroups={synthetic_adgroups}")
 
     rows, meta = build_placement_rows_from_report(
         report_df,
@@ -306,6 +375,7 @@ def main() -> None:
         f"| raw_customer_id={raw_customer_id or '-'} target_customer_id={customer_id} "
         f"| range={start}~{end} storage_dt={storage_dt} "
         f"| raw_rows={raw_group_rows} inserted={inserted} deleted={deleted} "
+        f"| synthetic_campaigns={synthetic_campaigns} synthetic_adgroups={synthetic_adgroups} "
         f"| imp={int(raw_totals['imp'])} clk={int(raw_totals['clk'])} "
         f"| cost={int(raw_totals['cost'])} sales={int(raw_totals['sales'])} "
         f"| purchase_sales={int(raw_totals['purchase_sales'])}"

@@ -1041,7 +1041,7 @@ def _filter_campaign_group_placement_rows(place_df: pd.DataFrame, group_df: pd.D
 
 
 def _render_campaign_group_placement_table(place_df: pd.DataFrame, group_df: pd.DataFrame, show_mode: str) -> None:
-    work = _filter_campaign_group_placement_rows(place_df, group_df)
+    work = place_df.copy() if place_df is not None else pd.DataFrame()
     if work.empty:
         return
     if "_지면순서" in work.columns:

@@ -1040,17 +1040,17 @@ def _filter_campaign_group_placement_rows(place_df: pd.DataFrame, group_df: pd.D
     return out[mask].copy()
 
 
-def _render_campaign_group_placement_table(place_df: pd.DataFrame, group_df: pd.DataFrame, show_mode: str, top_n: int) -> None:
+def _render_campaign_group_placement_table(place_df: pd.DataFrame, group_df: pd.DataFrame, show_mode: str) -> None:
     work = _filter_campaign_group_placement_rows(place_df, group_df)
     if work.empty:
         return
     if "_지면순서" in work.columns:
         work = work.sort_values([c for c in ["캠페인", "광고그룹", "_지면순서"] if c in work.columns])
-    metric_cols = ["노출", "클릭", "CTR(%)", "CPC(원)", "광고비", "총 전환수", "통합 ROAS(%)"]
+    metric_cols = ["노출", "클릭", "CTR(%)", "CPC(원)", "광고비", "총 전환수", "총 전환매출", "통합 ROAS(%)"]
     if show_mode != "integrated_only":
-        metric_cols = ["노출", "클릭", "CTR(%)", "CPC(원)", "광고비", "구매완료수", "구매완료 매출", "구매 ROAS(%)", "총 전환수", "통합 ROAS(%)"]
+        metric_cols = ["노출", "클릭", "CTR(%)", "CPC(원)", "광고비", "구매완료수", "구매완료 매출", "구매 ROAS(%)", "총 전환수", "총 전환매출", "통합 ROAS(%)"]
     display_cols = [c for c in ["캠페인유형", "캠페인", "광고그룹", "지면", *metric_cols] if c in work.columns]
-    disp = work[display_cols].head(max(int(top_n or 0), 1)).reset_index(drop=True)
+    disp = work[display_cols].reset_index(drop=True)
     render_toolbar(
         "검색/콘텐츠 지면별 그룹 성과",
         "선택 조건 기준",
@@ -1369,7 +1369,8 @@ def _render_campaign_group_tab(meta: pd.DataFrame, engine, f: Dict, cids: tuple,
         if show_deltas_grp:
             metrics_cols_grp.append("순위 변화")
     cols_grp = [c for c in base_cols_grp + metrics_cols_grp if c in grouped.columns]
-    disp_grp_src = _sort_group_signal_view(grouped, signal_preset).head(top_n).reset_index(drop=True)
+    grouped_sorted = _sort_group_signal_view(grouped, signal_preset).reset_index(drop=True)
+    disp_grp_src = grouped_sorted.head(top_n).reset_index(drop=True)
     disp_grp = disp_grp_src[cols_grp].copy()
     render_toolbar(
         "그룹별 상세 성과",
@@ -1388,7 +1389,7 @@ def _render_campaign_group_tab(meta: pd.DataFrame, engine, f: Dict, cids: tuple,
         column_config=_campaign_fast_col_config(disp_grp, "광고그룹"),
     )
     _render_campaign_downloads(disp_grp, "campaign_adgroup_performance", "그룹 성과")
-    _render_campaign_group_placement_table(group_place_disp, disp_grp_src, show_mode, top_n)
+    _render_campaign_group_placement_table(group_place_disp, grouped_sorted, show_mode)
     selected_rows = event.selection.rows
     if selected_rows:
         selected_idx = selected_rows[0]

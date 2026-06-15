@@ -62,7 +62,9 @@ MEDIA_LIST_URLS = {
 
 
 def resolve_placement_report_types() -> List[str]:
-    raw = (os.getenv("PLACEMENT_REPORT_TYPES") or "AD").strip()
+    # DA_RAW_SSA carries the search/content placement column and conversion metrics
+    # exactly as shown in the Naver raw report. Prefer it, then fall back to AD media-code parsing.
+    raw = (os.getenv("PLACEMENT_REPORT_TYPES") or "DA_RAW_SSA,AD").strip()
     out = []
     for item in raw.replace(";", ",").split(","):
         report_type = item.strip().upper()

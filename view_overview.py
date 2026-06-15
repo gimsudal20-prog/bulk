@@ -2361,7 +2361,7 @@ def _render_overview_group_placement_table(place_df: pd.DataFrame, fmt_dict_stan
     simple_cols = [
         "광고그룹", "지면", "캠페인명", "캠페인유형",
         "노출수", "클릭수", "클릭률(%)", "광고비", "CPC",
-        "구매완료수", "구매완료 ROAS(%)", "총 전환수", "통합 ROAS(%)",
+        "구매완료수", "구매완료 매출", "구매완료 ROAS(%)", "총 전환수", "총 전환매출", "통합 ROAS(%)",
     ]
     view_cols = [c for c in simple_cols if c in work.columns]
     if "_지면순서" in work.columns:

@@ -15,7 +15,7 @@ from device_collector_helpers import normalize_device_name
 from targeting_collector_helpers import _flatten_stat_rows
 
 
-PLACEMENT_PARSER_VERSION = "placement_v20260608_da_raw_ssa_placement1"
+PLACEMENT_PARSER_VERSION = "placement_v20260615_da_raw_ssa_first"
 PLACEMENT_TABLE = "fact_adgroup_placement_daily"
 PLACEMENT_BREAKDOWN_CANDIDATES = [
     "mediaTp",
@@ -1675,7 +1675,7 @@ def parse_da_raw_ssa_placement_report(
         "roas": _get_col_idx(headers, TOTAL_ROAS_HEADER_CANDIDATES),
         "purchase_roas": _get_col_idx(headers, PURCHASE_ROAS_HEADER_CANDIDATES),
     }
-    required = ["dt", "device", "campaign", "adgroup", "placement", "imp", "clk", "cost"]
+    required = ["campaign", "adgroup", "placement", "imp", "clk", "cost"]
     if any(idx[name] == -1 for name in required):
         meta["status"] = "required_columns_missing"
         meta["missing_columns"] = [name for name in required if idx[name] == -1]
@@ -1711,7 +1711,8 @@ def parse_da_raw_ssa_placement_report(
             continue
 
         row_dt = _parse_dt(_cell(row, idx["dt"]), target_date)
-        device_name = normalize_device_name(_cell(row, idx["device"]))
+        device_name = normalize_device_name(_cell(row, idx["device"])) if idx["device"] != -1 else "UNSEGMENTED"
+        device_name = device_name or "UNSEGMENTED"
         campaign_type = str(mapping.get("campaign_type") or "").strip() or _cell(row, idx["campaign_type"])
         key = (row_dt, str(customer_id), campaign_id, adgroup_id, device_name, placement_type)
         rec = grouped.setdefault(key, {

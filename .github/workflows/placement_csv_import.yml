@@ -1,0 +1,80 @@
+name: 10 지면 원본 CSV 적재
+run-name: 10 지면 원본 CSV 적재 | ${{ inputs.customer_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      customer_id:
+        description: "DB에 반영할 customer_id"
+        required: true
+        type: string
+      start_date:
+        description: "원본 시작일(YYYY-MM-DD). 비우면 CSV 제목 사용"
+        required: false
+        default: ""
+        type: string
+      end_date:
+        description: "원본 종료일(YYYY-MM-DD). 비우면 CSV 제목 사용"
+        required: false
+        default: ""
+        type: string
+      storage_date:
+        description: "집계 CSV를 저장할 dt. 비우면 종료일"
+        required: false
+        default: ""
+        type: string
+
+concurrency:
+  group: placement-csv-import-${{ inputs.customer_id }}
+  cancel-in-progress: false
+
+jobs:
+  import-placement-csv:
+    name: 원본 CSV 적재 및 검증
+    runs-on: ubuntu-latest
+    env:
+      TZ: Asia/Seoul
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      RAW_PLACEMENT_CSV_B64: ${{ secrets.RAW_PLACEMENT_CSV_B64 }}
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: 의존성 설치
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 원본 CSV 복원
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RAW_PLACEMENT_CSV_B64:-}" || {
+            echo "RAW_PLACEMENT_CSV_B64 secret is empty" >&2
+            exit 1
+          }
+          python -c 'import base64, os; from pathlib import Path; Path("raw_placement.csv").write_bytes(base64.b64decode(os.environ["RAW_PLACEMENT_CSV_B64"].strip())); print("raw_placement.csv restored")'
+
+      - name: 원본 CSV 적재
+        shell: bash
+        run: |
+          set -euo pipefail
+          CMD=(python import_placement_raw_csv.py
+            --csv raw_placement.csv
+            --customer_id "${{ inputs.customer_id }}")
+
+          [[ -n "${{ inputs.start_date }}" ]] && CMD+=(--start "${{ inputs.start_date }}")
+          [[ -n "${{ inputs.end_date }}" ]] && CMD+=(--end "${{ inputs.end_date }}")
+          [[ -n "${{ inputs.storage_date }}" ]] && CMD+=(--dt "${{ inputs.storage_date }}")
+
+          printf '실행 명령:'
+          printf ' %q' "${CMD[@]}"
+          printf '\n'
+          "${CMD[@]}"

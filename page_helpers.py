@@ -29,7 +29,7 @@ BUILD_TAG = os.getenv("APP_BUILD", "")
 TOPUP_STATIC_THRESHOLD = _env_int("TOPUP_STATIC_THRESHOLD", 50000)
 TOPUP_AVG_DAYS = _env_int("TOPUP_AVG_DAYS", 3)
 TOPUP_DAYS_COVER = _env_int("TOPUP_DAYS_COVER", 2)
-DASHBOARD_DATA_CACHE_TTL = _env_int("DASHBOARD_DATA_CACHE_TTL", 300)
+DASHBOARD_DATA_CACHE_TTL = _env_int("DASHBOARD_DATA_CACHE_TTL", 30)
 
 MEDIA_OPTIONS = ["네이버", "메타", "구글"]
 _PLATFORM_LABEL_MAP = {
@@ -703,6 +703,10 @@ def build_filters(meta: pd.DataFrame, type_opts: List[str], engine=None) -> Dict
             top_n_ad = st.number_input("소재 한도", min_value=10, max_value=2000, value=int(sv.get("top_n_ad", 200)), step=50, key="f_top_n_ad")
             st.markdown("<div class='sidebar-section-label'>관리자 옵션</div>", unsafe_allow_html=True)
             show_diagnostics = st.checkbox("조회 진단 보기", value=bool(sv.get("show_diagnostics", False)), key="f_show_diagnostics")
+            if st.button("데이터 새로고침", key="f_clear_data_cache", use_container_width=True):
+                st.cache_data.clear()
+                st.cache_resource.clear()
+                st.rerun()
 
         st.caption("선택한 조건으로 바로 조회됩니다.")
 

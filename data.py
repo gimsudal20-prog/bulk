@@ -44,7 +44,7 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw in {"1", "true", "yes", "y", "on"}
 
 
-DASHBOARD_DATA_CACHE_TTL = _env_int("DASHBOARD_DATA_CACHE_TTL", 300, min_value=30)
+DASHBOARD_DATA_CACHE_TTL = _env_int("DASHBOARD_DATA_CACHE_TTL", 30, min_value=30)
 
 
 def _ensure_dashboard_indexes(engine) -> None:

@@ -301,10 +301,11 @@ BUDGET_INPUT_COMMA_JS = """
 <script>
 (function() {
     const parentDoc = window.parent.document;
-    if (parentDoc.getElementById('budget-comma-input-enhancer')) return;
+    const enhancerId = 'budget-comma-input-enhancer';
+    if (parentDoc.getElementById(enhancerId)) return;
 
     const marker = parentDoc.createElement('div');
-    marker.id = 'budget-comma-input-enhancer';
+    marker.id = enhancerId;
     marker.style.display = 'none';
     parentDoc.body.appendChild(marker);
 
@@ -359,6 +360,16 @@ BUDGET_INPUT_COMMA_JS = """
         return digits.length >= 4 || String(value || '').includes(',');
     }
 
+    function scheduleFormat(el, delay) {
+        const target = isTextInput(el) ? el : parentDoc.activeElement;
+        if (!isTextInput(target)) return;
+        window.setTimeout(function() {
+            window.requestAnimationFrame(function() {
+                formatBudgetInput(target);
+            });
+        }, delay || 0);
+    }
+
     function formatBudgetInput(el) {
         if (!el || el.dataset.budgetFormatting === '1') return;
         const before = readValue(el);
@@ -376,26 +387,34 @@ BUDGET_INPUT_COMMA_JS = """
             el.setSelectionRange(nextCaret, nextCaret);
         } catch (err) {}
         el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
         window.setTimeout(function() {
             delete el.dataset.budgetFormatting;
         }, 0);
     }
 
-    parentDoc.addEventListener('input', function(e) {
-        formatBudgetInput(e.target);
-    }, true);
+    ['input', 'keyup', 'change', 'compositionend'].forEach(function(eventName) {
+        parentDoc.addEventListener(eventName, function(e) {
+            scheduleFormat(e.target, 0);
+        }, true);
+    });
 
     parentDoc.addEventListener('focusin', function(e) {
-        window.setTimeout(function() {
-            formatBudgetInput(e.target);
-        }, 0);
+        scheduleFormat(e.target, 0);
     }, true);
 
     parentDoc.addEventListener('paste', function(e) {
-        window.setTimeout(function() {
-            formatBudgetInput(e.target);
-        }, 0);
+        scheduleFormat(e.target, 0);
     }, true);
+
+    const observer = new MutationObserver(function() {
+        scheduleFormat(parentDoc.activeElement, 0);
+    });
+    observer.observe(parentDoc.body, { childList: true, subtree: true });
+
+    window.setInterval(function() {
+        scheduleFormat(parentDoc.activeElement, 0);
+    }, 300);
 })();
 </script>
 """
@@ -583,10 +602,7 @@ def _build_budget_type_editor_view(
 
 def _ensure_budget_input_js_once():
     st.markdown("<span data-budget-comma-active='1' style='display:none'></span>", unsafe_allow_html=True)
-    if st.session_state.get("_budget_input_js_once"):
-        return
     components.html(BUDGET_INPUT_COMMA_JS, height=0, width=0)
-    st.session_state["_budget_input_js_once"] = True
 
 
 def _resolve_budget_reference_date(engine, fallback_end_dt: date) -> date:

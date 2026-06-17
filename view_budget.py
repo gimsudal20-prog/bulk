@@ -301,13 +301,16 @@ BUDGET_INPUT_COMMA_JS = """
 <script>
 (function() {
     const parentDoc = window.parent.document;
+    const parentWin = window.parent;
+    const enhancerVersion = 'budget-comma-input-enhancer-v2';
     const enhancerId = 'budget-comma-input-enhancer';
-    if (parentDoc.getElementById(enhancerId)) return;
+    if (parentWin.__budgetCommaInputEnhancerVersion === enhancerVersion) return;
+    parentWin.__budgetCommaInputEnhancerVersion = enhancerVersion;
 
-    const marker = parentDoc.createElement('div');
+    const marker = parentDoc.getElementById(enhancerId) || parentDoc.createElement('div');
     marker.id = enhancerId;
     marker.style.display = 'none';
-    parentDoc.body.appendChild(marker);
+    if (!marker.parentElement) parentDoc.body.appendChild(marker);
 
     function budgetPageIsActive() {
         return !!parentDoc.querySelector('[data-budget-comma-active="1"]');
@@ -393,7 +396,7 @@ BUDGET_INPUT_COMMA_JS = """
         }, 0);
     }
 
-    ['input', 'keyup', 'change', 'compositionend'].forEach(function(eventName) {
+    ['beforeinput', 'input', 'keyup', 'change', 'compositionend'].forEach(function(eventName) {
         parentDoc.addEventListener(eventName, function(e) {
             scheduleFormat(e.target, 0);
         }, true);

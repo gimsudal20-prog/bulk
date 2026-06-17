@@ -82,6 +82,93 @@ def _format_report_count(value) -> str:
         return "0"
 
 
+def _format_report_count_with_unit(value) -> str:
+    return f"{_format_report_count(value)}건"
+
+
+def _format_report_integer(value) -> str:
+    try:
+        return f"{int(round(_report_float(value))):,}"
+    except Exception:
+        return "0"
+
+
+def _format_report_currency(value) -> str:
+    return f"{_format_report_integer(value)}원"
+
+
+def _format_report_percent(value, digits: int = 1) -> str:
+    try:
+        return f"{_report_float(value):.{digits}f}%"
+    except Exception:
+        return f"{0:.{digits}f}%"
+
+
+def _report_row_has(row, key: str) -> bool:
+    try:
+        return key in row
+    except Exception:
+        return False
+
+
+def _report_pick(row, *keys: str, default: float = 0.0) -> float:
+    for key in keys:
+        if _report_row_has(row, key):
+            try:
+                return _report_float(row.get(key), default)
+            except Exception:
+                return default
+    return default
+
+
+def _report_max(row, *keys: str) -> float:
+    vals = [_report_pick(row, key, default=0.0) for key in keys if _report_row_has(row, key)]
+    return max(vals) if vals else 0.0
+
+
+def _build_text_report_metric_lines(row, keyword_label: str = "", keyword_text: str = "") -> list[str]:
+    imp = _report_pick(row, "imp", "노출수")
+    clk = _report_pick(row, "clk", "클릭수")
+    cost = _report_pick(row, "cost", "광고비")
+    ctr = _report_pick(row, "ctr", "클릭률(%)")
+    if ctr == 0 and imp > 0:
+        ctr = float(_safe_div(clk, imp, 100.0))
+
+    purchase_conv = _report_pick(row, "conv", "구매완료수")
+    purchase_sales = _report_pick(row, "sales", "구매완료 매출")
+    cart_conv = _report_pick(row, "cart_conv", "장바구니수")
+    cart_sales = _report_pick(row, "cart_sales", "장바구니 매출액")
+    wishlist_conv = _report_pick(row, "wishlist_conv", "위시리스트수")
+    wishlist_sales = _report_pick(row, "wishlist_sales", "위시리스트 매출액")
+    total_conv = max(_report_max(row, "tot_conv", "total_conv", "총 전환수"), purchase_conv + cart_conv + wishlist_conv)
+    total_sales = max(_report_max(row, "tot_sales", "total_sales", "총 전환매출"), purchase_sales + cart_sales + wishlist_sales)
+    purchase_roas = _safe_div(purchase_sales, cost, 100.0)
+
+    lines = [
+        _format_report_line("노출수", _format_report_integer(imp)),
+        _format_report_line("클릭수", _format_report_integer(clk)),
+        _format_report_line("클릭률", _format_report_percent(ctr, 1)),
+        _format_report_line("광고 소진비용", _format_report_currency(cost)),
+        _format_report_line("전환수", _format_report_count_with_unit(total_conv)),
+        _format_report_line("구매완료 전환 수", _format_report_count_with_unit(purchase_conv)),
+        _format_report_line("장바구니 전환 수", _format_report_count_with_unit(cart_conv)),
+        _format_report_line("총 전환 매출액", _format_report_currency(total_sales)),
+        _format_report_line("구매완료 전환 매출액", _format_report_currency(purchase_sales)),
+        _format_report_line("구매완료 기준 광고수익률(ROAS)", _format_report_percent(float(purchase_roas), 2)),
+        _format_report_line("장바구니 전환 매출액", _format_report_currency(cart_sales)),
+        _format_report_line("총비용(VAT 포함)", _format_report_currency(cost * 1.1)),
+    ]
+    if keyword_label and keyword_text:
+        lines.append(_format_report_line(keyword_label, keyword_text))
+    return lines
+
+
+def _safe_report_filename_part(value) -> str:
+    text = str(value or "보고서").strip()
+    safe = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in text)
+    return (safe[:80] or "보고서")
+
+
 def _report_float(value, default: float = 0.0) -> float:
     try:
         if pd.isna(value):
@@ -1150,7 +1237,7 @@ def _type_summary_sort_key(label: str) -> tuple[int, str]:
 
 
 def _aggregate_type_performance_frame(src: pd.DataFrame) -> pd.DataFrame:
-    metric_cols = ["imp", "clk", "cost", "conv", "sales", "tot_conv", "tot_sales"]
+    metric_cols = ["imp", "clk", "cost", "conv", "sales", "tot_conv", "tot_sales", "cart_conv", "cart_sales", "wishlist_conv", "wishlist_sales"]
     if src is None or src.empty:
         return pd.DataFrame(columns=["_type_label", *metric_cols])
 
@@ -1160,7 +1247,7 @@ def _aggregate_type_performance_frame(src: pd.DataFrame) -> pd.DataFrame:
 
     work = src.copy()
     work["_type_label"] = work[type_col].map(_normalize_type_label).replace("", "미분류")
-    for col in ["imp", "clk", "cost", "conv", "sales"]:
+    for col in ["imp", "clk", "cost", "conv", "sales", "cart_conv", "cart_sales", "wishlist_conv", "wishlist_sales"]:
         if col not in work.columns:
             work[col] = 0.0
         work[col] = safe_numeric_col(work, col, default=0.0)
@@ -1180,6 +1267,7 @@ def _build_type_performance_summary(cur_camp: pd.DataFrame, base_camp: pd.DataFr
     columns = [
         "캠페인 유형", "노출수", "클릭수", "클릭률(%)", "광고비", "CPC",
         "구매완료수", "구매완료 매출", "구매완료 ROAS(%)",
+        "장바구니수", "장바구니 매출액",
         "총 전환수", "총 전환매출", "통합 ROAS(%)",
         "클릭수 증감", "광고비 증감", "전환수 증감", "ROAS 증감",
     ]
@@ -1200,6 +1288,8 @@ def _build_type_performance_summary(cur_camp: pd.DataFrame, base_camp: pd.DataFr
     out["구매완료수"] = grouped["conv"]
     out["구매완료 매출"] = grouped["sales"]
     out["구매완료 ROAS(%)"] = _safe_div(grouped["sales"], grouped["cost"], 100.0)
+    out["장바구니수"] = grouped["cart_conv"]
+    out["장바구니 매출액"] = grouped["cart_sales"]
     out["총 전환수"] = grouped["tot_conv"]
     out["총 전환매출"] = grouped["tot_sales"]
     out["통합 ROAS(%)"] = _safe_div(grouped["tot_sales"], grouped["cost"], 100.0)
@@ -1223,7 +1313,7 @@ def _render_type_performance_snapshot(type_summary: pd.DataFrame) -> None:
         st.info("조건에 맞는 유형별 성과 데이터가 없습니다.")
         return
     view_cols = [
-        "캠페인 유형", "광고비", "클릭수", "구매완료수",
+        "캠페인 유형", "광고비", "클릭수", "구매완료수", "장바구니수",
         "총 전환수", "총 전환매출", "통합 ROAS(%)",
         "클릭수 증감", "광고비 증감", "전환수 증감", "ROAS 증감",
     ]
@@ -1238,6 +1328,7 @@ def _render_type_performance_snapshot(type_summary: pd.DataFrame) -> None:
             "광고비": st.column_config.NumberColumn("광고비", format="%,.0f 원"),
             "클릭수": st.column_config.NumberColumn("클릭수", format="%,.0f"),
             "구매완료수": st.column_config.NumberColumn("구매완료수", format="%,.0f"),
+            "장바구니수": st.column_config.NumberColumn("장바구니수", format="%,.0f"),
             "총 전환수": st.column_config.NumberColumn("총 전환수", format="%,.0f"),
             "총 전환매출": st.column_config.NumberColumn("총 전환매출", format="%,.0f 원"),
             "통합 ROAS(%)": st.column_config.NumberColumn("통합 ROAS(%)", format="%,.1f%%"),
@@ -1294,30 +1385,11 @@ def _build_type_report_text(
         if not type_label:
             continue
         keyword_text = shopping_keyword_text if _is_shopping_type_label(type_label) else type_top_keyword_map.get(type_label, "없음")
-        if report_uses_purchase:
-            section = "\n".join([
-                f"[ {type_label} 성과 요약 ]",
-                _format_report_line("노출수", f"{int(float(row.get('노출수', 0))):,}"),
-                _format_report_line("클릭수", f"{int(float(row.get('클릭수', 0))):,}"),
-                _format_report_line("클릭률", f"{float(row.get('클릭률(%)', 0)):.1f}%"),
-                _format_report_line("광고 소진비용", f"{int(float(row.get('광고비', 0))):,}원"),
-                _format_report_line("구매완료수", _format_report_count(row.get("구매완료수", 0))),
-                _format_report_line("구매완료 매출", f"{int(float(row.get('구매완료 매출', 0))):,}원"),
-                _format_report_line("구매 ROAS", f"{float(row.get('구매완료 ROAS(%)', 0)):.1f}%"),
-                _format_report_line("주요 전환 키워드", keyword_text),
-            ])
-        else:
-            section = "\n".join([
-                f"[ {type_label} 성과 요약 ]",
-                _format_report_line("노출수", f"{int(float(row.get('노출수', 0))):,}"),
-                _format_report_line("클릭수", f"{int(float(row.get('클릭수', 0))):,}"),
-                _format_report_line("클릭률", f"{float(row.get('클릭률(%)', 0)):.1f}%"),
-                _format_report_line("광고 소진비용", f"{int(float(row.get('광고비', 0))):,}원"),
-                _format_report_line("전환수", _format_report_count(row.get("총 전환수", 0))),
-                _format_report_line("총전환매출", f"{int(float(row.get('총 전환매출', 0))):,}원"),
-                _format_report_line("ROAS", f"{float(row.get('통합 ROAS(%)', 0)):.1f}%"),
-                _format_report_line("주요 유입 키워드", keyword_text),
-            ])
+        keyword_label = "주요 전환 키워드" if report_uses_purchase else "주요 유입 키워드"
+        section = "\n".join([
+            f"[ {type_label} 성과 요약 ]",
+            *_build_text_report_metric_lines(row, keyword_label=keyword_label, keyword_text=keyword_text),
+        ])
         sections.append(section)
     if not sections:
         return ""
@@ -1341,7 +1413,7 @@ def _build_campaign_report_text(
     campaign_top_keyword_map = campaign_top_keyword_map or {}
     campaign_top_shopping_query_map = campaign_top_shopping_query_map or {}
 
-    cols = ['campaign_name', 'imp', 'clk', 'cost', 'conv', 'sales']
+    cols = ['campaign_name', 'imp', 'clk', 'cost', 'conv', 'sales', 'cart_conv', 'cart_sales', 'wishlist_conv', 'wishlist_sales']
     work = cur_camp.copy()
     for col in cols[1:]:
         if col not in work.columns:
@@ -1364,38 +1436,22 @@ def _build_campaign_report_text(
         if not campaign_name:
             continue
         use_purchase_metrics = bool(report_uses_purchase)
+        keyword_label = "주요 전환 키워드" if use_purchase_metrics else "주요 유입 키워드"
         if use_purchase_metrics:
             keyword_text = campaign_top_shopping_query_map.get(campaign_name) if is_shopping_only else None
             if not keyword_text:
                 keyword_text = campaign_top_keyword_map.get(campaign_name, '없음')
             section = "\n".join([
                 f"[ {campaign_name} 성과 요약 ]",
-                _format_report_line("노출수", f"{int(float(row.get('imp', 0))):,}"),
-                _format_report_line("클릭수", f"{int(float(row.get('clk', 0))):,}"),
-                _format_report_line("클릭률", f"{float(_safe_div(float(row.get('clk', 0)), float(row.get('imp', 0)), 100.0)):.1f}%"),
-                _format_report_line("광고 소진비용", f"{int(float(row.get('cost', 0))):,}원"),
-                _format_report_line("구매완료수", _format_report_count(row.get('conv', 0.0))),
-                _format_report_line("구매완료 매출", f"{int(float(row.get('sales', 0))):,}원"),
-                _format_report_line("구매 ROAS", f"{float(_safe_div(float(row.get('sales', 0)), float(row.get('cost', 0)), 100.0)):.1f}%"),
-                _format_report_line("주요 전환 키워드", keyword_text),
+                *_build_text_report_metric_lines(row, keyword_label=keyword_label, keyword_text=keyword_text),
             ])
         else:
-            c_conv_val = row.get('tot_conv', 0)
-            c_sales_val = row.get('tot_sales', 0)
-            c_roas_val = _safe_div(float(c_sales_val), float(row.get('cost', 0)), 100.0)
             keyword_text = campaign_top_shopping_query_map.get(campaign_name) if is_shopping_only else None
             if not keyword_text:
                 keyword_text = campaign_top_keyword_map.get(campaign_name, '없음')
             section = "\n".join([
                 f"[ {campaign_name} 성과 요약 ]",
-                _format_report_line("노출수", f"{int(float(row.get('imp', 0))):,}"),
-                _format_report_line("클릭수", f"{int(float(row.get('clk', 0))):,}"),
-                _format_report_line("클릭률", f"{float(_safe_div(float(row.get('clk', 0)), float(row.get('imp', 0)), 100.0)):.1f}%"),
-                _format_report_line("광고 소진비용", f"{int(float(row.get('cost', 0))):,}원"),
-                _format_report_line("전환수", _format_report_count(c_conv_val)),
-                _format_report_line("총전환매출", f"{int(float(c_sales_val)):,}원"),
-                _format_report_line("ROAS", f"{float(c_roas_val):.1f}%"),
-                _format_report_line("주요 유입 키워드", keyword_text),
+                *_build_text_report_metric_lines(row, keyword_label=keyword_label, keyword_text=keyword_text),
             ])
         sections.append(section)
 
@@ -3131,34 +3187,12 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
             campaign_top_keyword_map = _get_campaign_top_keyword_map(cur_kw, top_n=5)
         is_shopping_only = ("쇼핑" in selected_type_label and "파워링크" not in selected_type_label and selected_type_label != "전체 유형")
 
-        if report_uses_purchase:
-            report_text = "\n".join([
-                f"[ {selected_type_label} 성과 요약 ]",
-                _format_report_line("노출수", f"{int(float(cur.get('imp', 0))):,}"),
-                _format_report_line("클릭수", f"{int(float(cur.get('clk', 0))):,}"),
-                _format_report_line("클릭률", f"{float(cur.get('ctr', 0)):.1f}%"),
-                _format_report_line("광고 소진비용", f"{int(float(cur.get('cost', 0))):,}원"),
-                _format_report_line("구매완료수", _format_report_count(cur.get('conv', 0.0))),
-                _format_report_line("구매완료 매출", f"{int(float(cur.get('sales', 0))):,}원"),
-                _format_report_line("구매 ROAS", f"{float(cur.get('roas', 0)):.1f}%"),
-                _format_report_line("주요 전환 키워드", shop_kw_str if is_shopping_only else top_kw_str)
-            ])
-        else:
-            c_conv_val = cur.get('tot_conv', 0)
-            c_sales_val = cur.get('tot_sales', 0)
-            c_roas_val = cur.get('tot_roas', 0)
-
-            report_text = "\n".join([
-                f"[ {selected_type_label} 성과 요약 ]",
-                _format_report_line("노출수", f"{int(float(cur.get('imp', 0))):,}"),
-                _format_report_line("클릭수", f"{int(float(cur.get('clk', 0))):,}"),
-                _format_report_line("클릭률", f"{float(cur.get('ctr', 0)):.1f}%"),
-                _format_report_line("광고 소진비용", f"{int(float(cur.get('cost', 0))):,}원"),
-                _format_report_line("전환수", _format_report_count(c_conv_val)),
-                _format_report_line("총전환매출", f"{int(float(c_sales_val)):,}원"),
-                _format_report_line("ROAS", f"{float(c_roas_val):.1f}%"),
-                _format_report_line("주요 유입 키워드", shop_kw_str if is_shopping_only else top_kw_str)
-            ])
+        keyword_label = "주요 전환 키워드" if report_uses_purchase else "주요 유입 키워드"
+        keyword_text = shop_kw_str if is_shopping_only else top_kw_str
+        report_text = "\n".join([
+            f"[ {selected_type_label} 성과 요약 ]",
+            *_build_text_report_metric_lines(cur, keyword_label=keyword_label, keyword_text=keyword_text),
+        ])
             
         delta_lines = _build_report_delta_lines(cur, base, report_uses_purchase)
         if delta_lines:
@@ -3189,5 +3223,14 @@ def page_overview(meta: pd.DataFrame, engine, f: Dict) -> None:
                 report_text = f"{report_text}\n\n{campaign_report_text}"
 
         st.code(report_text, language="text")
+        report_filename = f"텍스트_성과보고서_{_safe_report_filename_part(account_name)}_{f['start']}_{f['end']}.txt"
+        st.download_button(
+            "텍스트 보고서 다운로드",
+            data=report_text.encode("utf-8-sig"),
+            file_name=report_filename,
+            mime="text/plain",
+            key="overview_download_text_report",
+            width="stretch",
+        )
 
     _render_diag_panel(diag, enabled=bool(f.get("show_diagnostics", False)))

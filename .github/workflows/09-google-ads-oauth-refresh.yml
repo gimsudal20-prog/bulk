@@ -4,6 +4,15 @@ run-name: 09 Google Ads OAuth 토큰 재발급 | ${{ inputs.account_name }} ${{ 
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: "실행 모드"
+        required: true
+        default: "auth_url"
+        type: choice
+        options:
+          - auth_url
+          - exchange_code
+          - device
       customer_id:
         description: "Google Ads 고객 ID, 하이픈 없이 또는 포함"
         required: true
@@ -23,6 +32,11 @@ on:
         description: "브라우저 승인 대기 시간(초)"
         required: false
         default: "900"
+        type: string
+      redirect_uri:
+        description: "OAuth redirect URI"
+        required: false
+        default: "http://127.0.0.1:8765/oauth2callback"
         type: string
 
 permissions:
@@ -45,6 +59,7 @@ jobs:
       TARGET_ACCOUNT_NAME: ${{ inputs.account_name }}
       TARGET_MANAGER: ${{ inputs.manager }}
       OAUTH_TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}
+      OAUTH_REDIRECT_URI: ${{ inputs.redirect_uri }}
 
     steps:
       - name: 코드 체크아웃
@@ -55,7 +70,71 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: OAuth authorization URL 파일 생성
+        if: ${{ inputs.mode == 'auth_url' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p oauth-url
+          python - <<'PY'
+          import os
+          from urllib.parse import urlencode
+
+          SCOPE = "https://www.googleapis.com/auth/adwords"
+
+          def clean(value: object) -> str:
+              return str(value or "").strip()
+
+          def normalize_customer_id(value: object) -> str:
+              raw = clean(value)
+              if raw.endswith(".0") and raw[:-2].isdigit():
+                  raw = raw[:-2]
+              return "".join(ch for ch in raw if ch.isdigit())
+
+          client_id = clean(os.getenv("GOOGLE_ADS_CLIENT_ID"))
+          customer_id = normalize_customer_id(os.getenv("TARGET_CUSTOMER_ID"))
+          account_name = clean(os.getenv("TARGET_ACCOUNT_NAME")) or customer_id
+          redirect_uri = clean(os.getenv("OAUTH_REDIRECT_URI")) or "http://127.0.0.1:8765/oauth2callback"
+          if not client_id:
+              raise SystemExit("GOOGLE_ADS_CLIENT_ID 환경변수가 필요합니다.")
+          if not customer_id:
+              raise SystemExit("customer_id를 확인할 수 없습니다.")
+
+          params = {
+              "client_id": client_id,
+              "redirect_uri": redirect_uri,
+              "response_type": "code",
+              "scope": SCOPE,
+              "access_type": "offline",
+              "prompt": "consent",
+          }
+          auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params)
+
+          with open("oauth-url/auth-url.txt", "w", encoding="utf-8") as fp:
+              fp.write(auth_url + "\n")
+
+          summary_path = os.getenv("GITHUB_STEP_SUMMARY")
+          if summary_path:
+              with open(summary_path, "a", encoding="utf-8") as fp:
+                  fp.write("## Google Ads OAuth 승인 URL 생성\n\n")
+                  fp.write(f"- 대상 계정: {account_name} ({customer_id})\n")
+                  fp.write(f"- redirect URI: `{redirect_uri}`\n")
+                  fp.write("- 승인 URL은 `google-ads-oauth-url` artifact의 `auth-url.txt`에 저장했습니다.\n")
+
+          print(f"[Google Ads OAuth] auth URL artifact generated for {account_name} ({customer_id})")
+          PY
+
+      - name: OAuth authorization URL artifact 업로드
+        if: ${{ inputs.mode == 'auth_url' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: google-ads-oauth-url
+          path: oauth-url/auth-url.txt
+          if-no-files-found: error
+          retention-days: 1
+
       - name: OAuth device flow 실행 및 DB 저장
+        if: ${{ inputs.mode == 'device' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -256,5 +335,151 @@ jobs:
               with open(summary_path, "a", encoding="utf-8") as fp:
                   fp.write("\n## 저장 결과\n\n")
                   fp.write(f"- {action}\n")
+                  fp.write(f"- 대상 계정: {account_name} ({customer_id})\n")
+          PY
+
+      - name: OAuth authorization code 교환 및 DB 저장
+        if: ${{ inputs.mode == 'exchange_code' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet --upgrade pip
+          pip install --quiet requests sqlalchemy psycopg2-binary
+          python - <<'PY'
+          import os
+          import sys
+
+          import requests
+          from sqlalchemy import create_engine, text
+
+          TOKEN_URL = "https://oauth2.googleapis.com/token"
+
+          def clean(value: object) -> str:
+              return str(value or "").strip()
+
+          def normalize_customer_id(value: object) -> str:
+              raw = clean(value)
+              if raw.endswith(".0") and raw[:-2].isdigit():
+                  raw = raw[:-2]
+              return "".join(ch for ch in raw if ch.isdigit())
+
+          def require_env(name: str) -> str:
+              value = clean(os.getenv(name))
+              if not value:
+                  raise SystemExit(f"{name} 환경변수가 필요합니다.")
+              return value
+
+          client_id = require_env("GOOGLE_ADS_CLIENT_ID")
+          client_secret = require_env("GOOGLE_ADS_CLIENT_SECRET")
+          database_url = require_env("DATABASE_URL")
+          customer_id = normalize_customer_id(os.getenv("TARGET_CUSTOMER_ID"))
+          input_account_name = clean(os.getenv("TARGET_ACCOUNT_NAME"))
+          input_manager = clean(os.getenv("TARGET_MANAGER")) or "미배정"
+          default_redirect_uri = clean(os.getenv("OAUTH_REDIRECT_URI")) or "http://127.0.0.1:8765/oauth2callback"
+
+          if not customer_id:
+              raise SystemExit("customer_id를 확인할 수 없습니다.")
+
+          engine = create_engine(database_url, pool_pre_ping=True)
+          with engine.begin() as conn:
+              row = conn.execute(
+                  text(
+                      """
+                      SELECT id, account_label, manager,
+                             extra_json ->> 'pending_auth_code' AS pending_auth_code,
+                             extra_json ->> 'pending_redirect_uri' AS pending_redirect_uri
+                      FROM platform_credentials
+                      WHERE LOWER(platform) IN ('google', 'google_ads', 'googleads')
+                        AND REGEXP_REPLACE(COALESCE(account_id, ''), '\\D', '', 'g') = :customer_id
+                      ORDER BY id DESC
+                      LIMIT 1
+                      """
+                  ),
+                  {"customer_id": customer_id},
+              ).mappings().first()
+
+              if not row:
+                  raise SystemExit(f"platform_credentials에 Google 계정 {customer_id} row가 없습니다.")
+
+              auth_code = clean(row.get("pending_auth_code"))
+              redirect_uri = clean(row.get("pending_redirect_uri")) or default_redirect_uri
+              account_name = input_account_name or clean(row.get("account_label")) or customer_id
+              manager = input_manager or clean(row.get("manager")) or "미배정"
+
+              if not auth_code:
+                  raise SystemExit("DB extra_json.pending_auth_code가 비어 있습니다.")
+
+              token_resp = requests.post(
+                  TOKEN_URL,
+                  data={
+                      "client_id": client_id,
+                      "client_secret": client_secret,
+                      "code": auth_code,
+                      "grant_type": "authorization_code",
+                      "redirect_uri": redirect_uri,
+                  },
+                  timeout=30,
+              )
+              payload = token_resp.json()
+              if token_resp.status_code >= 400:
+                  print("[Google Ads OAuth] authorization code 교환 실패")
+                  print(payload.get("error", "unknown_error"))
+                  print(payload.get("error_description", ""))
+                  sys.exit(1)
+
+              refresh_token = clean(payload.get("refresh_token"))
+              if not refresh_token:
+                  raise SystemExit("access token은 받았지만 refresh token이 응답에 없습니다. 승인 URL 생성부터 다시 시도하세요.")
+
+              conn.execute(
+                  text(
+                      """
+                      UPDATE platform_credentials
+                         SET platform = 'google',
+                             account_label = :account_name,
+                             manager = :manager,
+                             account_id = :customer_id,
+                             refresh_token = :refresh_token,
+                             extra_json = COALESCE(extra_json, '{}'::jsonb)
+                                          - 'pending_auth_code'
+                                          - 'pending_redirect_uri'
+                                          - 'pending_auth_code_at',
+                             is_active = TRUE,
+                             updated_at = NOW()
+                       WHERE id = :id
+                      """
+                  ),
+                  {
+                      "id": row["id"],
+                      "account_name": account_name,
+                      "manager": manager,
+                      "customer_id": customer_id,
+                      "refresh_token": refresh_token,
+                  },
+              )
+
+              conn.execute(
+                  text(
+                      """
+                      INSERT INTO dim_customer (customer_id, account_name, manager, monthly_budget, operating_weekdays)
+                      VALUES (:customer_id, :account_name, :manager, 0, '0,1,2,3,4,5,6')
+                      ON CONFLICT (customer_id) DO UPDATE SET
+                          account_name = EXCLUDED.account_name,
+                          manager = CASE
+                              WHEN EXCLUDED.manager <> '' AND EXCLUDED.manager <> '미배정'
+                              THEN EXCLUDED.manager
+                              ELSE dim_customer.manager
+                          END
+                      """
+                  ),
+                  {"customer_id": customer_id, "account_name": account_name, "manager": manager},
+              )
+
+          print(f"[Google Ads OAuth] refresh token DB 저장 완료: platform_credentials.id={row['id']} | {account_name} ({customer_id})")
+          summary_path = os.getenv("GITHUB_STEP_SUMMARY")
+          if summary_path:
+              with open(summary_path, "a", encoding="utf-8") as fp:
+                  fp.write("## 저장 결과\n\n")
+                  fp.write(f"- updated platform_credentials.id={row['id']}\n")
                   fp.write(f"- 대상 계정: {account_name} ({customer_id})\n")
           PY

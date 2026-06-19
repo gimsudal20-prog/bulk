@@ -491,6 +491,7 @@ def _recompute_operating_day_fields(
     )
     total_days = safe_numeric_col(budget_view, "_total_operating_days")
     elapsed_days = safe_numeric_col(budget_view, "_elapsed_operating_days")
+    budget_view["_remaining_operating_days"] = (total_days - elapsed_days).clip(lower=0)
     budget_view["_target_pacing_rate"] = np.where(total_days > 0, elapsed_days / total_days, 0.0)
     budget_view["operating_days_label"] = (
         safe_numeric_col(budget_view, "_elapsed_operating_days").round(0).astype(int).astype(str)
@@ -510,14 +511,15 @@ def _recalculate_budget_metrics(budget_view: pd.DataFrame) -> pd.DataFrame:
     budget_view["current_month_cost_val"] = safe_numeric_col(budget_view, "current_month_cost_val").round(0).astype(int)
 
     elapsed_days = safe_numeric_col(budget_view, "_elapsed_operating_days").where(lambda s: s > 0, 1.0)
-    total_days = safe_numeric_col(budget_view, "_total_operating_days").where(lambda s: s > 0, 1.0)
+    remaining_days = safe_numeric_col(budget_view, "_remaining_operating_days").where(lambda s: s > 0, np.nan)
     current_cost = safe_numeric_col(budget_view, "current_month_cost_val")
     monthly_budget = safe_numeric_col(budget_view, "monthly_budget_val")
+    remaining_budget = (monthly_budget - current_cost).clip(lower=0)
 
     budget_view["current_daily_avg_val"] = (current_cost / elapsed_days).fillna(0).round(0).astype(int)
     budget_view["recommended_daily_avg_val"] = np.where(
-        monthly_budget > 0,
-        monthly_budget / total_days,
+        (monthly_budget > 0) & (remaining_days > 0),
+        remaining_budget / remaining_days,
         0.0,
     ).round(0).astype(int)
     budget_view["usage_rate"] = 0.0
@@ -807,7 +809,7 @@ def render_budget_editor(
     st.markdown(f"<div style='font-size:14px; font-weight:700; margin-bottom:4px;'>{end_dt.strftime('%Y년 %m월')} 예산 집행률</div>", unsafe_allow_html=True)
     st.caption(
         "표의 '월 예산(원)' 칸을 더블클릭하여 수정하세요. 현재 일평균은 이번 달 사용액 ÷ 업체별 운영 경과일, "
-        "권장 일평균은 월 예산 ÷ 업체별 월 운영일로 계산합니다."
+        "권장 일평균은 남은 예산(월 예산 - 전날까지 사용액) ÷ 남은 운영일로 계산합니다."
     )
     _ensure_budget_input_js_once()
 
@@ -857,7 +859,7 @@ def render_budget_editor(
                 "일 평균 권장 소진액",
                 disabled=True,
                 format="%,.0f 원",
-                help="월 예산을 업체별 월 운영일로 나눈 권장 일평균입니다."
+                help="남은 예산을 업체별 남은 운영일로 나눈 권장 일평균입니다."
             ),
             f"{prev_m_num}월 사용액": st.column_config.TextColumn(
                 f"{prev_m_num}월 사용액", 
@@ -956,7 +958,7 @@ def render_budget_type_editor(
 
     st.markdown(f"<div style='font-size:14px; font-weight:700; margin-bottom:4px;'>{end_dt.strftime('%Y년 %m월')} 유형별 예산 집행률</div>", unsafe_allow_html=True)
     st.caption(
-        "파워링크와 쇼핑검색 예산을 계정별로 따로 입력할 수 있습니다. 사용액과 집행률은 해당 유형 캠페인 비용만 기준으로 계산합니다."
+        "파워링크와 쇼핑검색 예산을 계정별로 따로 입력할 수 있습니다. 사용액과 집행률은 해당 유형 캠페인 비용만 기준으로 계산하며, 권장 일평균은 남은 예산 ÷ 남은 운영일로 계산합니다."
     )
     _ensure_budget_input_js_once()
 
@@ -1006,7 +1008,7 @@ def render_budget_type_editor(
                 "일 평균 권장 소진액",
                 disabled=True,
                 format="%,.0f 원",
-                help="유형별 월 예산을 업체별 월 운영일로 나눈 권장 일평균입니다."
+                help="유형별 남은 예산을 업체별 남은 운영일로 나눈 권장 일평균입니다."
             ),
             f"{prev_m_num}월 사용액": st.column_config.TextColumn(
                 f"{prev_m_num}월 사용액",
